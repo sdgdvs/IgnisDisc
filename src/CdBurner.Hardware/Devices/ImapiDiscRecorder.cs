@@ -443,7 +443,8 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
                             FreeCapacityBytes = freeBytes,
                             SessionCount = sessionCount,
                             MediaManufacturerId = null,
-                            LastRecordedLba = lastRecordedLba
+                            LastRecordedLba = lastRecordedLba,
+                            NextWritableLba = nextWritable
                         };
                     }
                 }

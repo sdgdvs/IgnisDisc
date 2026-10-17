@@ -111,6 +111,27 @@ public class VirtualDiscMedium : IDisposable
         ? (Sessions.Count > 0 ? Sessions[^1].EndLba : UsedSectors - 1)
         : -1;
 
+    private int _nextWritableLba = -1;
+
+    /// <summary>
+    /// Next writable LBA on media for appending sessions.
+    /// </summary>
+    public int NextWritableLba
+    {
+        get
+        {
+            if (_nextWritableLba >= 0) return _nextWritableLba;
+            if (Sessions.Count > 0) return Sessions[^1].EndLba + 1;
+            return UsedSectors;
+        }
+        set => _nextWritableLba = value;
+    }
+
+    /// <summary>
+    /// Opens a readable, seekable stream spanning the recorded sectors of this medium.
+    /// </summary>
+    public Stream CreateReadStream() => new VirtualDiscStream(this);
+
     /// <summary>
     /// Default sector size in bytes for the current recording mode (2,352 for raw audio/binary, 2,048 for data).
     /// </summary>
@@ -438,6 +459,7 @@ public class VirtualDiscMedium : IDisposable
             Sessions.Clear();
             CdTextBytes = null;
             UsedSectors = 0;
+            _nextWritableLba = -1;
             IsBlank = true;
             IsFinalized = false;
         }
@@ -495,3 +517,110 @@ public class VirtualDiscMedium : IDisposable
 
     #endregion
 }
+
+/// <summary>
+/// A readable, seekable <see cref="Stream"/> wrapper over a <see cref="VirtualDiscMedium"/>.
+/// </summary>
+public class VirtualDiscStream : Stream
+{
+    private readonly VirtualDiscMedium _medium;
+    private long _position;
+    private bool _disposed;
+
+    public VirtualDiscStream(VirtualDiscMedium medium)
+    {
+        _medium = medium ?? throw new ArgumentNullException(nameof(medium));
+    }
+
+    public override bool CanRead => !_disposed;
+    public override bool CanSeek => !_disposed;
+    public override bool CanWrite => false;
+
+    public override long Length
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return (long)_medium.UsedSectors * _medium.SectorSize;
+        }
+    }
+
+    public override long Position
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _position;
+        }
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            _position = value;
+        }
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        ValidateBufferArguments(buffer, offset, count);
+        return Read(buffer.AsSpan(offset, count));
+    }
+
+    public override int Read(Span<byte> destination)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (destination.IsEmpty || _position >= Length)
+        {
+            return 0;
+        }
+
+        int sectorSize = _medium.SectorSize;
+        long remainingInStream = Length - _position;
+        int bytesToRead = (int)Math.Min(destination.Length, remainingInStream);
+        int bytesRead = 0;
+
+        byte[] sectorBuf = new byte[sectorSize];
+
+        while (bytesRead < bytesToRead)
+        {
+            int lba = (int)(_position / sectorSize);
+            int sectorOffset = (int)(_position % sectorSize);
+            int toCopy = Math.Min(sectorSize - sectorOffset, bytesToRead - bytesRead);
+
+            _medium.ReadSector(lba, sectorBuf, sectorSize);
+            sectorBuf.AsSpan(sectorOffset, toCopy).CopyTo(destination.Slice(bytesRead, toCopy));
+
+            _position += toCopy;
+            bytesRead += toCopy;
+        }
+
+        return bytesRead;
+    }
+
+    public override long Seek(long offset, SeekOrigin origin)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        long target = origin switch
+        {
+            SeekOrigin.Begin => offset,
+            SeekOrigin.Current => _position + offset,
+            SeekOrigin.End => Length + offset,
+            _ => throw new ArgumentOutOfRangeException(nameof(origin))
+        };
+
+        ArgumentOutOfRangeException.ThrowIfNegative(target);
+        _position = target;
+        return _position;
+    }
+
+    public override void Flush() { }
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        _disposed = true;
+        base.Dispose(disposing);
+    }
+}
+

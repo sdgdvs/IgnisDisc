@@ -232,10 +232,16 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
                 FreeCapacityBytes = freeBytes,
                 SessionCount = m.Sessions.Count,
                 MediaManufacturerId = "VIRTUAL-OPTICAL-01",
-                LastRecordedLba = m.LastRecordedLba
+                LastRecordedLba = m.LastRecordedLba,
+                NextWritableLba = m.NextWritableLba
             };
         }
     }
+
+    /// <summary>
+    /// Opens a readable, seekable stream over the currently inserted virtual disc medium, or null if tray open/empty.
+    /// </summary>
+    public Stream? CreateReadStream() => CurrentMedium?.CreateReadStream();
 
     public void Dispose()
     {

@@ -105,7 +105,7 @@ public class VirtualBurnEngine : IBurnEngineBackend
         ReportSnapshot(0, estimatedSectors, "WritingLeadIn");
         cancellationToken.ThrowIfCancellationRequested();
 
-        int startLba = medium.IsBlank ? 0 : medium.UsedSectors;
+        int startLba = medium.IsBlank ? 0 : (medium.NextWritableLba > 0 ? medium.NextWritableLba : medium.UsedSectors);
         byte[] sectorBuffer = new byte[OpticalConstants.DataSectorSize];
         int sectorsWritten = 0;
 
@@ -171,6 +171,16 @@ public class VirtualBurnEngine : IBurnEngineBackend
             if (options.CloseDisc)
             {
                 medium.IsFinalized = true;
+            }
+            else
+            {
+                medium.IsFinalized = false;
+            }
+
+            medium.NextWritableLba = startLba + sectorsWritten;
+            if (startLba + sectorsWritten > medium.UsedSectors)
+            {
+                medium.UsedSectors = startLba + sectorsWritten;
             }
         }
 

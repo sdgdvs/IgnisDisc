@@ -49,6 +49,11 @@ public sealed class IsoImageReader : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Gets the starting LBA on the optical medium of the session being read.
+    /// </summary>
+    public int SessionStartLba { get; }
+
+    /// <summary>
     /// Gets the primary volume label of the image (prefers Joliet Unicode label if present).
     /// </summary>
     public string VolumeLabel { get; }
@@ -116,7 +121,7 @@ public sealed class IsoImageReader : IDisposable
     /// <summary>
     /// Opens and parses an ISO image from a file on disk.
     /// </summary>
-    public static IsoImageReader FromFile(string isoPath)
+    public static IsoImageReader FromFile(string isoPath, int sessionStartLba = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(isoPath);
         if (!File.Exists(isoPath))
@@ -125,21 +130,22 @@ public sealed class IsoImageReader : IDisposable
         }
 
         var stream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return new IsoImageReader(stream, leaveOpen: false);
+        return new IsoImageReader(stream, leaveOpen: false, sessionStartLba);
     }
 
     /// <summary>
     /// Opens and parses an ISO image from a stream.
     /// </summary>
-    public static IsoImageReader FromStream(Stream stream, bool leaveOpen = false)
+    public static IsoImageReader FromStream(Stream stream, bool leaveOpen = false, int sessionStartLba = 0)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        return new IsoImageReader(stream, leaveOpen);
+        return new IsoImageReader(stream, leaveOpen, sessionStartLba);
     }
 
-    private IsoImageReader(Stream stream, bool leaveOpen)
+    private IsoImageReader(Stream stream, bool leaveOpen, int sessionStartLba = 0)
     {
         _leaveOpen = leaveOpen;
+        SessionStartLba = sessionStartLba;
 
         if (!stream.CanRead)
         {
@@ -160,14 +166,14 @@ public sealed class IsoImageReader : IDisposable
             _stream = stream;
         }
 
-        if (_stream.Length < 17 * OpticalConstants.DataSectorSize)
+        if (_stream.Length < (long)(sessionStartLba + 17) * OpticalConstants.DataSectorSize)
         {
             throw new InvalidDataException("The stream is too short to be a valid ISO 9660 optical image.");
         }
 
-        // 1. Read Primary Volume Descriptor at LBA 16
+        // 1. Read Primary Volume Descriptor at sessionStartLba + 16
         byte[] pvd = new byte[OpticalConstants.DataSectorSize];
-        _stream.Position = 16 * OpticalConstants.DataSectorSize;
+        _stream.Position = (long)(sessionStartLba + 16) * OpticalConstants.DataSectorSize;
         _stream.ReadExactly(pvd);
 
         if (pvd[0] == 0x01 && Encoding.ASCII.GetString(pvd.AsSpan(1, 5)) == "CD001")
@@ -190,12 +196,12 @@ public sealed class IsoImageReader : IDisposable
         }
         else
         {
-            throw new InvalidDataException("Missing ISO 9660 Primary Volume Descriptor (PVD) at LBA 16.");
+            throw new InvalidDataException($"Missing ISO 9660 Primary Volume Descriptor (PVD) at LBA {sessionStartLba + 16}.");
         }
 
         // 2. Scan for Joliet Supplementary Volume Descriptor and UDF descriptors
-        int maxScanLba = Math.Min(32, (int)(_stream.Length / OpticalConstants.DataSectorSize));
-        for (int lba = 17; lba < maxScanLba; lba++)
+        int maxScanLba = Math.Min(sessionStartLba + 32, (int)(_stream.Length / OpticalConstants.DataSectorSize));
+        for (int lba = sessionStartLba + 17; lba < maxScanLba; lba++)
         {
             byte[] sector = new byte[OpticalConstants.DataSectorSize];
             _stream.Position = (long)lba * OpticalConstants.DataSectorSize;
@@ -236,11 +242,12 @@ public sealed class IsoImageReader : IDisposable
             }
         }
 
-        // 3. Check for UDF Anchor Volume Descriptor Pointer (AVDP) at LBA 256
-        if (_stream.Length >= 257 * OpticalConstants.DataSectorSize)
+        // 3. Check for UDF Anchor Volume Descriptor Pointer (AVDP) at LBA 256 or sessionStartLba + 256
+        long avdpLba = sessionStartLba > 0 ? (sessionStartLba + 256) : 256;
+        if (_stream.Length >= (avdpLba + 1) * OpticalConstants.DataSectorSize)
         {
             byte[] avdpSector = new byte[OpticalConstants.DataSectorSize];
-            _stream.Position = 256 * OpticalConstants.DataSectorSize;
+            _stream.Position = avdpLba * OpticalConstants.DataSectorSize;
             _stream.ReadExactly(avdpSector);
 
             ushort tagId = BinaryPrimitives.ReadUInt16LittleEndian(avdpSector.AsSpan(0, 2));

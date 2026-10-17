@@ -141,8 +141,10 @@ public class MediaStatusDto
     public long TotalCapacityBytes { get; init; }
     public long FreeCapacityBytes { get; init; }
     public int SessionCount { get; init; }
+    public int Sessions => SessionCount;
     public string? MediaManufacturerId { get; init; }
     public int LastRecordedLba { get; init; }
+    public int NextWritableLba { get; init; } = -1;
 }
 
 /// <summary>

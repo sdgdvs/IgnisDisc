@@ -17,15 +17,20 @@ public static class IsoUdfImageBuilder
     private static readonly ushort[] Ecma167CrcTable = GenerateEcma167CrcTable();
 
     /// <summary>
+    /// <summary>
     /// Compiles a compilation directory tree into an in-memory seekable stream containing the complete .iso image.
     /// </summary>
     /// <param name="root">The compilation root directory.</param>
     /// <param name="options">Optional ISO build options (defaults will be used if omitted).</param>
+    /// <param name="sessionStartLba">Optional starting LBA for multi-session appended sessions (defaults to 0).</param>
     /// <returns>A seekable <see cref="MemoryStream"/> positioned at offset 0.</returns>
-    public static MemoryStream BuildToMemoryStream(CompilationDirectory root, IsoBuildOptions? options = null)
+    public static MemoryStream BuildToMemoryStream(
+        CompilationDirectory root,
+        IsoBuildOptions? options = null,
+        int sessionStartLba = 0)
     {
         var ms = new MemoryStream();
-        Build(root, ms, options);
+        Build(root, ms, options, sessionStartLba);
         ms.Position = 0;
         return ms;
     }
@@ -33,7 +38,11 @@ public static class IsoUdfImageBuilder
     /// <summary>
     /// Compiles a compilation directory tree and writes the .iso image directly to an output file.
     /// </summary>
-    public static void BuildToFile(CompilationDirectory root, string outputIsoPath, IsoBuildOptions? options = null)
+    public static void BuildToFile(
+        CompilationDirectory root,
+        string outputIsoPath,
+        IsoBuildOptions? options = null,
+        int sessionStartLba = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputIsoPath);
 
@@ -44,7 +53,7 @@ public static class IsoUdfImageBuilder
         }
 
         using var fs = new FileStream(outputIsoPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        Build(root, fs, options);
+        Build(root, fs, options, sessionStartLba);
     }
 
     /// <summary>
@@ -55,7 +64,8 @@ public static class IsoUdfImageBuilder
         string outputIsoPath,
         IsoBuildOptions? options = null,
         IProgress<double>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int sessionStartLba = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputIsoPath);
 
@@ -66,19 +76,23 @@ public static class IsoUdfImageBuilder
         }
 
         using var fs = new FileStream(outputIsoPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
-        await BuildAsync(root, fs, options, progress, cancellationToken).ConfigureAwait(false);
+        await BuildAsync(root, fs, options, progress, cancellationToken, sessionStartLba).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Compiles a compilation directory tree and writes the .iso image into the provided destination stream.
     /// </summary>
-    public static void Build(CompilationDirectory root, Stream outputStream, IsoBuildOptions? options = null)
+    public static void Build(
+        CompilationDirectory root,
+        Stream outputStream,
+        IsoBuildOptions? options = null,
+        int sessionStartLba = 0)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(outputStream);
 
         options ??= new IsoBuildOptions();
-        var context = LayoutContext.Create(root, options);
+        var context = LayoutContext.Create(root, options, sessionStartLba);
         WriteImageSectors(context, outputStream, progress: null, cancellationToken: default, isAsync: false).GetAwaiter().GetResult();
     }
 
@@ -90,13 +104,14 @@ public static class IsoUdfImageBuilder
         Stream outputStream,
         IsoBuildOptions? options = null,
         IProgress<double>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int sessionStartLba = 0)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(outputStream);
 
         options ??= new IsoBuildOptions();
-        var context = LayoutContext.Create(root, options);
+        var context = LayoutContext.Create(root, options, sessionStartLba);
         await WriteImageSectors(context, outputStream, progress, cancellationToken, isAsync: true).ConfigureAwait(false);
     }
 
@@ -136,16 +151,18 @@ public static class IsoUdfImageBuilder
 
         public int TotalSectors { get; set; }
 
+        public int SessionStartLba { get; }
 
-        public LayoutContext(CompilationDirectory rootDir, IsoBuildOptions options)
+        public LayoutContext(CompilationDirectory rootDir, IsoBuildOptions options, int sessionStartLba = 0)
         {
             RootDir = rootDir;
             Options = options;
+            SessionStartLba = sessionStartLba;
         }
 
-        public static LayoutContext Create(CompilationDirectory root, IsoBuildOptions options)
+        public static LayoutContext Create(CompilationDirectory root, IsoBuildOptions options, int sessionStartLba = 0)
         {
-            var ctx = new LayoutContext(root, options);
+            var ctx = new LayoutContext(root, options, sessionStartLba);
 
             // 1. Build hierarchy of layout nodes
             var rootLayout = BuildNodeHierarchy(root);
@@ -223,26 +240,26 @@ public static class IsoUdfImageBuilder
             }
 
             // 5. Assign LBA sectors sequentially
-            int currentLba = 16;
-            ctx.PvdLba = currentLba++; // 16
+            int currentLba = sessionStartLba + 16;
+            ctx.PvdLba = currentLba++; // sessionStartLba + 16
 
             if (options.BootConfiguration != null)
             {
-                ctx.BootRecordLba = currentLba++; // 17
+                ctx.BootRecordLba = currentLba++;
             }
 
             if (options.IncludeJoliet)
             {
-                ctx.JolietSvdLba = currentLba++; // 18 (or 17 if no boot)
+                ctx.JolietSvdLba = currentLba++;
             }
 
-            ctx.TerminatorLba = currentLba++; // 19 (or 18, or 17)
+            ctx.TerminatorLba = currentLba++;
 
             if (options.IncludeUdf)
             {
-                ctx.Bea01Lba = currentLba++; // 20
-                ctx.NsrLba = currentLba++;   // 21
-                ctx.Tea01Lba = currentLba++;   // 22
+                ctx.Bea01Lba = currentLba++;
+                ctx.NsrLba = currentLba++;
+                ctx.Tea01Lba = currentLba++;
             }
 
             // Assign Path Table LBAs
@@ -294,14 +311,15 @@ public static class IsoUdfImageBuilder
             // Reserve LBA 256 for UDF AVDP
             if (options.IncludeUdf)
             {
-                ctx.AvdpLba = 256;
-                if (currentLba <= 256)
+                int targetAvdpLba = sessionStartLba > 0 ? (sessionStartLba + 256) : 256;
+                ctx.AvdpLba = targetAvdpLba;
+                if (currentLba <= targetAvdpLba)
                 {
-                    currentLba = 257; // File data starts after AVDP
+                    currentLba = targetAvdpLba + 1; // File data starts after AVDP
                 }
                 else
                 {
-                    currentLba = Math.Max(currentLba, 257);
+                    currentLba = Math.Max(currentLba, targetAvdpLba + 1);
                 }
             }
 
@@ -320,9 +338,13 @@ public static class IsoUdfImageBuilder
             }
 
             int total = currentLba;
-            if (options.IncludeUdf && total < 257)
+            if (options.IncludeUdf)
             {
-                total = 257;
+                int minTotal = sessionStartLba > 0 ? (sessionStartLba + 257) : 257;
+                if (total < minTotal)
+                {
+                    total = minTotal;
+                }
             }
 
             ctx.TotalSectors = total;
@@ -512,9 +534,9 @@ public static class IsoUdfImageBuilder
             }
         }
 
-        int writtenLba = 16;
+        int writtenLba = ctx.SessionStartLba + 16;
 
-        // 2. Primary Volume Descriptor at LBA 16
+        // 2. Primary Volume Descriptor at sessionStartLba + 16
         byte[] pvd = BuildPrimaryVolumeDescriptor(ctx);
         await WriteSector(stream, pvd, isAsync, cancellationToken).ConfigureAwait(false);
         writtenLba++;
@@ -620,16 +642,17 @@ public static class IsoUdfImageBuilder
             }
         }
 
-        // 11. Write UDF AVDP at LBA 256 (if enabled)
+        // 11. Write UDF AVDP at LBA 256 or sessionStartLba + 256 (if enabled)
         if (ctx.Options.IncludeUdf)
         {
-            while (writtenLba < 256)
+            int targetAvdpLba = ctx.SessionStartLba > 0 ? (ctx.SessionStartLba + 256) : 256;
+            while (writtenLba < targetAvdpLba)
             {
                 await WriteSector(stream, zeroSector, isAsync, cancellationToken).ConfigureAwait(false);
                 writtenLba++;
             }
 
-            byte[] avdp = BuildUdfAvdpSector(tagLocation: 256, mainVdsLocation: 257);
+            byte[] avdp = BuildUdfAvdpSector(tagLocation: (uint)targetAvdpLba, mainVdsLocation: (uint)(targetAvdpLba + 1));
             await WriteSector(stream, avdp, isAsync, cancellationToken).ConfigureAwait(false);
             writtenLba++;
         }
