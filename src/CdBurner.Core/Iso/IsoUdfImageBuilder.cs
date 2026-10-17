@@ -110,12 +110,19 @@ public static class IsoUdfImageBuilder
         public List<FileLayoutNode> AllFiles { get; } = new();
 
         public int PvdLba { get; set; } = 16;
+        public int BootRecordLba { get; set; } = -1;
         public int JolietSvdLba { get; set; } = -1;
         public int TerminatorLba { get; set; } = -1;
         public int Bea01Lba { get; set; } = -1;
         public int NsrLba { get; set; } = -1;
         public int Tea01Lba { get; set; } = -1;
         public int AvdpLba { get; set; } = -1;
+
+        public int BootCatalogLba { get; set; } = -1;
+        public byte[]? DefaultBootImageData { get; set; }
+        public int DefaultBootImageLba { get; set; } = -1;
+        public int DefaultBootImageSectorCount { get; set; }
+        public List<BootImageLayoutNode> AdditionalBootImages { get; } = new();
 
         public int IsoPathTableL_Lba { get; set; }
         public int IsoPathTableM_Lba { get; set; }
@@ -128,6 +135,7 @@ public static class IsoUdfImageBuilder
         public int JolietPathTableSectors { get; set; }
 
         public int TotalSectors { get; set; }
+
 
         public LayoutContext(CompilationDirectory rootDir, IsoBuildOptions options)
         {
@@ -189,22 +197,52 @@ public static class IsoUdfImageBuilder
                 ctx.JolietPathTableSectors = Math.Max(1, (ctx.JolietPathTableBytesLength + SectorSize - 1) / SectorSize);
             }
 
+            // 4b. Pre-load boot images if El Torito boot is configured
+            if (options.BootConfiguration != null)
+            {
+                var def = options.BootConfiguration.DefaultEntry;
+                using (var s = def.BootImageStreamFactory())
+                {
+                    ctx.DefaultBootImageData = ReadStreamFully(s);
+                }
+                ctx.DefaultBootImageSectorCount = Math.Max(1, (ctx.DefaultBootImageData.Length + SectorSize - 1) / SectorSize);
+
+                if (options.BootConfiguration.AdditionalSectionEntries != null)
+                {
+                    foreach (var sec in options.BootConfiguration.AdditionalSectionEntries)
+                    {
+                        byte[] data;
+                        using (var s = sec.BootImageStreamFactory())
+                        {
+                            data = ReadStreamFully(s);
+                        }
+                        int secSectors = Math.Max(1, (data.Length + SectorSize - 1) / SectorSize);
+                        ctx.AdditionalBootImages.Add(new BootImageLayoutNode(sec, data, secSectors));
+                    }
+                }
+            }
+
             // 5. Assign LBA sectors sequentially
             int currentLba = 16;
             ctx.PvdLba = currentLba++; // 16
 
-            if (options.IncludeJoliet)
+            if (options.BootConfiguration != null)
             {
-                ctx.JolietSvdLba = currentLba++; // 17
+                ctx.BootRecordLba = currentLba++; // 17
             }
 
-            ctx.TerminatorLba = currentLba++; // 18 (or 17 if no Joliet)
+            if (options.IncludeJoliet)
+            {
+                ctx.JolietSvdLba = currentLba++; // 18 (or 17 if no boot)
+            }
+
+            ctx.TerminatorLba = currentLba++; // 19 (or 18, or 17)
 
             if (options.IncludeUdf)
             {
-                ctx.Bea01Lba = currentLba++; // 19
-                ctx.NsrLba = currentLba++;   // 20
-                ctx.Tea01Lba = currentLba++;   // 21
+                ctx.Bea01Lba = currentLba++; // 20
+                ctx.NsrLba = currentLba++;   // 21
+                ctx.Tea01Lba = currentLba++;   // 22
             }
 
             // Assign Path Table LBAs
@@ -235,6 +273,21 @@ public static class IsoUdfImageBuilder
                 {
                     dir.JolietLba = currentLba;
                     currentLba += dir.JolietSectorCount;
+                }
+            }
+
+            // Assign Boot Catalog and Boot Image LBAs
+            if (options.BootConfiguration != null)
+            {
+                ctx.BootCatalogLba = currentLba++;
+
+                ctx.DefaultBootImageLba = currentLba;
+                currentLba += ctx.DefaultBootImageSectorCount;
+
+                foreach (var sec in ctx.AdditionalBootImages)
+                {
+                    sec.StartLba = currentLba;
+                    currentLba += sec.SectorCount;
                 }
             }
 
@@ -410,6 +463,32 @@ public static class IsoUdfImageBuilder
         }
     }
 
+    private sealed class BootImageLayoutNode
+    {
+        public BootCatalogEntrySpec Spec { get; }
+        public byte[] Data { get; }
+        public int StartLba { get; set; }
+        public int SectorCount { get; }
+
+        public BootImageLayoutNode(BootCatalogEntrySpec spec, byte[] data, int sectorCount)
+        {
+            Spec = spec;
+            Data = data;
+            SectorCount = sectorCount;
+        }
+    }
+
+    private static byte[] ReadStreamFully(Stream stream)
+    {
+        if (stream is MemoryStream ms && ms.TryGetBuffer(out var seg))
+        {
+            return seg.ToArray();
+        }
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
     private static async Task WriteImageSectors(
         LayoutContext ctx,
         Stream stream,
@@ -440,7 +519,15 @@ public static class IsoUdfImageBuilder
         await WriteSector(stream, pvd, isAsync, cancellationToken).ConfigureAwait(false);
         writtenLba++;
 
-        // 3. Joliet Supplementary Volume Descriptor at LBA 17 (if enabled)
+        // 3. El Torito Boot Record Volume Descriptor at LBA 17 (if enabled)
+        if (ctx.Options.BootConfiguration != null)
+        {
+            byte[] bootRecord = ElToritoCatalogBuilder.BuildBootRecordVolumeDescriptor((uint)ctx.BootCatalogLba);
+            await WriteSector(stream, bootRecord, isAsync, cancellationToken).ConfigureAwait(false);
+            writtenLba++;
+        }
+
+        // 4. Joliet Supplementary Volume Descriptor at LBA 18 or 17 (if enabled)
         if (ctx.Options.IncludeJoliet)
         {
             byte[] svd = BuildJolietVolumeDescriptor(ctx);
@@ -448,7 +535,7 @@ public static class IsoUdfImageBuilder
             writtenLba++;
         }
 
-        // 4. Volume Descriptor Set Terminator at next LBA
+        // 5. Volume Descriptor Set Terminator at next LBA
         byte[] term = BuildVolumeDescriptorTerminator();
         await WriteSector(stream, term, isAsync, cancellationToken).ConfigureAwait(false);
         writtenLba++;
@@ -510,7 +597,30 @@ public static class IsoUdfImageBuilder
             }
         }
 
-        // 10. Write UDF AVDP at LBA 256 (if enabled)
+        // 10. Write El Torito Boot Catalog and Boot Image Sectors (if enabled)
+        if (ctx.Options.BootConfiguration != null)
+        {
+            var addLoadRbas = ctx.AdditionalBootImages.Select(x => (uint)x.StartLba).ToList();
+            byte[] bootCatalog = ElToritoCatalogBuilder.BuildBootCatalogSector(
+                ctx.Options.BootConfiguration,
+                (uint)ctx.DefaultBootImageLba,
+                addLoadRbas);
+            await WriteSector(stream, bootCatalog, isAsync, cancellationToken).ConfigureAwait(false);
+            writtenLba++;
+
+            // Write Default Boot Image
+            await WritePayloadSectors(stream, ctx.DefaultBootImageData!, ctx.DefaultBootImageSectorCount, isAsync, cancellationToken).ConfigureAwait(false);
+            writtenLba += ctx.DefaultBootImageSectorCount;
+
+            // Write Additional Section Boot Images
+            foreach (var sec in ctx.AdditionalBootImages)
+            {
+                await WritePayloadSectors(stream, sec.Data, sec.SectorCount, isAsync, cancellationToken).ConfigureAwait(false);
+                writtenLba += sec.SectorCount;
+            }
+        }
+
+        // 11. Write UDF AVDP at LBA 256 (if enabled)
         if (ctx.Options.IncludeUdf)
         {
             while (writtenLba < 256)
@@ -645,6 +755,27 @@ public static class IsoUdfImageBuilder
         else
         {
             stream.Write(buffer);
+        }
+    }
+
+    private static async Task WritePayloadSectors(
+        Stream stream,
+        byte[] data,
+        int sectorCount,
+        bool isAsync,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (data.Length > 0)
+        {
+            await WriteBuffer(stream, data, isAsync, cancellationToken).ConfigureAwait(false);
+        }
+        int totalBytes = sectorCount * SectorSize;
+        int padBytes = totalBytes - data.Length;
+        if (padBytes > 0)
+        {
+            byte[] pad = new byte[padBytes];
+            await WriteBuffer(stream, pad, isAsync, cancellationToken).ConfigureAwait(false);
         }
     }
 

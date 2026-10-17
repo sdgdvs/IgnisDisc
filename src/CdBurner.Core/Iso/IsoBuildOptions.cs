@@ -10,6 +10,7 @@ namespace CdBurner.Core.Iso;
 /// <param name="UdfRevision">UDF specification revision (0x0102 for UDF 1.02, 0x0201 for UDF 2.01).</param>
 /// <param name="PublisherId">Publisher identifier string.</param>
 /// <param name="ApplicationId">Application identifier string.</param>
+/// <param name="BootConfiguration">Optional El Torito bootable configuration (BIOS / UEFI / Multi-boot).</param>
 public record IsoBuildOptions(
     string VolumeLabel = "CDBURNER_DISC",
     bool IncludeIso9660 = true,
@@ -17,4 +18,6 @@ public record IsoBuildOptions(
     bool IncludeUdf = true,
     ushort UdfRevision = 0x0102,
     string PublisherId = "CDBURNER",
-    string ApplicationId = "CDBURNER .NET 10");
+    string ApplicationId = "CDBURNER .NET 10",
+    ElToritoBootConfiguration? BootConfiguration = null);
+
