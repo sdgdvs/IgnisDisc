@@ -848,6 +848,80 @@ public interface DDiscFormat2DataEvents
 }
 
 /// <summary>
+/// Event arguments COM interface for low-level write engine progress.
+/// </summary>
+[ComImport]
+[Guid(Imapi2Guids.IID_IWriteEngine2EventArgs)]
+[InterfaceType(ComInterfaceType.InterfaceIsDual)]
+public interface IWriteEngine2EventArgs
+{
+    [DispId(0x100)]
+    int StartLba { [DispId(0x100)] get; }
+
+    [DispId(0x101)]
+    int SectorCount { [DispId(0x101)] get; }
+
+    [DispId(0x102)]
+    int LastReadLba { [DispId(0x102)] get; }
+
+    [DispId(0x103)]
+    int LastWrittenLba { [DispId(0x103)] get; }
+
+    [DispId(0x106)]
+    int TotalSystemBuffer { [DispId(0x106)] get; }
+
+    [DispId(0x107)]
+    int UsedSystemBuffer { [DispId(0x107)] get; }
+
+    [DispId(0x108)]
+    int FreeSystemBuffer { [DispId(0x108)] get; }
+}
+
+/// <summary>
+/// Event arguments COM interface for data disc write progress notifications.
+/// </summary>
+[ComImport]
+[Guid(Imapi2Guids.IID_IDiscFormat2DataEventArgs)]
+[InterfaceType(ComInterfaceType.InterfaceIsDual)]
+public interface IDiscFormat2DataEventArgs : IWriteEngine2EventArgs
+{
+    // Inherited from IWriteEngine2EventArgs
+    [DispId(0x100)]
+    new int StartLba { [DispId(0x100)] get; }
+
+    [DispId(0x101)]
+    new int SectorCount { [DispId(0x101)] get; }
+
+    [DispId(0x102)]
+    new int LastReadLba { [DispId(0x102)] get; }
+
+    [DispId(0x103)]
+    new int LastWrittenLba { [DispId(0x103)] get; }
+
+    [DispId(0x106)]
+    new int TotalSystemBuffer { [DispId(0x106)] get; }
+
+    [DispId(0x107)]
+    new int UsedSystemBuffer { [DispId(0x107)] get; }
+
+    [DispId(0x108)]
+    new int FreeSystemBuffer { [DispId(0x108)] get; }
+
+    // IDiscFormat2DataEventArgs specific methods
+    [DispId(0x300)]
+    int ElapsedTime { [DispId(0x300)] get; }
+
+    [DispId(0x301)]
+    int RemainingTime { [DispId(0x301)] get; }
+
+    [DispId(0x302)]
+    int TotalTime { [DispId(0x302)] get; }
+
+    [DispId(0x303)]
+    ImapiFormat2DataWriteAction CurrentAction { [DispId(0x303)] get; }
+}
+
+/// <summary>
 /// Event sink for Track-At-Once progress updates.
 /// </summary>
 [ComImport]

@@ -92,6 +92,12 @@ public static class Imapi2Guids
     /// <summary>IID for IFsiDirectoryItem.</summary>
     public const string IID_IFsiDirectoryItem          = "2C941FDC-975B-59BE-A960-9A2A262853A5";
 
+    /// <summary>IID for IWriteEngine2EventArgs (base write progress event arguments).</summary>
+    public const string IID_IWriteEngine2EventArgs     = "27354136-7F64-5B0F-8F00-5D77AFBE261E";
+
+    /// <summary>IID for IDiscFormat2DataEventArgs (data burn progress event arguments).</summary>
+    public const string IID_IDiscFormat2DataEventArgs  = "2735413D-7F64-5B0F-8F00-5D77AFBE261E";
+
     // =========================================================================
     // Event Sinks (Connection Point IIDs, DISPID 0x200 = Update)
     // =========================================================================
@@ -144,6 +150,8 @@ public static class Imapi2Guids
     public static readonly Guid IidIFsiItem                   = new(IID_IFsiItem);
     public static readonly Guid IidIFsiFileItem               = new(IID_IFsiFileItem);
     public static readonly Guid IidIFsiDirectoryItem          = new(IID_IFsiDirectoryItem);
+    public static readonly Guid IidIWriteEngine2EventArgs     = new(IID_IWriteEngine2EventArgs);
+    public static readonly Guid IidIDiscFormat2DataEventArgs  = new(IID_IDiscFormat2DataEventArgs);
 
     public static readonly Guid IidDDiscMaster2Events         = new(IID_DDiscMaster2Events);
     public static readonly Guid IidDDiscFormat2DataEvents     = new(IID_DDiscFormat2DataEvents);

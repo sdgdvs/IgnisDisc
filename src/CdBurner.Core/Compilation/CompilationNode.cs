@@ -125,13 +125,43 @@ public class CompilationFile : CompilationNode
     }
 
     /// <summary>
-    /// Initializes a new in-memory compilation file with a custom stream factory.
+    /// Initializes a new in-memory compilation file with a custom stream factory and explicit size.
     /// </summary>
     public CompilationFile(
         string name,
         long sizeBytes,
         Func<Stream> streamFactory)
         : this(name, string.Empty, sizeBytes, null, streamFactory)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new in-memory compilation file with a custom stream factory, inferring size from stream.
+    /// </summary>
+    public CompilationFile(
+        string name,
+        Func<Stream> streamFactory)
+        : this(name, string.Empty, 0, null, streamFactory)
+    {
+        ArgumentNullException.ThrowIfNull(streamFactory);
+        try
+        {
+            using var s = streamFactory();
+            SizeBytes = s.CanSeek ? s.Length : 0;
+        }
+        catch
+        {
+            SizeBytes = 0;
+        }
+    }
+
+    /// <summary>
+    /// Initializes a new in-memory compilation file from raw byte content.
+    /// </summary>
+    public CompilationFile(
+        string name,
+        byte[] content)
+        : this(name, string.Empty, content?.Length ?? 0, null, () => new MemoryStream(content ?? Array.Empty<byte>()))
     {
     }
 

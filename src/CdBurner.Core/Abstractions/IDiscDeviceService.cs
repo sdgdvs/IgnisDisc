@@ -164,11 +164,24 @@ public class BurnProgressSnapshot
 }
 
 /// <summary>
+/// Execution status of an optical media burn or erase operation.
+/// </summary>
+public enum BurnStatus
+{
+    NotStarted,
+    InProgress,
+    Succeeded,
+    Failed,
+    Cancelled
+}
+
+/// <summary>
 /// Final result of a burn or erase operation.
 /// </summary>
 public class BurnOperationResult
 {
     public bool Success { get; init; }
+    public BurnStatus Status { get; init; } = BurnStatus.NotStarted;
     public string? ErrorMessage { get; init; }
     public int SectorsWritten { get; init; }
     public TimeSpan TotalTime { get; init; }
@@ -178,6 +191,7 @@ public class BurnOperationResult
     public static BurnOperationResult Succeeded(int sectorsWritten, TimeSpan duration, double avgSpeed = 0.0) => new()
     {
         Success = true,
+        Status = BurnStatus.Succeeded,
         SectorsWritten = sectorsWritten,
         TotalTime = duration,
         AverageSpeedMultiplier = avgSpeed
@@ -186,8 +200,16 @@ public class BurnOperationResult
     public static BurnOperationResult Failed(string error, Exception? ex = null) => new()
     {
         Success = false,
+        Status = ex is OperationCanceledException ? BurnStatus.Cancelled : BurnStatus.Failed,
         ErrorMessage = error,
         Exception = ex
+    };
+
+    public static BurnOperationResult CancelledResult(string error = "Operation was cancelled.") => new()
+    {
+        Success = false,
+        Status = BurnStatus.Cancelled,
+        ErrorMessage = error
     };
 }
 
@@ -229,6 +251,7 @@ public class DataBurnOptions
     public WriteSpeedDescriptor? Speed { get; init; }
     public bool Simulate { get; init; }
     public bool EjectWhenDone { get; init; }
+    public bool EjectAfterBurn { get => EjectWhenDone; init => EjectWhenDone = value; }
     public bool VerifyAfterBurn { get; init; }
     public bool CloseDisc { get; init; } = true;
     public string? VolumeLabel { get; init; }
