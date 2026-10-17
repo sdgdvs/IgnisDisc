@@ -107,16 +107,18 @@ public interface IDiscRecorder2
 public interface IDiscFormat2
 {
     [DispId(0x800)]
-    bool IsRecorderSupported([In, MarshalAs(UnmanagedType.Interface)] IDiscRecorder2 recorder);
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool IsRecorderSupported([In] IDiscRecorder2 recorder);
 
     [DispId(0x801)]
-    bool IsCurrentMediaSupported([In, MarshalAs(UnmanagedType.Interface)] IDiscRecorder2 recorder);
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool IsCurrentMediaSupported([In] IDiscRecorder2 recorder);
 
     [DispId(0x700)]
-    bool MediaPhysicallyBlank { [DispId(0x700)] get; }
+    bool MediaPhysicallyBlank { [DispId(0x700)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x701)]
-    bool MediaHeuristicallyBlank { [DispId(0x701)] get; }
+    bool MediaHeuristicallyBlank { [DispId(0x701)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x702)]
     Array SupportedMediaTypes { [DispId(0x702)] [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_VARIANT)] get; }
@@ -132,29 +134,42 @@ public interface IDiscFormat2Data
 {
     // --- Base IDiscFormat2 methods (slots 7-11) ---
     [DispId(0x800)]
-    bool IsRecorderSupported([In, MarshalAs(UnmanagedType.Interface)] IDiscRecorder2 recorder);
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool IsRecorderSupported([In] IDiscRecorder2 recorder);
 
     [DispId(0x801)]
-    bool IsCurrentMediaSupported([In, MarshalAs(UnmanagedType.Interface)] IDiscRecorder2 recorder);
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool IsCurrentMediaSupported([In] IDiscRecorder2 recorder);
 
     [DispId(0x700)]
-    bool MediaPhysicallyBlank { [DispId(0x700)] get; }
+    bool MediaPhysicallyBlank { [DispId(0x700)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x701)]
-    bool MediaHeuristicallyBlank { [DispId(0x701)] get; }
+    bool MediaHeuristicallyBlank { [DispId(0x701)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x702)]
     Array SupportedMediaTypes { [DispId(0x702)] [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_VARIANT)] get; }
 
-    // --- IDiscFormat2Data methods & properties (slot 12+) ---
+    // --- IDiscFormat2Data methods (slot 12+) matching exact imapi2.h order ---
     [DispId(0x100)]
-    IDiscRecorder2? Recorder { [DispId(0x100)] [return: MarshalAs(UnmanagedType.Interface)] get; [DispId(0x100)] [param: In, MarshalAs(UnmanagedType.Interface)] set; }
+    void put_Recorder([In] IDiscRecorder2? value);
+
+    [DispId(0x100)]
+    IDiscRecorder2? get_Recorder();
 
     [DispId(0x101)]
-    bool BufferUnderrunFreeDisabled { [DispId(0x101)] get; [DispId(0x101)] [param: In] set; }
+    void put_BufferUnderrunFreeDisabled([In, MarshalAs(UnmanagedType.VariantBool)] bool value);
+
+    [DispId(0x101)]
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool get_BufferUnderrunFreeDisabled();
 
     [DispId(0x104)]
-    bool PostgapAlreadyInImage { [DispId(0x104)] get; [DispId(0x104)] [param: In] set; }
+    void put_PostgapAlreadyInImage([In, MarshalAs(UnmanagedType.VariantBool)] bool value);
+
+    [DispId(0x104)]
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool get_PostgapAlreadyInImage();
 
     [DispId(0x106)]
     ImapiFormat2DataMediaState CurrentMediaStatus { [DispId(0x106)] get; }
@@ -178,28 +193,40 @@ public interface IDiscFormat2Data
     int LastWrittenAddressOfPreviousSession { [DispId(0x10C)] get; }
 
     [DispId(0x10D)]
-    bool ForceMediaToBeClosed { [DispId(0x10D)] get; [DispId(0x10D)] [param: In] set; }
+    void put_ForceMediaToBeClosed([In, MarshalAs(UnmanagedType.VariantBool)] bool value);
+
+    [DispId(0x10D)]
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool get_ForceMediaToBeClosed();
 
     [DispId(0x10E)]
-    bool DisableConsumerDvdCompatibilityMode { [DispId(0x10E)] get; [DispId(0x10E)] [param: In] set; }
+    void put_DisableConsumerDvdCompatibilityMode([In, MarshalAs(UnmanagedType.VariantBool)] bool value);
+
+    [DispId(0x10E)]
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool get_DisableConsumerDvdCompatibilityMode();
 
     [DispId(0x10F)]
     ImapiMediaPhysicalType CurrentPhysicalMediaType { [DispId(0x10F)] get; }
 
     [DispId(0x110)]
-    string ClientName { [DispId(0x110)] [return: MarshalAs(UnmanagedType.BStr)] get; [DispId(0x110)] [param: In, MarshalAs(UnmanagedType.BStr)] set; }
+    void put_ClientName([In, MarshalAs(UnmanagedType.BStr)] string value);
+
+    [DispId(0x110)]
+    [return: MarshalAs(UnmanagedType.BStr)]
+    string get_ClientName();
 
     [DispId(0x111)]
     int RequestedWriteSpeed { [DispId(0x111)] get; }
 
     [DispId(0x112)]
-    bool RequestedRotationTypeIsPureCAV { [DispId(0x112)] get; }
+    bool RequestedRotationTypeIsPureCAV { [DispId(0x112)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x113)]
     int CurrentWriteSpeed { [DispId(0x113)] get; }
 
     [DispId(0x114)]
-    bool CurrentRotationTypeIsPureCAV { [DispId(0x114)] get; }
+    bool CurrentRotationTypeIsPureCAV { [DispId(0x114)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x115)]
     Array SupportedWriteSpeeds { [DispId(0x115)] [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_VARIANT)] get; }
@@ -208,7 +235,11 @@ public interface IDiscFormat2Data
     Array SupportedWriteSpeedDescriptors { [DispId(0x116)] [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_VARIANT)] get; }
 
     [DispId(0x117)]
-    bool ForceOverwrite { [DispId(0x117)] get; [DispId(0x117)] [param: In] set; }
+    void put_ForceOverwrite([In, MarshalAs(UnmanagedType.VariantBool)] bool value);
+
+    [DispId(0x117)]
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool get_ForceOverwrite();
 
     [DispId(0x118)]
     Array MultisessionInterfaces { [DispId(0x118)] [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_VARIANT)] get; }
@@ -220,7 +251,7 @@ public interface IDiscFormat2Data
     void CancelWrite();
 
     [DispId(0x202)]
-    void SetWriteSpeed([In] int RequestedSectorsPerSecond, [In] bool RotationTypeIsPureCAV);
+    void SetWriteSpeed([In] int RequestedSectorsPerSecond, [In, MarshalAs(UnmanagedType.VariantBool)] bool RotationTypeIsPureCAV);
 }
 
 /// <summary>
@@ -408,32 +439,45 @@ public interface IDiscFormat2Erase
 {
     // --- Base IDiscFormat2 methods (slots 7-11) ---
     [DispId(0x800)]
-    bool IsRecorderSupported([In, MarshalAs(UnmanagedType.Interface)] IDiscRecorder2 recorder);
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool IsRecorderSupported([In] IDiscRecorder2 recorder);
 
     [DispId(0x801)]
-    bool IsCurrentMediaSupported([In, MarshalAs(UnmanagedType.Interface)] IDiscRecorder2 recorder);
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool IsCurrentMediaSupported([In] IDiscRecorder2 recorder);
 
     [DispId(0x700)]
-    bool MediaPhysicallyBlank { [DispId(0x700)] get; }
+    bool MediaPhysicallyBlank { [DispId(0x700)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x701)]
-    bool MediaHeuristicallyBlank { [DispId(0x701)] get; }
+    bool MediaHeuristicallyBlank { [DispId(0x701)] [return: MarshalAs(UnmanagedType.VariantBool)] get; }
 
     [DispId(0x702)]
     Array SupportedMediaTypes { [DispId(0x702)] [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_VARIANT)] get; }
 
-    // --- IDiscFormat2Erase methods & properties (slot 12+) ---
+    // --- IDiscFormat2Erase methods (slot 12+) matching exact imapi2.h order ---
     [DispId(0x100)]
-    IDiscRecorder2? Recorder { [DispId(0x100)] [return: MarshalAs(UnmanagedType.Interface)] get; [DispId(0x100)] [param: In, MarshalAs(UnmanagedType.Interface)] set; }
+    void put_Recorder([In] IDiscRecorder2? value);
+
+    [DispId(0x100)]
+    IDiscRecorder2? get_Recorder();
 
     [DispId(0x101)]
-    bool FullErase { [DispId(0x101)] get; [DispId(0x101)] [param: In] set; }
+    void put_FullErase([In, MarshalAs(UnmanagedType.VariantBool)] bool value);
+
+    [DispId(0x101)]
+    [return: MarshalAs(UnmanagedType.VariantBool)]
+    bool get_FullErase();
 
     [DispId(0x102)]
     ImapiMediaPhysicalType CurrentPhysicalMediaType { [DispId(0x102)] get; }
 
     [DispId(0x103)]
-    string ClientName { [DispId(0x103)] [return: MarshalAs(UnmanagedType.BStr)] get; [DispId(0x103)] [param: In, MarshalAs(UnmanagedType.BStr)] set; }
+    void put_ClientName([In, MarshalAs(UnmanagedType.BStr)] string value);
+
+    [DispId(0x103)]
+    [return: MarshalAs(UnmanagedType.BStr)]
+    string get_ClientName();
 
     [DispId(0x201)]
     void EraseMedia();
@@ -999,4 +1043,27 @@ public static class ImapiComActivation
     }
 }
 
+/// <summary>
+/// Alias for <see cref="ImapiComActivation"/>.
+/// </summary>
+public static class Imapi2ComFactory
+{
+    public static bool IsSupported => ImapiComActivation.IsSupported;
+    public static bool IsClsidAvailable(Guid clsid) => ImapiComActivation.IsClsidAvailable(clsid);
+    public static bool IsClsidAvailable(string clsidString) => ImapiComActivation.IsClsidAvailable(clsidString);
+    public static T? CreateInstance<T>(Guid clsid) where T : class => ImapiComActivation.CreateInstance<T>(clsid);
+    public static T? CreateInstance<T>(string clsidString) where T : class => ImapiComActivation.CreateInstance<T>(clsidString);
+    public static IDiscMaster2? CreateDiscMaster2() => ImapiComActivation.CreateDiscMaster2();
+    public static IDiscRecorder2? CreateDiscRecorder2() => ImapiComActivation.CreateDiscRecorder2();
+    public static IDiscFormat2Data? CreateDiscFormat2Data() => ImapiComActivation.CreateDiscFormat2Data();
+    public static IDiscFormat2TrackAtOnce? CreateDiscFormat2TrackAtOnce() => ImapiComActivation.CreateDiscFormat2TrackAtOnce();
+    public static IDiscFormat2RawCD? CreateDiscFormat2RawCD() => ImapiComActivation.CreateDiscFormat2RawCD();
+    public static IDiscFormat2Erase? CreateDiscFormat2Erase() => ImapiComActivation.CreateDiscFormat2Erase();
+    public static IFileSystemImage? CreateFileSystemImage() => ImapiComActivation.CreateFileSystemImage();
+    public static IBootOptions? CreateBootOptions() => ImapiComActivation.CreateBootOptions();
+    public static int SafeRelease<T>(ref T? comObject) where T : class => ImapiComActivation.SafeRelease(ref comObject);
+    public static int FinalRelease<T>(ref T? comObject) where T : class => ImapiComActivation.FinalRelease(ref comObject);
+}
+
 #endregion
+
