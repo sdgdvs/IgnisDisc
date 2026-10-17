@@ -1,0 +1,598 @@
+using System.Buffers.Binary;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using CdBurner.Core.Abstractions;
+using CdBurner.Core.Audio;
+using CdBurner.Core.Burning;
+using CdBurner.Core.Compilation;
+using CdBurner.Core.DvdVideo;
+using CdBurner.Core.Images;
+using CdBurner.Core.Iso;
+using CdBurner.Core.Persistence;
+using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
+using CdBurner.Hardware.Audio;
+using CdBurner.Hardware.Simulation;
+using Xunit;
+
+namespace CdBurner.Integration.Tests;
+
+/// <summary>
+/// Phase 24: End-to-End Integration Suite &amp; Full-System Release Acceptance Tests.
+/// Exercises the four foundational optical workflows across core, hardware simulation,
+/// and file-system/codec engines:
+/// 1. Dual BIOS/UEFI El Torito Bootable Data project (.cdbproj persistence, ISO build, VirtualDiscRecorder burn, rip &amp; SHA-256/boot catalog verification).
+/// 2. 3-Track Audio CD with CD-Text and Peak Normalization (DAO burn, DAE rip to .wav, metadata and audio frame verification).
+/// 3. VIDEO_TS DVD-Video layout (32 KB ECC separation between .IFO and .BUP, virtual DVD-R burn, surface defect scanning).
+/// 4. Optical media erasing on virtual CD-RW (quick and full erase, blank state restoration verification).
+/// </summary>
+public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
+{
+    private readonly string _testTempDir;
+
+    public Phase24_FullSystemAcceptanceTests()
+    {
+        _testTempDir = Path.Combine(Path.GetTempPath(), "CdBurner_Phase24_Acceptance_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testTempDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_testTempDir))
+            {
+                Directory.Delete(_testTempDir, recursive: true);
+            }
+        }
+        catch
+        {
+            // Ignore temp folder cleanup exceptions
+        }
+    }
+
+    #region Workflow 1: Dual BIOS/UEFI El Torito Bootable Project
+
+    [Fact]
+    public async Task AcceptanceWorkflow1_BootableDataDisc_CdbProjRoundTrip_BuildIso_BurnToVirtualDrive_RipAndVerifySha256AndElToritoCatalog()
+    {
+        // 1. Arrange source boot binaries and data files on disk
+        string biosBootPath = Path.Combine(_testTempDir, "etfsboot.com");
+        string uefiBootPath = Path.Combine(_testTempDir, "efisys.bin");
+        string installTxtPath = Path.Combine(_testTempDir, "INSTALL.TXT");
+        string readmeTxtPath = Path.Combine(_testTempDir, "README.TXT");
+
+        // BIOS payload: 4 sectors = 8192 bytes
+        byte[] biosBootBytes = Enumerable.Range(0, 4 * OpticalConstants.DataSectorSize)
+            .Select(i => (byte)(0x33 ^ (i % 251)))
+            .ToArray();
+        await File.WriteAllBytesAsync(biosBootPath, biosBootBytes);
+
+        // UEFI payload: 16 sectors = 32768 bytes
+        byte[] uefiBootBytes = Enumerable.Range(0, 16 * OpticalConstants.DataSectorSize)
+            .Select(i => (byte)(0x77 ^ (i % 241)))
+            .ToArray();
+        await File.WriteAllBytesAsync(uefiBootPath, uefiBootBytes);
+
+        await File.WriteAllTextAsync(installTxtPath, "CdBurner Phase 24 OS Automated Installer Script\r\nKernel Init Parameters: quiet splash");
+        await File.WriteAllTextAsync(readmeTxtPath, "CdBurner Release Engineering - Phase 24 Master Verification Build");
+
+        // 2. Author a dual BIOS/UEFI El Torito bootable project document (.cdbproj)
+        string projectPath = Path.Combine(_testTempDir, "DualBootRelease.cdbproj");
+        var originalProject = new CdBurnerProjectDocument
+        {
+            SchemaVersion = "1.0",
+            Kind = ProjectKind.BootableDisc,
+            Name = "Dual Boot System Disc",
+            Description = "Phase 24 End-to-End Acceptance Test Multi-Boot Media",
+            VolumeLabel = "DUAL_BOOT_SYS",
+            TargetMediaType = DiscMediaType.CdR,
+            DefaultDuplicatePolicy = DuplicateFilePolicy.Overwrite,
+            RootNode = new SerializedCompilationNode
+            {
+                IsDirectory = true,
+                Name = "",
+                Children =
+                {
+                    new SerializedCompilationNode
+                    {
+                        IsDirectory = false,
+                        Name = "INSTALL.TXT",
+                        SourceFilePath = installTxtPath,
+                        SizeBytes = new FileInfo(installTxtPath).Length,
+                        Attributes = FileAttributes.ReadOnly
+                    },
+                    new SerializedCompilationNode
+                    {
+                        IsDirectory = true,
+                        Name = "DOCS",
+                        Children =
+                        {
+                            new SerializedCompilationNode
+                            {
+                                IsDirectory = false,
+                                Name = "README.TXT",
+                                SourceFilePath = readmeTxtPath,
+                                SizeBytes = new FileInfo(readmeTxtPath).Length,
+                                Attributes = FileAttributes.Normal
+                            }
+                        }
+                    }
+                }
+            },
+            BootOptions = new SerializedBootOptions
+            {
+                DeveloperId = "CDBURNER_PHASE24",
+                DefaultEntry = new SerializedBootCatalogEntry
+                {
+                    Platform = BootPlatformId.X86Bios,
+                    Emulation = BootEmulationType.NoEmulation,
+                    SectorCount = 4,
+                    LoadSegment = 0x07C0,
+                    BootImageFilePath = biosBootPath,
+                    Name = "etfsboot.com",
+                    SystemType = 0x00
+                },
+                AdditionalSectionEntries =
+                {
+                    new SerializedBootCatalogEntry
+                    {
+                        Platform = BootPlatformId.Efi,
+                        Emulation = BootEmulationType.NoEmulation,
+                        SectorCount = 16,
+                        LoadSegment = 0x0000,
+                        BootImageFilePath = uefiBootPath,
+                        Name = "efisys.bin",
+                        SystemType = 0xEF
+                    }
+                }
+            }
+        };
+
+        // 3. Save project to disk
+        await ProjectSerializer.SaveToFileAsync(originalProject, projectPath);
+        Assert.True(File.Exists(projectPath));
+
+        // 4. Reload project from disk and verify roundtrip integrity
+        var loadedProject = await ProjectSerializer.LoadFromFileAsync(projectPath);
+        Assert.NotNull(loadedProject);
+        Assert.Equal(ProjectKind.BootableDisc, loadedProject.Kind);
+        Assert.Equal("DUAL_BOOT_SYS", loadedProject.VolumeLabel);
+        Assert.NotNull(loadedProject.BootOptions);
+        Assert.Equal("CDBURNER_PHASE24", loadedProject.BootOptions.DeveloperId);
+        Assert.NotNull(loadedProject.BootOptions.DefaultEntry);
+        Assert.Equal(BootPlatformId.X86Bios, loadedProject.BootOptions.DefaultEntry.Platform);
+        Assert.Equal("etfsboot.com", loadedProject.BootOptions.DefaultEntry.Name);
+        Assert.Single(loadedProject.BootOptions.AdditionalSectionEntries);
+        Assert.Equal(BootPlatformId.Efi, loadedProject.BootOptions.AdditionalSectionEntries[0].Platform);
+        Assert.Equal("efisys.bin", loadedProject.BootOptions.AdditionalSectionEntries[0].Name);
+
+        // 5. Convert deserialized project into live CompilationDirectory and ElToritoBootConfiguration
+        var rootDir = ProjectSerializer.ToCompilationDirectory(loadedProject.RootNode!);
+        var bootConfig = ProjectSerializer.ToBootConfiguration(loadedProject.BootOptions);
+        Assert.NotNull(bootConfig);
+
+        // 6. Build ISO image in-memory with ISO 9660, Joliet, UDF, and dual El Torito catalog
+        var isoOptions = new IsoBuildOptions(
+            VolumeLabel: loadedProject.VolumeLabel,
+            IncludeIso9660: true,
+            IncludeJoliet: true,
+            IncludeUdf: true,
+            BootConfiguration: bootConfig);
+
+        using var isoStream = IsoUdfImageBuilder.BuildToMemoryStream(rootDir, isoOptions);
+        byte[] originalIsoBytes = isoStream.ToArray();
+        string expectedSha256 = Convert.ToHexString(SHA256.HashData(originalIsoBytes));
+
+        Assert.True(originalIsoBytes.Length > 0);
+        Assert.Equal(0, originalIsoBytes.Length % OpticalConstants.DataSectorSize);
+
+        // 7. Mount blank CD-R into VirtualDiscRecorder and burn ISO stream
+        using var recorder = new VirtualDiscRecorder("VDRV-P24-BOOT");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        recorder.InsertMedia(medium);
+
+        var engine = new VirtualBurnEngine(recorder);
+        var burnService = new DataBurnService(engine);
+
+        isoStream.Position = 0;
+        var burnResult = await burnService.BurnStreamAsync(
+            recorder,
+            isoStream,
+            new DataBurnOptions { VolumeLabel = loadedProject.VolumeLabel, CloseDisc = true });
+
+        Assert.True(burnResult.Success, $"Burn failed: {burnResult.ErrorMessage}");
+        Assert.False(medium.IsBlank);
+        Assert.True(medium.IsFinalized);
+
+        // 8. Rip disc image back to a separate stream using DiscRipperService
+        var ripper = new DiscRipperService();
+        using var rippedIsoStream = new MemoryStream();
+        var ripResult = await ripper.RipToIsoAsync(recorder, engine, rippedIsoStream);
+
+        Assert.True(ripResult.Success, $"Rip failed: {ripResult.ErrorMessage}");
+        Assert.Equal(0, ripResult.BadSectorsCount);
+        Assert.Empty(ripResult.BadSectorLbas);
+
+        // 9. Verify exact byte count and SHA-256 hash match original ISO
+        byte[] rippedIsoBytes = rippedIsoStream.ToArray();
+        Assert.Equal(originalIsoBytes.Length, rippedIsoBytes.Length);
+
+        string actualSha256 = Convert.ToHexString(SHA256.HashData(rippedIsoBytes));
+        Assert.Equal(expectedSha256, actualSha256);
+
+        // 10. Inspect ripped ISO with ElToritoCatalogInspector and verify dual BIOS & UEFI structures
+        rippedIsoStream.Position = 0;
+        var bootInfo = ElToritoCatalogInspector.ParseBootInfo(rippedIsoStream);
+
+        Assert.Equal(17, bootInfo.BootRecordLba);
+        Assert.Equal("EL TORITO SPECIFICATION", bootInfo.BootSystemIdentifier);
+
+        // Validation Entry
+        Assert.True(bootInfo.ValidationEntry.IsChecksumValid);
+        Assert.Equal("CDBURNER_PHASE24", bootInfo.ValidationEntry.DeveloperId);
+        Assert.Equal(BootPlatformId.X86Bios, bootInfo.ValidationEntry.Platform);
+
+        // Default Initial Boot Entry (BIOS)
+        Assert.Equal(BootPlatformId.X86Bios, bootInfo.DefaultEntry.Platform);
+        Assert.True(bootInfo.DefaultEntry.Bootable);
+        Assert.Equal(BootEmulationType.NoEmulation, bootInfo.DefaultEntry.Emulation);
+        Assert.Equal(4, bootInfo.DefaultEntry.SectorCount);
+        Assert.True(bootInfo.DefaultEntry.LoadRba > 17);
+
+        // Additional Section Entry (UEFI)
+        Assert.Single(bootInfo.SectionEntries);
+        var uefiSection = bootInfo.SectionEntries[0];
+        Assert.Equal(BootPlatformId.Efi, uefiSection.Platform);
+        Assert.True(uefiSection.Bootable);
+        Assert.Equal(BootEmulationType.NoEmulation, uefiSection.Emulation);
+        Assert.Equal(16, uefiSection.SectorCount);
+        Assert.True(uefiSection.LoadRba > bootInfo.DefaultEntry.LoadRba);
+
+        // Verify exact byte contents of the BIOS payload extracted from ripped stream
+        byte[] readBiosBytes = new byte[biosBootBytes.Length];
+        rippedIsoStream.Position = (long)bootInfo.DefaultEntry.LoadRba * OpticalConstants.DataSectorSize;
+        rippedIsoStream.ReadExactly(readBiosBytes);
+        Assert.Equal(biosBootBytes, readBiosBytes);
+
+        // Verify exact byte contents of the UEFI payload extracted from ripped stream
+        byte[] readUefiBytes = new byte[uefiBootBytes.Length];
+        rippedIsoStream.Position = (long)uefiSection.LoadRba * OpticalConstants.DataSectorSize;
+        rippedIsoStream.ReadExactly(readUefiBytes);
+        Assert.Equal(uefiBootBytes, readUefiBytes);
+    }
+
+    #endregion
+
+    #region Workflow 2: 3-Track Audio CD with CD-Text and Peak Normalization
+
+    private static byte[] GenerateSineWavePcm(double frequency, int frameCount, short amplitude)
+    {
+        int sampleRate = OpticalConstants.CdAudioSampleRate;
+        int totalStereoSamples = frameCount * OpticalConstants.CdAudioSamplesPerFrame;
+        byte[] pcm = new byte[totalStereoSamples * OpticalConstants.CdAudioBytesPerSample];
+
+        for (int i = 0; i < totalStereoSamples; i++)
+        {
+            double t = (double)i / sampleRate;
+            short sample = (short)Math.Round(amplitude * Math.Sin(2.0 * Math.PI * frequency * t));
+            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i * 4, 2), sample);
+            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i * 4 + 2, 2), sample);
+        }
+
+        return pcm;
+    }
+
+    [Fact]
+    public async Task AcceptanceWorkflow2_AudioCdThreeTracks_CdTextAndPeakNormalization_DaoBurn_RipToWavAndVerifyFrames()
+    {
+        // 1. Arrange: Generate 3 synthetic WAV tracks with moderate amplitudes below full-scale (to verify peak normalization)
+        const int track1Frames = 50;  // 117,600 bytes
+        const int track2Frames = 75;  // 176,400 bytes
+        const int track3Frames = 100; // 235,200 bytes
+        const int totalFrames = track1Frames + track2Frames + track3Frames;
+
+        byte[] rawTrack1Pcm = GenerateSineWavePcm(440.0, track1Frames, amplitude: 10000);
+        byte[] rawTrack2Pcm = GenerateSineWavePcm(880.0, track2Frames, amplitude: 8000);
+        byte[] rawTrack3Pcm = GenerateSineWavePcm(1760.0, track3Frames, amplitude: 12000);
+
+        string wavFile1 = Path.Combine(_testTempDir, "in_track1.wav");
+        string wavFile2 = Path.Combine(_testTempDir, "in_track2.wav");
+        string wavFile3 = Path.Combine(_testTempDir, "in_track3.wav");
+
+        WavFileCodec.WriteWavFile(wavFile1, rawTrack1Pcm);
+        WavFileCodec.WriteWavFile(wavFile2, rawTrack2Pcm);
+        WavFileCodec.WriteWavFile(wavFile3, rawTrack3Pcm);
+
+        // 2. Author Audio CD Compilation with Disc-At-Once (DAO), CD-Text, and Peak Normalization
+        var compilation = new AudioCdCompilation
+        {
+            AlbumTitle = "Phase 24 Acceptance Suite",
+            AlbumPerformer = "CdBurner Symphonic Ensemble",
+            Songwriter = "Ada Lovelace",
+            Composer = "Alan Turing",
+            RecordingMode = AudioRecordingMode.DiscAtOnceGapless,
+            IncludeCdText = true,
+            NormalizeAllTracks = true
+        };
+
+        compilation.AddTrack(new AudioCdTrackItem(
+            TrackNumber: 1,
+            SourceFilePath: wavFile1,
+            Title: "Movement 1 - Allegro",
+            Performer: "CdBurner Symphonic Ensemble",
+            Isrc: "USCB26000001",
+            PreGapFrames: 150,
+            NormalizeAudio: true));
+
+        compilation.AddTrack(new AudioCdTrackItem(
+            TrackNumber: 2,
+            SourceFilePath: wavFile2,
+            Title: "Movement 2 - Andante",
+            Performer: "CdBurner Symphonic Ensemble",
+            Isrc: "USCB26000002",
+            PreGapFrames: 0,
+            NormalizeAudio: true));
+
+        compilation.AddTrack(new AudioCdTrackItem(
+            TrackNumber: 3,
+            SourceFilePath: wavFile3,
+            Title: "Movement 3 - Presto",
+            Performer: "CdBurner Symphonic Ensemble",
+            Isrc: "USCB26000003",
+            PreGapFrames: 0,
+            NormalizeAudio: true));
+
+        Assert.Equal(3, compilation.TrackCount);
+
+        // 3. Mount blank CD-R 700 MB into VirtualDiscRecorder
+        using var recorder = new VirtualDiscRecorder("VDRV-P24-AUDIO");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        recorder.InsertMedia(medium);
+
+        var engine = new VirtualBurnEngine(recorder);
+        var burnService = new AudioCdBurnService(engine);
+
+        // 4. Burn compilation in Disc-At-Once (DAO) mode
+        var burnResult = await burnService.BurnCompilationAsync(recorder, compilation);
+        Assert.True(burnResult.Success, $"Audio burn failed: {burnResult.ErrorMessage}");
+        Assert.Equal(totalFrames, burnResult.SectorsWritten);
+
+        // 5. Verify VirtualDiscMedium Red Book layout and CD-Text
+        Assert.False(medium.IsBlank);
+        Assert.True(medium.Raw2352Mode);
+        Assert.True(medium.IsFinalized);
+        Assert.Single(medium.Sessions);
+
+        var session = medium.Sessions[0];
+        Assert.Equal(3, session.Tracks.Count);
+
+        Assert.Equal(1, session.Tracks[0].TrackNumber);
+        Assert.Equal(0, session.Tracks[0].StartLba);
+        Assert.Equal(track1Frames, session.Tracks[0].SectorCount);
+        Assert.Equal("Movement 1 - Allegro", session.Tracks[0].Title);
+
+        Assert.Equal(2, session.Tracks[1].TrackNumber);
+        Assert.Equal(track1Frames, session.Tracks[1].StartLba);
+        Assert.Equal(track2Frames, session.Tracks[1].SectorCount);
+        Assert.Equal("Movement 2 - Andante", session.Tracks[1].Title);
+
+        Assert.Equal(3, session.Tracks[2].TrackNumber);
+        Assert.Equal(track1Frames + track2Frames, session.Tracks[2].StartLba);
+        Assert.Equal(track3Frames, session.Tracks[2].SectorCount);
+        Assert.Equal("Movement 3 - Presto", session.Tracks[2].Title);
+
+        // Validate CD-Text binary packs
+        Assert.NotNull(medium.CdTextBytes);
+        var parsedCdText = CdTextPackParser.ParsePacks(medium.CdTextBytes);
+        Assert.Equal("Phase 24 Acceptance Suite", parsedCdText.AlbumTitle);
+        Assert.Equal("CdBurner Symphonic Ensemble", parsedCdText.AlbumPerformer);
+        Assert.NotNull(parsedCdText.Tracks);
+        Assert.Equal(3, parsedCdText.Tracks.Count);
+        Assert.Equal("Movement 1 - Allegro", parsedCdText.Tracks[0].Title);
+        Assert.Equal("Movement 2 - Andante", parsedCdText.Tracks[1].Title);
+        Assert.Equal("Movement 3 - Presto", parsedCdText.Tracks[2].Title);
+
+        // 6. Rip Audio CD back to .wav files using AudioCdRipperService
+        string ripFolder = Path.Combine(_testTempDir, "ripped_audio");
+        var ripper = new AudioCdRipperService();
+        var ripResult = await ripper.RipAudioCdAsync(recorder, engine, ripFolder);
+
+        Assert.True(ripResult.Success, $"Audio rip failed: {ripResult.ErrorMessage}");
+        Assert.Equal(3, ripResult.TracksRipped);
+        Assert.Equal(totalFrames, ripResult.TotalSectorsRead);
+        Assert.NotNull(ripResult.CueSheetPath);
+        Assert.True(File.Exists(ripResult.CueSheetPath!));
+
+        // 7. Verify all 3 ripped WAV files exist on disk with filenames generated from CD-Text
+        Assert.Equal(3, ripResult.RippedFilePaths.Count);
+        Assert.All(ripResult.RippedFilePaths, path => Assert.True(File.Exists(path), $"Missing ripped track: {path}"));
+
+        string rippedWav1 = ripResult.RippedFilePaths[0];
+        string rippedWav2 = ripResult.RippedFilePaths[1];
+        string rippedWav3 = ripResult.RippedFilePaths[2];
+
+        // 8. Probe audio format and verify frame sizes & peak normalization
+        var meta1 = WavFileCodec.ProbeAudioFile(rippedWav1);
+        Assert.Equal(OpticalConstants.CdAudioSampleRate, meta1.SampleRate);
+        Assert.Equal(OpticalConstants.CdAudioChannels, meta1.Channels);
+        Assert.Equal(OpticalConstants.CdAudioBitsPerSample, meta1.BitsPerSample);
+        Assert.Equal(track1Frames * OpticalConstants.RawSectorSize, meta1.TotalPcmBytes);
+
+        var meta2 = WavFileCodec.ProbeAudioFile(rippedWav2);
+        Assert.Equal(track2Frames * OpticalConstants.RawSectorSize, meta2.TotalPcmBytes);
+
+        var meta3 = WavFileCodec.ProbeAudioFile(rippedWav3);
+        Assert.Equal(track3Frames * OpticalConstants.RawSectorSize, meta3.TotalPcmBytes);
+
+        // Verify peak normalization scaled the audio close to 32767
+        using var stream1 = WavFileCodec.OpenRedBookPcmStream(rippedWav1);
+        byte[] pcm1 = new byte[meta1.TotalPcmBytes];
+        stream1.ReadExactly(pcm1);
+
+        short peak1 = 0;
+        for (int i = 0; i < pcm1.Length / 2; i++)
+        {
+            short s = Math.Abs(BinaryPrimitives.ReadInt16LittleEndian(pcm1.AsSpan(i * 2, 2)));
+            if (s > peak1) peak1 = s;
+        }
+        Assert.True(peak1 > 30000, $"Expected normalized peak close to 32767, but got {peak1}.");
+    }
+
+    #endregion
+
+    #region Workflow 3: VIDEO_TS DVD-Video Layout, 32 KB ECC Alignment & Surface Scan
+
+    [Fact]
+    public async Task AcceptanceWorkflow3_DvdVideoLayout_Verify32KbEccAlignment_BurnToVirtualDvdR_FullSurfaceScan()
+    {
+        // 1. Arrange synthetic DVD-Video file hierarchy with VIDEO_TS and AUDIO_TS
+        var compilation = new DataCompilation("DVD_VIDEO_ACCEP", DiscMediaType.DvdMinusR);
+        var videoTs = compilation.Root.AddDirectory("VIDEO_TS");
+        compilation.Root.AddDirectory("AUDIO_TS");
+
+        byte[] vmgBytes = DvdVideoValidator.CreateSyntheticVmgIfo();
+        byte[] vtsBytes = DvdVideoValidator.CreateSyntheticVtsIfo();
+
+        videoTs.AddFile("VIDEO_TS.IFO", (byte[])vmgBytes.Clone());
+        videoTs.AddFile("VIDEO_TS.VOB", new byte[2048]); // 1 sector
+        videoTs.AddFile("VIDEO_TS.BUP", (byte[])vmgBytes.Clone());
+
+        videoTs.AddFile("VTS_01_0.IFO", (byte[])vtsBytes.Clone());
+        videoTs.AddFile("VTS_01_0.VOB", new byte[2048]); // Menu VOB
+        videoTs.AddFile("VTS_01_1.VOB", new byte[4096]); // Title VOB
+        videoTs.AddFile("VTS_01_0.BUP", (byte[])vtsBytes.Clone());
+
+        // 2. Validate DVD-Video specification compliance
+        var validator = new DvdVideoValidator();
+        var validationResult = validator.ValidateCompilation(compilation);
+
+        Assert.True(validationResult.IsValid, string.Join("; ", validationResult.Errors));
+        Assert.True(validationResult.HasAudioTs);
+        Assert.True(validationResult.HasVmgMenuVob);
+        Assert.Single(validationResult.TitleSetNumbers);
+        Assert.Equal(1, validationResult.TitleSetNumbers[0]);
+
+        // 3. Plan DVD-Video layout and verify 32 KB (16 sectors) ECC alignment between .IFO and .BUP
+        var videoTsDir = compilation.Root.FindDirectoryByVirtualPath("/VIDEO_TS")!;
+        var dvdFiles = videoTsDir.Children
+            .OfType<CompilationFile>()
+            .Select(f => (IDvdVideoFileEntry)new CompilationDvdVideoFileEntry(f))
+            .ToList();
+
+        var planner = new DvdVideoLayoutPlanner();
+        var layout = planner.Plan(dvdFiles, startLba: 0);
+
+        Assert.True(layout.VerifyIfoBupSeparation(out var separationFailure), separationFailure);
+
+        var vmgIfo = layout.GetPlacement("VIDEO_TS.IFO")!;
+        var vmgBup = layout.GetPlacement("VIDEO_TS.BUP")!;
+        int vmgSeparation = vmgBup.StartLba.Value - vmgIfo.EndLba.Value;
+        Assert.True(vmgSeparation >= 16, $"VMG separation ({vmgSeparation}) is less than 16 sectors (32 KB ECC).");
+
+        var vtsIfo = layout.GetPlacement("VTS_01_0.IFO")!;
+        var vtsBup = layout.GetPlacement("VTS_01_0.BUP")!;
+        int vtsSeparation = vtsBup.StartLba.Value - vtsIfo.EndLba.Value;
+        Assert.True(vtsSeparation >= 16, $"VTS separation ({vtsSeparation}) is less than 16 sectors (32 KB ECC).");
+
+        // 4. Build ISO image and burn to virtual DVD-R
+        var isoOptions = new IsoBuildOptions("DVD_VIDEO_ACCEP", IncludeIso9660: true, IncludeJoliet: true, IncludeUdf: true);
+        using var isoStream = IsoUdfImageBuilder.BuildToMemoryStream(compilation.Root, isoOptions);
+
+        using var recorder = new VirtualDiscRecorder("VDRV-P24-DVD");
+        using var medium = VirtualDiscMedium.CreateBlankDvdR47();
+        recorder.InsertMedia(medium);
+
+        var engine = new VirtualBurnEngine(recorder);
+        var burnService = new DataBurnService(engine);
+
+        isoStream.Position = 0;
+        var burnResult = await burnService.BurnStreamAsync(
+            recorder,
+            isoStream,
+            new DataBurnOptions { VolumeLabel = "DVD_VIDEO_ACCEP", CloseDisc = true });
+
+        Assert.True(burnResult.Success, $"Burn failed: {burnResult.ErrorMessage}");
+        Assert.False(medium.IsBlank);
+        Assert.True(medium.UsedSectors > 0);
+
+        // 5. Run full surface scan on the burned virtual DVD-R
+        var scanService = new SurfaceScanService(engine);
+        var scanOptions = new SurfaceScanOptions { BlockSizeSectors = 64 };
+        var scanReport = await scanService.ScanAsync(recorder, scanOptions);
+
+        Assert.True(scanReport.TotalSectorsScanned > 0);
+        Assert.Equal(0, scanReport.DamagedBlocks);
+        Assert.Equal(0, scanReport.SlowBlocks);
+        Assert.Equal(scanReport.Blocks.Count, scanReport.GoodBlocks);
+    }
+
+    #endregion
+
+    #region Workflow 4: Erase Virtual CD-RW Disc & Blank State Restoration
+
+    [Fact]
+    public async Task AcceptanceWorkflow4_EraseVirtualCdRwDisc_VerifyBlankStateRestoration()
+    {
+        // 1. Arrange: Create written CD-RW medium with 128 written sectors
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        byte[] sampleSector = new byte[OpticalConstants.DataSectorSize];
+        Array.Fill(sampleSector, (byte)0xEE);
+
+        for (int i = 0; i < 128; i++)
+        {
+            medium.WriteSector(i, sampleSector);
+        }
+        medium.Sessions.Add(new VirtualSession { SessionNumber = 1, StartLba = 0, SectorCount = 128 });
+        medium.UsedSectors = 128;
+        medium.IsBlank = false;
+
+        using var recorder = new VirtualDiscRecorder("VDRV-P24-ERASE");
+        recorder.InsertMedia(medium);
+
+        var initialStatus = recorder.QueryMediaStatus();
+        Assert.False(initialStatus.IsBlank);
+        Assert.Equal(128, initialStatus.UsedSectors);
+
+        var engine = new VirtualBurnEngine(recorder);
+        var eraseService = new DiscEraseService(engine);
+
+        // 2. Act: Quick erase
+        var quickResult = await eraseService.QuickEraseAsync(recorder);
+
+        // 3. Assert: Blank state restored
+        Assert.True(quickResult.Success, $"Quick erase failed: {quickResult.ErrorMessage}");
+        Assert.Equal(BurnStatus.Succeeded, quickResult.Status);
+        Assert.True(medium.IsBlank);
+        Assert.Equal(0, medium.UsedSectors);
+        Assert.Empty(medium.Sessions);
+
+        var postQuickStatus = recorder.QueryMediaStatus();
+        Assert.True(postQuickStatus.IsBlank);
+        Assert.Equal(0, postQuickStatus.UsedSectors);
+
+        // 4. Act 2: Write sectors again and perform Full Erase
+        for (int i = 0; i < 64; i++)
+        {
+            medium.WriteSector(i, sampleSector);
+        }
+        medium.UsedSectors = 64;
+        medium.IsBlank = false;
+        Assert.False(recorder.QueryMediaStatus().IsBlank);
+
+        var fullResult = await eraseService.FullEraseAsync(recorder);
+
+        // 5. Assert: Full erase restored blank state
+        Assert.True(fullResult.Success, $"Full erase failed: {fullResult.ErrorMessage}");
+        Assert.Equal(BurnStatus.Succeeded, fullResult.Status);
+        Assert.True(medium.IsBlank);
+        Assert.Equal(0, medium.UsedSectors);
+
+        var postFullStatus = recorder.QueryMediaStatus();
+        Assert.True(postFullStatus.IsBlank);
+        Assert.Equal(0, postFullStatus.UsedSectors);
+    }
+
+    #endregion
+}

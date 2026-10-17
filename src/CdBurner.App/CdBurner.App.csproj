@@ -5,6 +5,7 @@
     <RootNamespace>CdBurner.App</RootNamespace>
     <AssemblyName>CdBurner.App</AssemblyName>
     <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
