@@ -224,6 +224,12 @@ public class RipOperationResult
     public int BadSectorsCount { get; init; }
     public TimeSpan TotalTime { get; init; }
     public IReadOnlyList<int> BadSectorsList { get; init; } = Array.Empty<int>();
+    public IReadOnlyList<int> BadSectorLbas
+    {
+        get => BadSectorsList;
+        init => BadSectorsList = value;
+    }
+    public int TotalRetriesPerformed { get; init; }
     public Exception? Exception { get; init; }
 
     public static RipOperationResult Succeeded(int sectorsRead, TimeSpan duration, IReadOnlyList<int>? badSectors = null) => new()
