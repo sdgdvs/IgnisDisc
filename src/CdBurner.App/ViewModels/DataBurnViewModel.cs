@@ -312,6 +312,8 @@ public class DataBurnViewModel : ObservableObject
     public RelayCommand CreateVirtualFolderCommand { get; }
     public RelayCommand RemoveSelectedItemCommand { get; }
     public RelayCommand NavigateUpFolderCommand { get; }
+    public RelayCommand BrowseBiosBootImageCommand { get; }
+    public RelayCommand BrowseUefiBootImageCommand { get; }
     public AsyncRelayCommand ImportPreviousSessionCommand { get; }
     public AsyncRelayCommand ExportIsoCommand { get; }
     public AsyncRelayCommand StartDataBurnCommand { get; }
@@ -333,8 +335,28 @@ public class DataBurnViewModel : ObservableObject
         CreateVirtualFolderCommand = new RelayCommand(ExecuteCreateVirtualFolder);
         RemoveSelectedItemCommand = new RelayCommand(ExecuteRemoveSelectedItem, _ => SelectedItem != null);
         NavigateUpFolderCommand = new RelayCommand(_ => NavigateUp(), _ => CanNavigateUp);
+        BrowseBiosBootImageCommand = new RelayCommand(ExecuteBrowseBiosBootImage);
+        BrowseUefiBootImageCommand = new RelayCommand(ExecuteBrowseUefiBootImage);
         ImportPreviousSessionCommand = new AsyncRelayCommand(async param => await ImportPreviousSessionAsync(param));
-        ExportIsoCommand = new AsyncRelayCommand(async param => await ExportIsoAsync(param as string));
+        ExportIsoCommand = new AsyncRelayCommand(async param =>
+        {
+            string? path = param as string;
+            if (string.IsNullOrWhiteSpace(path) && System.Windows.Application.Current?.MainWindow?.IsLoaded == true)
+            {
+                var dlg = new Microsoft.Win32.SaveFileDialog
+                {
+                    Title = "Export Compilation as ISO Image",
+                    Filter = "ISO Disc Images (*.iso)|*.iso|All Files (*.*)|*.*",
+                    FileName = $"{(string.IsNullOrWhiteSpace(VolumeLabel) ? "DATA_DISC" : VolumeLabel)}.iso"
+                };
+                if (dlg.ShowDialog() != true || string.IsNullOrWhiteSpace(dlg.FileName))
+                {
+                    return;
+                }
+                path = dlg.FileName;
+            }
+            await ExportIsoAsync(path);
+        });
         StartDataBurnCommand = new AsyncRelayCommand(async param => await StartDataBurnAsync(param));
 
         RefreshDrives();
@@ -937,6 +959,46 @@ public class DataBurnViewModel : ObservableObject
         if (item != null)
         {
             RemoveItem(item);
+        }
+    }
+
+    private void ExecuteBrowseBiosBootImage(object? parameter)
+    {
+        if (parameter is string path && !string.IsNullOrWhiteSpace(path))
+        {
+            BiosBootImagePath = path;
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select x86 BIOS El Torito Boot Image",
+            Filter = "Boot Images (*.com;*.bin;*.img;*.ima)|*.com;*.bin;*.img;*.ima|All Files (*.*)|*.*"
+        };
+
+        if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+        {
+            BiosBootImagePath = dlg.FileName;
+        }
+    }
+
+    private void ExecuteBrowseUefiBootImage(object? parameter)
+    {
+        if (parameter is string path && !string.IsNullOrWhiteSpace(path))
+        {
+            UefiBootImagePath = path;
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select EFI/UEFI El Torito Boot Image",
+            Filter = "UEFI Boot Images (*.bin;*.img;*.efi)|*.bin;*.img;*.efi|All Files (*.*)|*.*"
+        };
+
+        if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+        {
+            UefiBootImagePath = dlg.FileName;
         }
     }
 

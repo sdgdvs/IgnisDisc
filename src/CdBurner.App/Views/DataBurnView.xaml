@@ -139,6 +139,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="150" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <!-- BIOS Boot Image -->
@@ -150,10 +151,14 @@
                 <TextBox Grid.Row="0" Grid.Column="1"
                          Text="{Binding BiosBootImagePath, UpdateSourceTrigger=PropertyChanged}"
                          Padding="6,4"
-                         Margin="0,4"
+                         Margin="0,4,8,4"
                          Background="{DynamicResource ControlBackgroundBrush}"
                          Foreground="{DynamicResource TextPrimaryBrush}"
                          BorderBrush="{DynamicResource ControlBorderBrush}" />
+                <Button Grid.Row="0" Grid.Column="2"
+                        Content="📂 Browse..."
+                        Command="{Binding BrowseBiosBootImageCommand}"
+                        Margin="0,4" />
 
                 <!-- UEFI Boot Image -->
                 <TextBlock Grid.Row="1" Grid.Column="0"
@@ -164,10 +169,14 @@
                 <TextBox Grid.Row="1" Grid.Column="1"
                          Text="{Binding UefiBootImagePath, UpdateSourceTrigger=PropertyChanged}"
                          Padding="6,4"
-                         Margin="0,4"
+                         Margin="0,4,8,4"
                          Background="{DynamicResource ControlBackgroundBrush}"
                          Foreground="{DynamicResource TextPrimaryBrush}"
                          BorderBrush="{DynamicResource ControlBorderBrush}" />
+                <Button Grid.Row="1" Grid.Column="2"
+                        Content="📂 Browse..."
+                        Command="{Binding BrowseUefiBootImageCommand}"
+                        Margin="0,4" />
             </Grid>
         </Expander>
 
@@ -236,9 +245,12 @@
         <Border Grid.Row="3"
                 Background="{DynamicResource SurfaceBackgroundBrush}"
                 BorderBrush="{DynamicResource CardBorderBrush}"
-                BorderThickness="1">
+                BorderThickness="1"
+                AllowDrop="True"
+                Drop="OnFileDrop">
             <DataGrid ItemsSource="{Binding CurrentItems}"
                       SelectedItem="{Binding SelectedItem}"
+                      MouseDoubleClick="OnDataGridDoubleClick"
                       AutoGenerateColumns="False"
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"

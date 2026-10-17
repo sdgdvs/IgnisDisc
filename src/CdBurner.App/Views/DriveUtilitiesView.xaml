@@ -13,6 +13,9 @@
     <UserControl.Resources>
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
         <converters:InverseBooleanToVisibilityConverter x:Key="InvBoolToVis" />
+        <converters:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
+        <converters:InverseBooleanConverter x:Key="InverseBooleanConverter" />
+        <converters:BooleanToBrushConverter x:Key="BooleanToBrushConverter" />
         <converters:NullToVisibilityConverter x:Key="NullToVis" />
         <converters:SectorHealthStatusToBrushConverter x:Key="HealthToBrush" />
     </UserControl.Resources>
@@ -227,7 +230,7 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                             <RadioButton Content="Quick Erase (TOC / PMA Blank)"
-                                         IsChecked="{Binding IsFullEraseSelected, Converter={StaticResource InverseBooleanToVisibilityConverter}, Mode=OneWay}"
+                                         IsChecked="{Binding IsFullEraseSelected, Converter={StaticResource InverseBooleanConverter}}"
                                          GroupName="EraseTypeGroup"
                                          Margin="0,0,16,0" />
                             <RadioButton Content="Full Erase (Complete Zero-Fill)"
@@ -237,7 +240,7 @@
 
                         <Button Content="Erase Rewritable Disc"
                                 Command="{Binding EraseDiscCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
                                 Padding="16,6"
                                 HorizontalAlignment="Left"
                                 Margin="0,0,0,16" />
@@ -273,7 +276,7 @@
                             <Button Grid.Column="2"
                                     Content="Apply Bitsetting"
                                     Command="{Binding ApplyBookTypeCommand}"
-                                    IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                                    IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
                                     Margin="10,0,0,0"
                                     Padding="14,5" />
                         </Grid>
@@ -334,7 +337,7 @@
                         <Button Grid.Column="3"
                                 Content="Start Surface Scan"
                                 Command="{Binding StartSurfaceScanCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
                                 Margin="12,0,0,0"
                                 Padding="16,6"
                                 Background="{DynamicResource AccentBrush}"

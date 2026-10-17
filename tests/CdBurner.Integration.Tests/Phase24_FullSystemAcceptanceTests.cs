@@ -595,4 +595,84 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
     }
 
     #endregion
+
+    #region Workflow 5: WPF App DI Container & All XAML Views Instantiation on STA Thread
+
+    [Fact]
+    public void AcceptanceWorkflow5_WpfAppDependencyInjection_And_AllViewsInstantiateOnStaThread()
+    {
+        Exception? staException = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                if (System.Windows.Application.Current == null)
+                {
+                    var app = new CdBurner.App.App();
+                    app.InitializeComponent();
+                }
+                else if (!System.Windows.Application.Current.Resources.Contains("AccentButtonStyle"))
+                {
+                    var appResources = (System.Windows.ResourceDictionary)System.Windows.Application.LoadComponent(
+                        new Uri("/CdBurner.App;component/App.xaml", UriKind.Relative));
+                    System.Windows.Application.Current.Resources.MergedDictionaries.Add(appResources);
+                }
+
+                using var provider = CdBurner.App.App.CreateServiceProvider();
+
+                // Resolve MainViewModel and MainWindow through the real App DI container
+                var mainVm = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<CdBurner.App.ViewModels.MainViewModel>(provider);
+                Assert.NotNull(mainVm);
+
+                var mainWindow = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<CdBurner.App.MainWindow>(provider);
+                Assert.NotNull(mainWindow);
+                Assert.Same(mainVm, mainWindow.DataContext);
+
+                // Instantiate every single WPF UserControl view and bind its ViewModel
+                var dataView = new CdBurner.App.Views.DataBurnView { DataContext = mainVm.DataBurn };
+                var audioView = new CdBurner.App.Views.AudioBurnView { DataContext = mainVm.AudioBurn };
+                var dvdView = new CdBurner.App.Views.DvdVideoView { DataContext = mainVm.DvdVideo };
+                var imageView = new CdBurner.App.Views.ImageStudioView { DataContext = mainVm.ImageStudio };
+                var utilView = new CdBurner.App.Views.DriveUtilitiesView { DataContext = mainVm.DriveUtilities };
+                var vdrvView = new CdBurner.App.Views.VirtualDriveView { DataContext = mainVm.VirtualDrive };
+                var settingsView = new CdBurner.App.Views.SettingsView { DataContext = mainVm.Settings };
+                var progressView = new CdBurner.App.Views.BurnProgressView { DataContext = new CdBurner.App.ViewModels.BurnProgressViewModel() };
+
+                Assert.NotNull(dataView);
+                Assert.NotNull(audioView);
+                Assert.NotNull(dvdView);
+                Assert.NotNull(imageView);
+                Assert.NotNull(utilView);
+                Assert.NotNull(vdrvView);
+                Assert.NotNull(settingsView);
+                Assert.NotNull(progressView);
+
+                // Navigate through all 7 tabs
+                foreach (var tab in Enum.GetValues<CdBurner.App.ViewModels.NavigationTab>())
+                {
+                    mainVm.NavigateCommand.Execute(tab);
+                    Assert.Equal(tab, mainVm.SelectedNavigationTab);
+                }
+
+                mainWindow.Close();
+                mainVm.Dispose();
+            }
+            catch (Exception ex)
+            {
+                staException = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (staException != null)
+        {
+            throw new InvalidOperationException($"STA WPF View instantiation failed: {staException}", staException);
+        }
+    }
+
+    #endregion
 }

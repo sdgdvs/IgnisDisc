@@ -11,7 +11,7 @@ namespace CdBurner.Hardware.Devices;
 public class DiscDeviceManager : IDiscDeviceService, IDisposable
 {
     private readonly object _lock = new();
-    private readonly bool _enablePhysicalEnumeration;
+    private bool _enablePhysicalEnumeration;
     private readonly DeviceChangeMonitor _changeMonitor;
     private readonly Dictionary<string, VirtualDiscRecorder> _virtualRecorders = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ImapiDiscRecorder> _physicalRecorders = new(StringComparer.OrdinalIgnoreCase);
@@ -26,6 +26,32 @@ public class DiscDeviceManager : IDiscDeviceService, IDisposable
     /// Gets whether physical optical drive enumeration via IMAPIv2 is enabled.
     /// </summary>
     public bool EnablePhysicalEnumeration => _enablePhysicalEnumeration;
+
+    /// <summary>
+    /// Enables or disables physical IMAPIv2 optical drive discovery and triggers a refresh.
+    /// </summary>
+    public void EnablePhysicalDiscovery(bool enable)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _enablePhysicalEnumeration = enable;
+        if (enable && OperatingSystem.IsWindows())
+        {
+            int beforeCount;
+            lock (_lock) { beforeCount = _physicalRecorders.Count; }
+            RefreshPhysicalRecorders();
+            int afterCount;
+            string? firstPhysId = null;
+            lock (_lock)
+            {
+                afterCount = _physicalRecorders.Count;
+                firstPhysId = _physicalRecorders.Keys.FirstOrDefault();
+            }
+            if (afterCount != beforeCount && firstPhysId != null)
+            {
+                DeviceChanged?.Invoke(this, new DeviceChangeEventArgs(firstPhysId, DeviceChangeType.Added));
+            }
+        }
+    }
 
     /// <summary>
     /// Gets the underlying <see cref="DeviceChangeMonitor"/> handling Win32 WM_DEVICECHANGE messages.

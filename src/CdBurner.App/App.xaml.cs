@@ -19,25 +19,34 @@ public partial class App : Application
 
     public App()
     {
-        var services = new ServiceCollection();
-        ConfigureServices(services);
-        Services = services.BuildServiceProvider();
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        Services = CreateServiceProvider();
     }
 
-    private static void ConfigureServices(IServiceCollection services)
+    public static ServiceProvider CreateServiceProvider()
     {
-        // Core & Hardware device services
-        services.AddSingleton<IDiscDeviceService>(sp =>
-            new DiscDeviceManager(enablePhysicalEnumeration: OperatingSystem.IsWindows()));
+        var services = new ServiceCollection();
+        ConfigureServices(services);
+        return services.BuildServiceProvider();
+    }
 
-        // Optical burn engine backend
-        services.AddSingleton<IBurnEngineBackend, CompositeBurnEngine>();
+    public static void ConfigureServices(IServiceCollection services)
+    {
+        // Core & Hardware device services (defer physical IMAPI spin-up until after MainWindow is rendered so GUI opens instantaneously)
+        services.AddSingleton<IDiscDeviceService>(_ =>
+            new DiscDeviceManager(enablePhysicalEnumeration: false));
+
+        // Optical burn engine backend (use factory delegate so DI does not treat optional IBurnEngineBackend parameters as circular dependencies)
+        services.AddSingleton<IBurnEngineBackend>(_ => new CompositeBurnEngine());
 
         // ViewModels
-        services.AddSingleton<MainViewModel>();
+        services.AddSingleton<MainViewModel>(sp => new MainViewModel(
+            sp.GetRequiredService<IDiscDeviceService>(),
+            sp.GetRequiredService<IBurnEngineBackend>()));
 
         // Windows
-        services.AddTransient<MainWindow>();
+        services.AddTransient<MainWindow>(sp => new MainWindow(
+            sp.GetRequiredService<MainViewModel>()));
     }
 
     protected override void OnStartup(StartupEventArgs e)
@@ -45,6 +54,44 @@ public partial class App : Application
         base.OnStartup(e);
 
         var mainWindow = Services.GetRequiredService<MainWindow>();
+        MainWindow = mainWindow;
         mainWindow.Show();
+        mainWindow.Activate();
+
+        // Asynchronously enumerate any physical IMAPIv2 optical drives in the background after window is visible
+        if (OperatingSystem.IsWindows())
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    if (Services.GetService<IDiscDeviceService>() is DiscDeviceManager ddm)
+                    {
+                        ddm.EnablePhysicalDiscovery(true);
+                    }
+                }
+                catch
+                {
+                }
+            });
+        }
+    }
+
+    private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        try
+        {
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "startup_error.log"),
+                e.Exception.ToString());
+        }
+        catch { }
+
+        MessageBox.Show(
+            $"An unexpected error occurred:\n\n{e.Exception.Message}",
+            "CdBurner Optical Studio",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        e.Handled = true;
     }
 }

@@ -264,7 +264,25 @@ public class DvdVideoViewModel : ObservableObject
 
         SelectVideoTsFolderCommand = new RelayCommand(ExecuteSelectVideoTsFolder);
         ValidateAndPlanLayoutCommand = new RelayCommand(_ => ValidateAndPlanLayout());
-        BuildDvdIsoCommand = new AsyncRelayCommand(async param => await BuildDvdIsoAsync(param as string), _ => IsStructureValid);
+        BuildDvdIsoCommand = new AsyncRelayCommand(async param =>
+        {
+            string? path = param as string;
+            if (string.IsNullOrWhiteSpace(path) && System.Windows.Application.Current?.MainWindow?.IsLoaded == true)
+            {
+                var dlg = new Microsoft.Win32.SaveFileDialog
+                {
+                    Title = "Build DVD-Video ISO Image",
+                    Filter = "DVD-Video ISO Image (*.iso)|*.iso|All Files (*.*)|*.*",
+                    FileName = $"{(string.IsNullOrWhiteSpace(VolumeLabel) ? "DVD_VIDEO" : VolumeLabel)}.iso"
+                };
+                if (dlg.ShowDialog() != true || string.IsNullOrWhiteSpace(dlg.FileName))
+                {
+                    return;
+                }
+                path = dlg.FileName;
+            }
+            await BuildDvdIsoAsync(path);
+        }, _ => IsStructureValid);
         StartDvdBurnCommand = new AsyncRelayCommand(async param => await StartDvdBurnAsync(param), _ => IsStructureValid);
 
         RefreshDrives();

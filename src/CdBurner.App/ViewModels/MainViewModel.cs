@@ -359,6 +359,14 @@ public class MainViewModel : ObservableObject, IDisposable
         _virtualDrive = new VirtualDriveViewModel(_deviceService);
         _settings = new SettingsViewModel();
 
+        _dataBurn.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(DataBurnViewModel.Capacity) && _selectedNavigationTab == NavigationTab.DataDisc)
+            {
+                CurrentCapacity = _dataBurn.Capacity;
+            }
+        };
+
         // Initialize Commands
         RefreshDrivesCommand = new RelayCommand(RefreshDrives);
         EjectTrayCommand = new RelayCommand(EjectTray, () => _selectedRecorder != null);
@@ -443,19 +451,36 @@ public class MainViewModel : ObservableObject, IDisposable
             ddm.RefreshRecorders();
         }
 
+        ReloadRecordersList();
+    }
+
+    private void ReloadRecordersList()
+    {
         var recorders = _deviceService.GetRecorders();
+        var previousSelection = _selectedRecorder;
 
         AvailableRecorders.Clear();
+        _driveUtilities.AvailableRecorders.Clear();
+        _virtualDrive.AvailableRecorders.Clear();
         foreach (var r in recorders)
         {
             AvailableRecorders.Add(r);
+            _driveUtilities.AvailableRecorders.Add(r);
+            _virtualDrive.AvailableRecorders.Add(r);
         }
 
-        // Prefer selecting "VDRV-01" simulator drive, or fallback to first available
-        var target = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
-                     ?? AvailableRecorders.FirstOrDefault();
+        if (previousSelection != null && AvailableRecorders.Contains(previousSelection))
+        {
+            SelectedRecorder = previousSelection;
+        }
+        else
+        {
+            // Prefer selecting "VDRV-01" simulator drive, or fallback to first available
+            var target = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+                         ?? AvailableRecorders.FirstOrDefault();
 
-        SelectedRecorder = target;
+            SelectedRecorder = target;
+        }
     }
 
     /// <summary>
@@ -626,7 +651,7 @@ public class MainViewModel : ObservableObject, IDisposable
             }
             else if (e.ChangeType == DeviceChangeType.Added || e.ChangeType == DeviceChangeType.Removed)
             {
-                RefreshDrives();
+                ReloadRecordersList();
             }
         }
 

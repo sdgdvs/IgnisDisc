@@ -7,7 +7,7 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="Themes/FluentTheme.xaml" />
+                <ResourceDictionary Source="pack://application:,,,/CdBurner.App;component/Themes/FluentTheme.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
             <!-- Converters -->
@@ -16,6 +16,7 @@
             <converters:MediaPresenceToBrushConverter x:Key="MediaPresenceToBrushConverter" />
             <converters:BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
             <converters:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
+            <converters:InverseBooleanConverter x:Key="InverseBooleanConverter" />
             <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
             <converters:BooleanToBrushConverter x:Key="BooleanToBrushConverter" />
             <converters:FileSystemPresetToStringConverter x:Key="FileSystemPresetToStringConverter" />

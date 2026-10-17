@@ -122,6 +122,7 @@ public class MediaPresenceToBrushConverter : IValueConverter
 
 /// <summary>
 /// Converts boolean to <see cref="Visibility"/> with static instance helper.
+/// Also supports "Inverse" parameter and boolean target types.
 /// </summary>
 public class BooleanToVisibilityConverter : IValueConverter
 {
@@ -130,17 +131,32 @@ public class BooleanToVisibilityConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         bool b = value is bool flag && flag;
+        bool invert = parameter is string s && s.Equals("Inverse", StringComparison.OrdinalIgnoreCase);
+        if (invert) b = !b;
+
+        if (targetType == typeof(bool) || targetType == typeof(bool?))
+        {
+            return b;
+        }
+
         return b ? Visibility.Visible : Visibility.Collapsed;
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        return value is Visibility v && v == Visibility.Visible;
+        bool invert = parameter is string s && s.Equals("Inverse", StringComparison.OrdinalIgnoreCase);
+        if (value is bool b)
+        {
+            return invert ? !b : b;
+        }
+
+        bool vis = value is Visibility v && v == Visibility.Visible;
+        return invert ? !vis : vis;
     }
 }
 
 /// <summary>
-/// Inverts boolean to <see cref="Visibility"/> (true -> Collapsed, false -> Visible).
+/// Inverts boolean to <see cref="Visibility"/> (true -> Collapsed, false -> Visible) or inverted boolean when targetType is bool.
 /// </summary>
 public class InverseBooleanToVisibilityConverter : IValueConverter
 {
@@ -149,12 +165,42 @@ public class InverseBooleanToVisibilityConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         bool b = value is bool flag && flag;
+        if (targetType == typeof(bool) || targetType == typeof(bool?))
+        {
+            return !b;
+        }
+
         return b ? Visibility.Collapsed : Visibility.Visible;
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
+        if (value is bool b)
+        {
+            return !b;
+        }
+
         return value is Visibility v && v != Visibility.Visible;
+    }
+}
+
+/// <summary>
+/// Inverts a boolean value (true &lt;-&gt; false) for TwoWay radio button and IsEnabled bindings.
+/// </summary>
+public class InverseBooleanConverter : IValueConverter
+{
+    public static readonly InverseBooleanConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool b = value is bool flag && flag;
+        return !b;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool b = value is bool flag && flag;
+        return !b;
     }
 }
 

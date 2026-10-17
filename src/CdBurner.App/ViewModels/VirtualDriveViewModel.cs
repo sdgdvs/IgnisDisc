@@ -244,6 +244,20 @@ public class VirtualDriveViewModel : ObservableObject
     public void MountImageFile(string? filePath = null)
     {
         filePath ??= CustomImageFilePath;
+        if (string.IsNullOrWhiteSpace(filePath) && System.Windows.Application.Current?.MainWindow?.IsLoaded == true)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select Disc Image File to Mount in Virtual Drive",
+                Filter = "Disc Images (*.iso;*.bin)|*.iso;*.bin|All Files (*.*)|*.*"
+            };
+            if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+            {
+                CustomImageFilePath = dlg.FileName;
+                filePath = dlg.FileName;
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
             StatusMessage = $"Image file does not exist: {filePath}";
