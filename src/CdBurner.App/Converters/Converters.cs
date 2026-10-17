@@ -240,3 +240,44 @@ public class FileSystemPresetToStringConverter : IValueConverter
     }
 }
 
+/// <summary>
+/// Converts between <see cref="CdBurner.Core.Audio.AudioRecordingMode"/> enum values and boolean for recording mode radio buttons.
+/// </summary>
+public class AudioRecordingModeToBooleanConverter : IValueConverter
+{
+    public static readonly AudioRecordingModeToBooleanConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is CdBurner.Core.Audio.AudioRecordingMode mode && parameter != null)
+        {
+            if (parameter is CdBurner.Core.Audio.AudioRecordingMode targetMode)
+            {
+                return mode == targetMode;
+            }
+            if (Enum.TryParse<CdBurner.Core.Audio.AudioRecordingMode>(parameter.ToString(), true, out var parsed))
+            {
+                return mode == parsed;
+            }
+        }
+        return false;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is bool isChecked && isChecked && parameter != null)
+        {
+            if (parameter is CdBurner.Core.Audio.AudioRecordingMode targetMode)
+            {
+                return targetMode;
+            }
+            if (Enum.TryParse<CdBurner.Core.Audio.AudioRecordingMode>(parameter.ToString(), true, out var parsed))
+            {
+                return parsed;
+            }
+        }
+        return Binding.DoNothing;
+    }
+}
+
+

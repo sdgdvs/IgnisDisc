@@ -21,6 +21,8 @@ public class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<NavigationTab, WorkspaceViewModel> _workspaces = new();
     private readonly DataBurnViewModel _dataBurn;
     private readonly DvdVideoViewModel _dvdVideo;
+    private readonly AudioBurnViewModel _audioBurn;
+    private readonly ImageStudioViewModel _imageStudio;
 
     private IDiscRecorderBackend? _selectedRecorder;
     private MediaStatusDto _currentMediaStatus = new() { MediaType = DiscMediaType.NoMedia, MediaPresent = false };
@@ -41,6 +43,16 @@ public class MainViewModel : ObservableObject, IDisposable
     /// Gets the DVD-Video authoring workspace view model.
     /// </summary>
     public DvdVideoViewModel DvdVideo => _dvdVideo;
+
+    /// <summary>
+    /// Gets the Audio CD mastering workspace view model.
+    /// </summary>
+    public AudioBurnViewModel AudioBurn => _audioBurn;
+
+    /// <summary>
+    /// Gets the Disc Image Studio workspace view model.
+    /// </summary>
+    public ImageStudioViewModel ImageStudio => _imageStudio;
 
     /// <summary>
     /// Gets the underlying disc device enumeration service.
@@ -74,6 +86,8 @@ public class MainViewModel : ObservableObject, IDisposable
             {
                 if (_dataBurn != null) _dataBurn.SelectedRecorder = value;
                 if (_dvdVideo != null) _dvdVideo.SelectedRecorder = value;
+                if (_audioBurn != null) _audioBurn.SelectedRecorder = value;
+                if (_imageStudio != null) _imageStudio.SelectedRecorder = value;
                 UpdateMediaStatus();
                 OnPropertyChanged(nameof(IsDriveVirtual));
                 OnPropertyChanged(nameof(DriveStatusSummary));
@@ -319,6 +333,8 @@ public class MainViewModel : ObservableObject, IDisposable
 
         _dataBurn = new DataBurnViewModel(_deviceService, _burnEngine);
         _dvdVideo = new DvdVideoViewModel(_deviceService, _burnEngine);
+        _audioBurn = new AudioBurnViewModel(_deviceService, _burnEngine);
+        _imageStudio = new ImageStudioViewModel(_deviceService, _burnEngine);
 
         // Initialize Commands
         RefreshDrivesCommand = new RelayCommand(RefreshDrives);
@@ -355,7 +371,8 @@ public class MainViewModel : ObservableObject, IDisposable
             NavigationTab.AudioCd,
             "Audio CD Studio",
             "Author Red Book audio CDs with CD-Text metadata, gapless DAO, and DSP normalization.",
-            "🎵");
+            "🎵",
+            _audioBurn);
 
         _workspaces[NavigationTab.DvdVideo] = new WorkspaceViewModel(
             NavigationTab.DvdVideo,
@@ -368,7 +385,8 @@ public class MainViewModel : ObservableObject, IDisposable
             NavigationTab.ImageStudio,
             "Disc Image Studio",
             "Burn, create, rip, and verify ISO and BIN/CUE disc image archives.",
-            "💿");
+            "💿",
+            _imageStudio);
 
         _workspaces[NavigationTab.DriveUtilities] = new WorkspaceViewModel(
             NavigationTab.DriveUtilities,

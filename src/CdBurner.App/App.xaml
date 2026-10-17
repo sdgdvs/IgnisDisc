@@ -19,6 +19,7 @@
             <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
             <converters:BooleanToBrushConverter x:Key="BooleanToBrushConverter" />
             <converters:FileSystemPresetToStringConverter x:Key="FileSystemPresetToStringConverter" />
+            <converters:AudioRecordingModeToBooleanConverter x:Key="AudioRecordingModeToBooleanConverter" />
 
             <!-- DataTemplates for Master Workspaces -->
             <DataTemplate DataType="{x:Type vm:DataBurnViewModel}">
@@ -26,6 +27,12 @@
             </DataTemplate>
             <DataTemplate DataType="{x:Type vm:DvdVideoViewModel}">
                 <views:DvdVideoView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:AudioBurnViewModel}">
+                <views:AudioBurnView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:ImageStudioViewModel}">
+                <views:ImageStudioView />
             </DataTemplate>
         </ResourceDictionary>
     </Application.Resources>
