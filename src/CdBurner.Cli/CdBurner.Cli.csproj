@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CdBurner.Cli</RootNamespace>
+    <AssemblyName>cdburner-cli</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CdBurner.Core\CdBurner.Core.csproj" />
+    <ProjectReference Include="..\CdBurner.Hardware\CdBurner.Hardware.csproj" />
+  </ItemGroup>
+
+</Project>

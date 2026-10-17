@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>CdBurner.Hardware</RootNamespace>
+    <AssemblyName>CdBurner.Hardware</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CdBurner.Core\CdBurner.Core.csproj" />
+  </ItemGroup>
+
+</Project>
