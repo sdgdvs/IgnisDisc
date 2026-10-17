@@ -1,10 +1,9 @@
 namespace CdBurner.Cli;
 
-internal static class Program
+public static class Program
 {
-    private static int Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
-        Console.WriteLine("CdBurner CLI");
-        return 0;
+        return await CliCommandRunner.RunAsync(args, Console.Out, Console.Error).ConfigureAwait(false);
     }
 }
