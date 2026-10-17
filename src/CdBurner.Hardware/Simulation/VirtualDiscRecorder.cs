@@ -1,5 +1,6 @@
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
 
 namespace CdBurner.Hardware.Simulation;
 
@@ -233,8 +234,24 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
                 SessionCount = m.Sessions.Count,
                 MediaManufacturerId = "VIRTUAL-OPTICAL-01",
                 LastRecordedLba = m.LastRecordedLba,
-                NextWritableLba = m.NextWritableLba
+                NextWritableLba = m.NextWritableLba,
+                BookType = m.BookType
             };
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the DVD Book Type for the currently loaded virtual medium.
+    /// </summary>
+    public DvdBookType BookType
+    {
+        get => CurrentMedium?.BookType ?? DvdBookType.DvdRom;
+        set
+        {
+            if (CurrentMedium != null)
+            {
+                CurrentMedium.BookType = value;
+            }
         }
     }
 

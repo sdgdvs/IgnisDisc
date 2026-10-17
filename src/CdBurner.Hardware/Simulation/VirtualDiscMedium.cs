@@ -1,4 +1,5 @@
 using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
 
 namespace CdBurner.Hardware.Simulation;
 
@@ -36,7 +37,7 @@ public class VirtualTrack
 /// Software-defined virtual optical disc medium supporting memory or file-backed storage,
 /// artificial bad sector injection, multi-session recording, and rewritable media blanking.
 /// </summary>
-public class VirtualDiscMedium : IDisposable
+public class VirtualDiscMedium : IDisposable, IBookTypeTarget
 {
     private readonly object _syncRoot = new();
     private readonly Dictionary<int, byte[]> _memorySectors = new();
@@ -48,6 +49,17 @@ public class VirtualDiscMedium : IDisposable
     /// Optical physical medium classification (e.g., CD-R, CD-RW, DVD-R, DVD+R DL).
     /// </summary>
     public DiscMediaType MediaType { get; set; }
+
+    private DvdBookType? _bookType;
+
+    /// <summary>
+    /// DVD Book Type of this medium (e.g. DVD-ROM, DVD+R DL).
+    /// </summary>
+    public DvdBookType BookType
+    {
+        get => _bookType ?? BookTypeService.GetDefaultBookType(MediaType);
+        set => _bookType = value;
+    }
 
     /// <summary>
     /// Nominal total capacity in logical sectors.

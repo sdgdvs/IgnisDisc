@@ -1,4 +1,5 @@
 using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
 
 namespace CdBurner.Core.Abstractions;
 
@@ -145,6 +146,7 @@ public class MediaStatusDto
     public string? MediaManufacturerId { get; init; }
     public int LastRecordedLba { get; init; }
     public int NextWritableLba { get; init; } = -1;
+    public DvdBookType? BookType { get; init; }
 }
 
 /// <summary>
