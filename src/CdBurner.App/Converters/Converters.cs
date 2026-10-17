@@ -4,6 +4,7 @@ using System.Windows.Data;
 using System.Windows.Media;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Compilation;
+using CdBurner.Core.Utilities;
 
 namespace CdBurner.App.Converters;
 
@@ -277,6 +278,34 @@ public class AudioRecordingModeToBooleanConverter : IValueConverter
             }
         }
         return Binding.DoNothing;
+    }
+}
+
+/// <summary>
+/// Converts a <see cref="SectorHealthStatus"/> into an indicator color brush for surface scanner visualization.
+/// </summary>
+public class SectorHealthStatusToBrushConverter : IValueConverter
+{
+    public static readonly SectorHealthStatusToBrushConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var status = value is SectorHealthStatus s ? s : SectorHealthStatus.Good;
+        return status switch
+        {
+            SectorHealthStatus.Good => Application.Current?.Resources["CapacitySafeBrush"] as Brush
+                ?? new SolidColorBrush(Color.FromRgb(0x10, 0x7C, 0x41)),
+            SectorHealthStatus.Slow => Application.Current?.Resources["CapacityWarningBrush"] as Brush
+                ?? new SolidColorBrush(Color.FromRgb(0xFF, 0x8C, 0x00)),
+            SectorHealthStatus.Damaged => Application.Current?.Resources["CapacityOverburnBrush"] as Brush
+                ?? new SolidColorBrush(Color.FromRgb(0xD1, 0x34, 0x38)),
+            _ => new SolidColorBrush(Color.FromRgb(0x76, 0x76, 0x76))
+        };
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
     }
 }
 

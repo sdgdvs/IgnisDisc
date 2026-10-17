@@ -23,6 +23,9 @@ public class MainViewModel : ObservableObject, IDisposable
     private readonly DvdVideoViewModel _dvdVideo;
     private readonly AudioBurnViewModel _audioBurn;
     private readonly ImageStudioViewModel _imageStudio;
+    private readonly DriveUtilitiesViewModel _driveUtilities;
+    private readonly VirtualDriveViewModel _virtualDrive;
+    private readonly SettingsViewModel _settings;
 
     private IDiscRecorderBackend? _selectedRecorder;
     private MediaStatusDto _currentMediaStatus = new() { MediaType = DiscMediaType.NoMedia, MediaPresent = false };
@@ -53,6 +56,21 @@ public class MainViewModel : ObservableObject, IDisposable
     /// Gets the Disc Image Studio workspace view model.
     /// </summary>
     public ImageStudioViewModel ImageStudio => _imageStudio;
+
+    /// <summary>
+    /// Gets the Drive Utilities and Diagnostics workspace view model.
+    /// </summary>
+    public DriveUtilitiesViewModel DriveUtilities => _driveUtilities;
+
+    /// <summary>
+    /// Gets the Virtual Drive Simulator manager workspace view model.
+    /// </summary>
+    public VirtualDriveViewModel VirtualDrive => _virtualDrive;
+
+    /// <summary>
+    /// Gets the Application Settings configuration workspace view model.
+    /// </summary>
+    public SettingsViewModel Settings => _settings;
 
     /// <summary>
     /// Gets the underlying disc device enumeration service.
@@ -88,6 +106,8 @@ public class MainViewModel : ObservableObject, IDisposable
                 if (_dvdVideo != null) _dvdVideo.SelectedRecorder = value;
                 if (_audioBurn != null) _audioBurn.SelectedRecorder = value;
                 if (_imageStudio != null) _imageStudio.SelectedRecorder = value;
+                if (_driveUtilities != null) _driveUtilities.SelectedRecorder = value;
+                if (_virtualDrive != null) _virtualDrive.SelectedRecorder = value;
                 UpdateMediaStatus();
                 OnPropertyChanged(nameof(IsDriveVirtual));
                 OnPropertyChanged(nameof(DriveStatusSummary));
@@ -335,6 +355,9 @@ public class MainViewModel : ObservableObject, IDisposable
         _dvdVideo = new DvdVideoViewModel(_deviceService, _burnEngine);
         _audioBurn = new AudioBurnViewModel(_deviceService, _burnEngine);
         _imageStudio = new ImageStudioViewModel(_deviceService, _burnEngine);
+        _driveUtilities = new DriveUtilitiesViewModel(_deviceService, _burnEngine);
+        _virtualDrive = new VirtualDriveViewModel(_deviceService);
+        _settings = new SettingsViewModel();
 
         // Initialize Commands
         RefreshDrivesCommand = new RelayCommand(RefreshDrives);
@@ -392,19 +415,22 @@ public class MainViewModel : ObservableObject, IDisposable
             NavigationTab.DriveUtilities,
             "Drive Utilities & Diagnostics",
             "Inspect optical drive capabilities, erase rewritable media, bitsetting, and run surface benchmarks.",
-            "🔧");
+            "🔧",
+            _driveUtilities);
 
         _workspaces[NavigationTab.VirtualDrive] = new WorkspaceViewModel(
             NavigationTab.VirtualDrive,
             "Virtual Drive Manager",
             "Configure and inspect software-defined optical disc simulators and virtual media files.",
-            "💾");
+            "💾",
+            _virtualDrive);
 
         _workspaces[NavigationTab.Settings] = new WorkspaceViewModel(
             NavigationTab.Settings,
             "Application Settings",
             "Configure default write speeds, overburn policies, temporary scratch directories, and logging.",
-            "⚙️");
+            "⚙️",
+            _settings);
     }
 
     /// <summary>

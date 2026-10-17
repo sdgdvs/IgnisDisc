@@ -1,0 +1,205 @@
+<UserControl x:Class="CdBurner.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
+             xmlns:converters="clr-namespace:CdBurner.App.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}"
+             Background="{DynamicResource SurfaceBackgroundBrush}"
+             Foreground="{DynamicResource TextPrimaryBrush}">
+
+    <UserControl.Resources>
+        <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="16" MaxWidth="800" HorizontalAlignment="Left">
+            <Grid.RowDefinitions>
+                <!-- Row 0: Burning Defaults Card -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 1: Directories & External Tools Card -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 2: Appearance & System Card -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 3: Action Buttons Footer -->
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 0: BURNING DEFAULTS CARD                                             -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="🔥 Optical Burning Defaults"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <!-- Default Write Speed Multiplier -->
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="240" />
+                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="Default Write Speed Multiplier:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding AvailableSpeeds}"
+                                  SelectedItem="{Binding DefaultWriteSpeedMultiplier}" />
+                        <TextBlock Grid.Column="2"
+                                   Text="(0 indicates Maximum supported speed)"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Margin="10,0,0,0" />
+                    </Grid>
+
+                    <!-- Verify After Burn -->
+                    <CheckBox Content="Automatically verify media after burn completion"
+                              IsChecked="{Binding VerifyAfterBurnByDefault}"
+                              Margin="0,0,0,8" />
+
+                    <!-- Eject After Burn -->
+                    <CheckBox Content="Eject optical drive tray when burn completes"
+                              IsChecked="{Binding EjectAfterBurnByDefault}"
+                              Margin="0,0,0,8" />
+
+                    <!-- Buffer Underrun Protection -->
+                    <CheckBox Content="Enable buffer underrun protection (BURN-Proof / Burn-Free)"
+                              IsChecked="{Binding EnableBurnFreeByDefault}" />
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 1: DIRECTORIES & EXTERNAL TOOLS                                       -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="1"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="📁 Staging Directories &amp; Transcoders"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <!-- Temp Staging Directory -->
+                    <TextBlock Text="Temporary Scratch / ISO Staging Directory:"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,0,4" />
+                    <TextBox Text="{Binding TempStagingDirectory, UpdateSourceTrigger=PropertyChanged}"
+                             Padding="8,5"
+                             Background="{DynamicResource ControlBackgroundBrush}"
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+                             BorderBrush="{DynamicResource ControlBorderBrush}"
+                             Margin="0,0,0,12" />
+
+                    <!-- FFmpeg Path -->
+                    <TextBlock Text="FFmpeg Transcoder Executable Path (DVD-Video):"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,0,4" />
+                    <TextBox Text="{Binding FfmpegExecutablePath, UpdateSourceTrigger=PropertyChanged}"
+                             Padding="8,5"
+                             Background="{DynamicResource ControlBackgroundBrush}"
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+                             BorderBrush="{DynamicResource ControlBorderBrush}" />
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 2: APPEARANCE & SYSTEM                                               -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="2"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="🎨 Appearance &amp; Diagnostics"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <!-- Theme Selection -->
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="240" />
+                            <ColumnDefinition Width="140" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="Visual Theme Mode:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding AvailableThemes}"
+                                  SelectedItem="{Binding ThemeMode}" />
+                    </Grid>
+
+                    <!-- Virtual Drive Simulator Toggle -->
+                    <CheckBox Content="Enable software-defined virtual optical drive emulator"
+                              IsChecked="{Binding EnableVirtualDrive}"
+                              Margin="0,0,0,12" />
+
+                    <!-- Log Buffer Capacity -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="240" />
+                            <ColumnDefinition Width="140" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="Diagnostic Ring Buffer Capacity:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding LogRingBufferCapacity, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="8,5"
+                                 Background="{DynamicResource ControlBackgroundBrush}"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource ControlBorderBrush}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 3: ACTION BUTTONS FOOTER                                              -->
+            <!-- ========================================================================= -->
+            <DockPanel Grid.Row="3" LastChildFill="False">
+                <Button Content="Save Settings"
+                        Command="{Binding SaveSettingsCommand}"
+                        Padding="20,8"
+                        Background="{DynamicResource AccentBrush}"
+                        Foreground="{DynamicResource AccentForegroundBrush}"
+                        FontWeight="SemiBold"
+                        Margin="0,0,12,0" />
+
+                <Button Content="Reset to Defaults"
+                        Command="{Binding ResetSettingsCommand}"
+                        Padding="16,8"
+                        Margin="0,0,16,0" />
+
+                <TextBlock Text="{Binding StatusMessage}"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           FontSize="12" />
+            </DockPanel>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

@@ -20,6 +20,7 @@
             <converters:BooleanToBrushConverter x:Key="BooleanToBrushConverter" />
             <converters:FileSystemPresetToStringConverter x:Key="FileSystemPresetToStringConverter" />
             <converters:AudioRecordingModeToBooleanConverter x:Key="AudioRecordingModeToBooleanConverter" />
+            <converters:SectorHealthStatusToBrushConverter x:Key="SectorHealthStatusToBrushConverter" />
 
             <!-- DataTemplates for Master Workspaces -->
             <DataTemplate DataType="{x:Type vm:DataBurnViewModel}">
@@ -33,6 +34,18 @@
             </DataTemplate>
             <DataTemplate DataType="{x:Type vm:ImageStudioViewModel}">
                 <views:ImageStudioView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:DriveUtilitiesViewModel}">
+                <views:DriveUtilitiesView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:VirtualDriveViewModel}">
+                <views:VirtualDriveView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                <views:SettingsView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:BurnProgressViewModel}">
+                <views:BurnProgressView />
             </DataTemplate>
         </ResourceDictionary>
     </Application.Resources>
