@@ -137,3 +137,106 @@ public class BooleanToVisibilityConverter : IValueConverter
         return value is Visibility v && v == Visibility.Visible;
     }
 }
+
+/// <summary>
+/// Inverts boolean to <see cref="Visibility"/> (true -> Collapsed, false -> Visible).
+/// </summary>
+public class InverseBooleanToVisibilityConverter : IValueConverter
+{
+    public static readonly InverseBooleanToVisibilityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool b = value is bool flag && flag;
+        return b ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is Visibility v && v != Visibility.Visible;
+    }
+}
+
+/// <summary>
+/// Converts null/non-null reference to <see cref="Visibility"/>.
+/// Default: null -> Collapsed, non-null -> Visible.
+/// Parameter "Inverse" or "HideWhenNotNull": null -> Visible, non-null -> Collapsed.
+/// </summary>
+public class NullToVisibilityConverter : IValueConverter
+{
+    public static readonly NullToVisibilityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool isNull = value == null;
+        bool invert = parameter is string paramStr && (paramStr.Equals("Inverse", StringComparison.OrdinalIgnoreCase) || paramStr.Equals("HideWhenNotNull", StringComparison.OrdinalIgnoreCase));
+
+        if (invert)
+        {
+            return isNull ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        return isNull ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
+/// <summary>
+/// Converts boolean state to green (success/valid) or red (error/invalid) brush.
+/// </summary>
+public class BooleanToBrushConverter : IValueConverter
+{
+    public static readonly BooleanToBrushConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool isValid = value is bool b && b;
+        if (isValid)
+        {
+            return Application.Current?.Resources["CapacitySafeBrush"] as Brush
+                   ?? new SolidColorBrush(Color.FromRgb(0x10, 0x7C, 0x41));
+        }
+
+        return Application.Current?.Resources["CapacityOverburnBrush"] as Brush
+               ?? new SolidColorBrush(Color.FromRgb(0xD1, 0x34, 0x38));
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
+/// <summary>
+/// Formats a <see cref="FileSystemPreset"/> enum value into a readable display string.
+/// </summary>
+public class FileSystemPresetToStringConverter : IValueConverter
+{
+    public static readonly FileSystemPresetToStringConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is FileSystemPreset preset)
+        {
+            return preset switch
+            {
+                FileSystemPreset.IsoJolietUdf => "ISO 9660 + Joliet + UDF 1.02 (Universal)",
+                FileSystemPreset.IsoOnlyLevel1 => "ISO 9660 Level 1 (Legacy DOS)",
+                FileSystemPreset.UdfOnly201 => "UDF 2.01 (Modern Data)",
+                FileSystemPreset.DvdVideoBridge => "DVD-Video Bridge (UDF 1.02 + ISO 9660)",
+                _ => preset.ToString()
+            };
+        }
+        return value?.ToString() ?? string.Empty;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+

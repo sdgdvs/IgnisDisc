@@ -19,6 +19,8 @@ public class MainViewModel : ObservableObject, IDisposable
     private readonly IBurnEngineBackend _burnEngine;
     private readonly bool _ownsDeviceService;
     private readonly Dictionary<NavigationTab, WorkspaceViewModel> _workspaces = new();
+    private readonly DataBurnViewModel _dataBurn;
+    private readonly DvdVideoViewModel _dvdVideo;
 
     private IDiscRecorderBackend? _selectedRecorder;
     private MediaStatusDto _currentMediaStatus = new() { MediaType = DiscMediaType.NoMedia, MediaPresent = false };
@@ -29,6 +31,16 @@ public class MainViewModel : ObservableObject, IDisposable
     private bool _disposed;
 
     #region Properties
+
+    /// <summary>
+    /// Gets the Data Disc mastering workspace view model.
+    /// </summary>
+    public DataBurnViewModel DataBurn => _dataBurn;
+
+    /// <summary>
+    /// Gets the DVD-Video authoring workspace view model.
+    /// </summary>
+    public DvdVideoViewModel DvdVideo => _dvdVideo;
 
     /// <summary>
     /// Gets the underlying disc device enumeration service.
@@ -60,6 +72,8 @@ public class MainViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedRecorder, value))
             {
+                if (_dataBurn != null) _dataBurn.SelectedRecorder = value;
+                if (_dvdVideo != null) _dvdVideo.SelectedRecorder = value;
                 UpdateMediaStatus();
                 OnPropertyChanged(nameof(IsDriveVirtual));
                 OnPropertyChanged(nameof(DriveStatusSummary));
@@ -303,6 +317,9 @@ public class MainViewModel : ObservableObject, IDisposable
         _burnEngine = burnEngine ?? new VirtualBurnEngine();
         _currentCapacity = CompilationCapacityCalculator.AssessCapacity(0, DiscMediaType.CdR);
 
+        _dataBurn = new DataBurnViewModel(_deviceService, _burnEngine);
+        _dvdVideo = new DvdVideoViewModel(_deviceService, _burnEngine);
+
         // Initialize Commands
         RefreshDrivesCommand = new RelayCommand(RefreshDrives);
         EjectTrayCommand = new RelayCommand(EjectTray, () => _selectedRecorder != null);
@@ -331,7 +348,8 @@ public class MainViewModel : ObservableObject, IDisposable
             NavigationTab.DataDisc,
             "Data Disc Studio",
             "Master ISO 9660, Joliet, and UDF data discs with optional El Torito bootable media.",
-            "📁");
+            "📁",
+            _dataBurn);
 
         _workspaces[NavigationTab.AudioCd] = new WorkspaceViewModel(
             NavigationTab.AudioCd,
@@ -343,7 +361,8 @@ public class MainViewModel : ObservableObject, IDisposable
             NavigationTab.DvdVideo,
             "DVD-Video Authoring",
             "Master compliant DVD-Video discs with 32 KB IFO/BUP sector gap alignment and dual-layer break analysis.",
-            "🎬");
+            "🎬",
+            _dvdVideo);
 
         _workspaces[NavigationTab.ImageStudio] = new WorkspaceViewModel(
             NavigationTab.ImageStudio,

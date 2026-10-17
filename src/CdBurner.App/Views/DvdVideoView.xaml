@@ -1,0 +1,346 @@
+<UserControl x:Class="CdBurner.App.Views.DvdVideoView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
+             xmlns:converters="clr-namespace:CdBurner.App.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:DvdVideoViewModel}"
+             Background="{DynamicResource SurfaceBackgroundBrush}"
+             Foreground="{DynamicResource TextPrimaryBrush}">
+
+    <UserControl.Resources>
+        <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <converters:BooleanToBrushConverter x:Key="BoolToBrush" />
+    </UserControl.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <!-- Row 0: Top VIDEO_TS Selection Card -->
+            <RowDefinition Height="Auto" />
+            <!-- Row 1: Validation Summary & Dual-Layer Card -->
+            <RowDefinition Height="Auto" />
+            <!-- Row 2: Physical Extent & 32KB ECC Alignment Table -->
+            <RowDefinition Height="*" />
+            <!-- Row 3: Bottom Action & Status Bar -->
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ========================================================================= -->
+        <!-- ROW 0: VIDEO_TS FOLDER SELECTION & VALIDATION TRIGGER                     -->
+        <!-- ========================================================================= -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,12"
+                Margin="0,0,0,12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- VIDEO_TS Path Row -->
+                <TextBlock Grid.Row="0" Grid.Column="0"
+                           Text="VIDEO_TS Folder:"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Margin="0,0,10,0" />
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding VideoTsFolderPath, UpdateSourceTrigger=PropertyChanged}"
+                         VerticalAlignment="Center"
+                         Padding="8,6"
+                         Background="{DynamicResource ControlBackgroundBrush}"
+                         Foreground="{DynamicResource TextPrimaryBrush}"
+                         BorderBrush="{DynamicResource ControlBorderBrush}"
+                         Margin="0,0,8,0" />
+                <Button Grid.Row="0" Grid.Column="2"
+                        Content="📂 Browse..."
+                        Command="{Binding SelectVideoTsFolderCommand}"
+                        VerticalAlignment="Center"
+                        Margin="0,0,8,0" />
+                <Button Grid.Row="0" Grid.Column="3"
+                        Content="🔍 Validate &amp; Plan Layout"
+                        Command="{Binding ValidateAndPlanLayoutCommand}"
+                        Style="{StaticResource AccentButtonStyle}"
+                        VerticalAlignment="Center" />
+
+                <!-- Volume Label Sub-row -->
+                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
+                            Orientation="Horizontal"
+                            Margin="0,10,0,0"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="Volume Label:"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,10,0" />
+                    <TextBox Width="200"
+                             Text="{Binding VolumeLabel, UpdateSourceTrigger=PropertyChanged}"
+                             MaxLength="32"
+                             Padding="6,4"
+                             Background="{DynamicResource ControlBackgroundBrush}"
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+                             BorderBrush="{DynamicResource ControlBorderBrush}" />
+
+                    <Separator Style="{x:Null}" Width="1" Height="18" Background="{DynamicResource CardBorderBrush}" Margin="16,0" />
+
+                    <TextBlock Text="Target Media:"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding MediaRequirementText}"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentBrush}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ========================================================================= -->
+        <!-- ROW 1: VALIDATION STATUS & DUAL-LAYER PANEL                               -->
+        <!-- ========================================================================= -->
+        <Border Grid.Row="1"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,12"
+                Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="260" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: Compliance Status Badge -->
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <TextBlock Text="DVD-Video Compliance:"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Margin="0,0,0,4" />
+                    <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                            BorderBrush="{Binding IsStructureValid, Converter={StaticResource BoolToBrush}}"
+                            BorderThickness="1.5"
+                            CornerRadius="6"
+                            Padding="12,6"
+                            HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10"
+                                     Fill="{Binding IsStructureValid, Converter={StaticResource BoolToBrush}}"
+                                     Margin="0,0,8,0"
+                                     VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ValidationStatusText}"
+                                       FontWeight="Bold"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- Center: Validation Messages List -->
+                <ScrollViewer Grid.Column="1" MaxHeight="72" VerticalScrollBarVisibility="Auto" Margin="12,0">
+                    <ItemsControl ItemsSource="{Binding ValidationMessages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- Right: DVD-9 Dual-Layer Break Picker -->
+                <Border Grid.Column="2"
+                        Background="{DynamicResource SurfaceBackgroundBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="12,8">
+                    <StackPanel>
+                        <TextBlock Text="DVD-9 Layer Break (OTP):"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Margin="0,0,0,4" />
+                        <ComboBox ItemsSource="{Binding CandidateLayerBreakLbas}"
+                                  SelectedItem="{Binding SelectedLayerBreakLba}"
+                                  IsEnabled="{Binding IsDualLayerRequired}"
+                                  ToolTip="16-sector aligned layer break transition address">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding StringFormat='LBA {0:N0}'}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="Requires 16-sector ECC boundary"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- ========================================================================= -->
+        <!-- ROW 2: PHYSICAL EXTENT & 32 KB ECC GAP ALIGNMENT TABLE                     -->
+        <!-- ========================================================================= -->
+        <Border Grid.Row="2"
+                Background="{DynamicResource SurfaceBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="6,6,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Table Header Ribbon -->
+                <Border Grid.Row="0"
+                        Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="12,8">
+                    <Grid>
+                        <TextBlock Text="Physical Extent Map &amp; 32 KB (16-sector) ECC Alignment Gaps"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock HorizontalAlignment="Right"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   VerticalAlignment="Center">
+                            <Run Text="Total Sectors: " />
+                            <Run Text="{Binding TotalSectors, Mode=OneWay, StringFormat='{}{0:N0}'}" FontWeight="Bold" />
+                            <Run Text=" | Size: " />
+                            <Run Text="{Binding FormattedTotalSize, Mode=OneWay}" FontWeight="Bold" />
+                        </TextBlock>
+                    </Grid>
+                </Border>
+
+                <!-- DataGrid -->
+                <DataGrid Grid.Row="1"
+                          ItemsSource="{Binding ExtentLayoutRows}"
+                          AutoGenerateColumns="False"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          HorizontalGridLinesBrush="{DynamicResource CardBorderBrush}"
+                          Background="Transparent"
+                          RowBackground="Transparent"
+                          AlternatingRowBackground="{DynamicResource CardBackgroundBrush}"
+                          Foreground="{DynamicResource TextPrimaryBrush}"
+                          BorderThickness="0"
+                          HeadersVisibility="Column"
+                          SelectionMode="Single">
+                    <DataGrid.Columns>
+                        <!-- File Name + Icon -->
+                        <DataGridTemplateColumn Header="File / Extent" Width="240">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,2">
+                                        <TextBlock Text="{Binding IconGlyph}" FontSize="13" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding FileName}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{Binding IsPadding, Converter={StaticResource BoolToBrush}}"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+
+                        <!-- Start LBA -->
+                        <DataGridTextColumn Header="Start LBA"
+                                            Binding="{Binding StartLba, StringFormat='{}{0:N0}'}"
+                                            Width="120" />
+
+                        <!-- End LBA -->
+                        <DataGridTextColumn Header="End LBA"
+                                            Binding="{Binding EndLba, StringFormat='{}{0:N0}'}"
+                                            Width="120" />
+
+                        <!-- Sector Count -->
+                        <DataGridTextColumn Header="Sectors"
+                                            Binding="{Binding SectorCount, StringFormat='{}{0:N0}'}"
+                                            Width="100" />
+
+                        <!-- Size -->
+                        <DataGridTextColumn Header="Size"
+                                            Binding="{Binding DisplaySize}"
+                                            Width="140" />
+
+                        <!-- Status / ECC Gap -->
+                        <DataGridTextColumn Header="ECC Alignment / Status"
+                                            Binding="{Binding Status}"
+                                            Width="*" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+
+        <!-- ========================================================================= -->
+        <!-- ROW 3: BOTTOM ACTIONS & PROGRESS BAR                                      -->
+        <!-- ========================================================================= -->
+        <Border Grid.Row="3"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="1,0,1,1"
+                CornerRadius="0,0,6,6"
+                Padding="16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Status Line -->
+                <TextBlock Grid.Column="0"
+                           Text="{Binding StatusMessage}"
+                           FontStyle="Italic"
+                           Foreground="{DynamicResource TextMutedBrush}"
+                           VerticalAlignment="Center" />
+
+                <!-- Progress Bar -->
+                <ProgressBar Grid.Column="1"
+                             Height="6"
+                             Minimum="0"
+                             Maximum="100"
+                             Value="{Binding BurnProgress}"
+                             Margin="24,0"
+                             VerticalAlignment="Center"
+                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+
+                <!-- Action Buttons -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="💾 Build DVD ISO..."
+                            Command="{Binding BuildDvdIsoCommand}"
+                            ToolTip="Build compliant DVD-Video ISO image with 32 KB ECC gap alignment"
+                            Margin="0,0,10,0" />
+                    <Button Content="🎬 Burn DVD-Video"
+                            Command="{Binding StartDvdBurnCommand}"
+                            Style="{StaticResource AccentButtonStyle}"
+                            ToolTip="Burn DVD-Video structure directly to selected optical recorder"
+                            MinWidth="130" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

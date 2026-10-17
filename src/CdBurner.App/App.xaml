@@ -1,7 +1,9 @@
 <Application x:Class="CdBurner.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:converters="clr-namespace:CdBurner.App.Converters">
+             xmlns:converters="clr-namespace:CdBurner.App.Converters"
+             xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
+             xmlns:views="clr-namespace:CdBurner.App.Views">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -13,6 +15,18 @@
             <converters:CapacityStatusToBrushConverter x:Key="CapacityStatusToBrushConverter" />
             <converters:MediaPresenceToBrushConverter x:Key="MediaPresenceToBrushConverter" />
             <converters:BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+            <converters:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
+            <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
+            <converters:BooleanToBrushConverter x:Key="BooleanToBrushConverter" />
+            <converters:FileSystemPresetToStringConverter x:Key="FileSystemPresetToStringConverter" />
+
+            <!-- DataTemplates for Master Workspaces -->
+            <DataTemplate DataType="{x:Type vm:DataBurnViewModel}">
+                <views:DataBurnView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:DvdVideoViewModel}">
+                <views:DvdVideoView />
+            </DataTemplate>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -49,26 +49,35 @@
                                Background="{DynamicResource CardBorderBrush}"
                                Margin="0,0,0,20" />
 
-                    <!-- Workspace Workspace Placeholder Surface -->
-                    <Border Grid.Row="2"
-                            Background="{DynamicResource SurfaceBackgroundBrush}"
-                            BorderBrush="{DynamicResource CardBorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="6"
-                            Padding="24">
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                            <TextBlock Text="Optical Mastering Workspace"
-                                       FontSize="16"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center"
-                                       Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <TextBlock Text="{Binding Description}"
-                                       FontSize="12"
-                                       HorizontalAlignment="Center"
-                                       Foreground="{DynamicResource TextMutedBrush}"
-                                       Margin="0,6,0,0" />
-                        </StackPanel>
-                    </Border>
+                    <!-- Workspace Content or Placeholder Surface -->
+                    <Grid Grid.Row="2">
+                        <!-- Custom module content (e.g. DataBurnView, DvdVideoView) -->
+                        <ContentControl Content="{Binding Content}"
+                                        HorizontalContentAlignment="Stretch"
+                                        VerticalContentAlignment="Stretch"
+                                        Visibility="{Binding Content, Converter={StaticResource NullToVisibilityConverter}}" />
+
+                        <!-- Placeholder surface when no active view model is attached -->
+                        <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                                BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="24"
+                                Visibility="{Binding Content, Converter={StaticResource NullToVisibilityConverter}, ConverterParameter=Inverse}">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock Text="Optical Mastering Workspace"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="{Binding Description}"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextMutedBrush}"
+                                           Margin="0,6,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
                 </Grid>
             </Border>
         </DataTemplate>

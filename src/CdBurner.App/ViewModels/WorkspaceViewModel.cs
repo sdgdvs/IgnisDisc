@@ -11,6 +11,7 @@ public class WorkspaceViewModel : ObservableObject
     private string _title = string.Empty;
     private string _description = string.Empty;
     private string _badgeText = string.Empty;
+    private object? _content;
 
     /// <summary>
     /// Associated navigation tab identifier.
@@ -49,13 +50,24 @@ public class WorkspaceViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Specialized child view model (e.g. <see cref="DataBurnViewModel"/> or <see cref="DvdVideoViewModel"/>)
+    /// hosted within this workspace.
+    /// </summary>
+    public object? Content
+    {
+        get => _content;
+        set => SetProperty(ref _content, value);
+    }
+
+    /// <summary>
     /// Initializes a new workspace view model.
     /// </summary>
-    public WorkspaceViewModel(NavigationTab tab, string title, string description, string badgeText = "")
+    public WorkspaceViewModel(NavigationTab tab, string title, string description, string badgeText = "", object? content = null)
     {
         Tab = tab;
         Title = title;
         Description = description;
         BadgeText = badgeText;
+        Content = content;
     }
 }
