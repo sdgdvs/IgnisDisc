@@ -1,0 +1,363 @@
+using System.Diagnostics;
+using System.Text;
+using CdBurner.Core.Abstractions;
+using CdBurner.Core.Images;
+using CdBurner.Core.Primitives;
+
+namespace CdBurner.Core.Audio;
+
+/// <summary>
+/// Configuration options for ripping Audio CD tracks to uncompressed WAV files and companion CUE sheet.
+/// </summary>
+public class AudioRipOptions
+{
+    /// <summary>
+    /// Maximum read retry attempts per sector on unreadable audio sectors. Default is 3.
+    /// </summary>
+    public int MaxRetriesPerSector { get; set; } = 3;
+
+    /// <summary>
+    /// When true, unreadable sectors that fail after all retries are zero-filled instead of aborting the operation.
+    /// </summary>
+    public bool ContinueOnUnreadableSector { get; set; } = false;
+
+    /// <summary>
+    /// Whether to generate a companion .cue sheet describing the ripped audio files and track layout. Default is true.
+    /// </summary>
+    public bool GenerateCueSheet { get; set; } = true;
+
+    /// <summary>
+    /// Filename of the generated .cue sheet in the output directory. Default is "album.cue".
+    /// </summary>
+    public string CueSheetFileName { get; set; } = "album.cue";
+
+    /// <summary>
+    /// Optional subset of 1-based track numbers to rip. If null or empty, all tracks are ripped.
+    /// </summary>
+    public IReadOnlyList<int>? TrackNumbersToRip { get; set; }
+}
+
+/// <summary>
+/// Discovered audio track descriptor extracted from optical medium TOC or session metadata.
+/// </summary>
+public record AudioDiscoveredTrack(
+    int TrackNumber,
+    int StartLba,
+    int SectorCount,
+    int PreGapFrames,
+    string Title,
+    string Performer,
+    string? Songwriter = null,
+    string? Composer = null,
+    string? Isrc = null);
+
+/// <summary>
+/// Final result of an Audio CD ripping operation.
+/// </summary>
+public class AudioCdRipResult
+{
+    public bool Success { get; init; }
+    public string? ErrorMessage { get; init; }
+    public int TracksRipped { get; init; }
+    public int TotalSectorsRead { get; init; }
+    public TimeSpan TotalTime { get; init; }
+    public IReadOnlyList<string> RippedFilePaths { get; init; } = Array.Empty<string>();
+    public string? CueSheetPath { get; init; }
+    public CdTextAlbumMetadata? CdText { get; init; }
+    public Exception? Exception { get; init; }
+
+    public static AudioCdRipResult Succeeded(
+        IReadOnlyList<string> filePaths,
+        int totalSectors,
+        TimeSpan duration,
+        string? cueSheetPath = null,
+        CdTextAlbumMetadata? cdText = null) => new()
+    {
+        Success = true,
+        TracksRipped = filePaths.Count,
+        TotalSectorsRead = totalSectors,
+        TotalTime = duration,
+        RippedFilePaths = filePaths,
+        CueSheetPath = cueSheetPath,
+        CdText = cdText
+    };
+
+    public static AudioCdRipResult Failed(string error, Exception? ex = null) => new()
+    {
+        Success = false,
+        ErrorMessage = error,
+        Exception = ex
+    };
+}
+
+/// <summary>
+/// Digital Audio Extraction (DAE) ripper service extracting Red Book 2352-byte raw sectors
+/// into canonical 44.1 kHz 16-bit Stereo RIFF WAVE (.wav) files with decoded CD-Text metadata and companion CUE sheet.
+/// </summary>
+public class AudioCdRipperService
+{
+    /// <summary>
+    /// Sanitizes a string for use in Windows file paths, replacing illegal characters with underscores.
+    /// </summary>
+    public static string SanitizeFileName(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(input.Length);
+        foreach (char c in input)
+        {
+            sb.Append(invalidChars.Contains(c) ? '_' : c);
+        }
+
+        string result = sb.ToString().Trim();
+        return string.IsNullOrEmpty(result) ? "Unknown" : result;
+    }
+
+    /// <summary>
+    /// Inspects the inserted optical medium for session/track layout and decodes any recorded CD-Text packs.
+    /// </summary>
+    public static (IReadOnlyList<AudioDiscoveredTrack> Tracks, CdTextAlbumMetadata? CdText) QueryTracksAndCdText(
+        IDiscRecorderBackend recorder)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+
+        CdTextAlbumMetadata? cdText = null;
+        var tracks = new List<AudioDiscoveredTrack>();
+
+        // Check if recorder exposes CurrentMedium (VirtualDiscRecorder or via reflection)
+        object? mediumObj = null;
+        var currentMediumProp = recorder.GetType().GetProperty("CurrentMedium");
+        if (currentMediumProp != null)
+        {
+            mediumObj = currentMediumProp.GetValue(recorder);
+        }
+
+        if (mediumObj != null)
+        {
+            // Read optional CdTextBytes
+            var cdTextBytesProp = mediumObj.GetType().GetProperty("CdTextBytes");
+            if (cdTextBytesProp?.GetValue(mediumObj) is byte[] cdBytes && cdBytes.Length >= 18)
+            {
+                try
+                {
+                    cdText = CdTextPackParser.ParsePacks(cdBytes);
+                }
+                catch
+                {
+                    // Ignore malformed CD-Text packs
+                }
+            }
+
+            // Read Sessions and Tracks
+            var sessionsProp = mediumObj.GetType().GetProperty("Sessions");
+            if (sessionsProp?.GetValue(mediumObj) is System.Collections.IEnumerable sessionsList)
+            {
+                foreach (var session in sessionsList)
+                {
+                    var tracksProp = session.GetType().GetProperty("Tracks");
+                    if (tracksProp?.GetValue(session) is System.Collections.IEnumerable trkList)
+                    {
+                        foreach (var t in trkList)
+                        {
+                            var tType = t.GetType();
+                            int trkNum = tType.GetProperty("TrackNumber")?.GetValue(t) is int tn ? tn : (tracks.Count + 1);
+                            int startLba = tType.GetProperty("StartLba")?.GetValue(t) is int sl ? sl : 0;
+                            int count = tType.GetProperty("SectorCount")?.GetValue(t) is int sc ? sc : 0;
+                            int preGap = tType.GetProperty("PreGapFrames")?.GetValue(t) is int pg ? pg : 0;
+                            string? title = tType.GetProperty("Title")?.GetValue(t) as string;
+                            string? performer = tType.GetProperty("Performer")?.GetValue(t) as string;
+                            string? songwriter = tType.GetProperty("Songwriter")?.GetValue(t) as string;
+                            string? composer = tType.GetProperty("Composer")?.GetValue(t) as string;
+                            string? isrc = tType.GetProperty("Isrc")?.GetValue(t) as string;
+
+                            // Merge or override with decoded CD-Text if available
+                            if (cdText != null && cdText.Tracks != null)
+                            {
+                                var cdt = cdText.Tracks.FirstOrDefault(x => x.TrackNumber == trkNum);
+                                if (cdt != null)
+                                {
+                                    if (!string.IsNullOrEmpty(cdt.Title)) title = cdt.Title;
+                                    if (!string.IsNullOrEmpty(cdt.Performer)) performer = cdt.Performer;
+                                    if (!string.IsNullOrEmpty(cdt.Songwriter)) songwriter = cdt.Songwriter;
+                                    if (!string.IsNullOrEmpty(cdt.Composer)) composer = cdt.Composer;
+                                    if (!string.IsNullOrEmpty(cdt.Isrc)) isrc = cdt.Isrc;
+                                }
+
+                                if (string.IsNullOrEmpty(performer) && !string.IsNullOrEmpty(cdText.AlbumPerformer))
+                                {
+                                    performer = cdText.AlbumPerformer;
+                                }
+                            }
+
+                            tracks.Add(new AudioDiscoveredTrack(
+                                trkNum,
+                                startLba,
+                                count,
+                                preGap,
+                                string.IsNullOrWhiteSpace(title) ? $"Track {trkNum:D2}" : title,
+                                string.IsNullOrWhiteSpace(performer) ? (cdText?.AlbumPerformer ?? "Unknown Artist") : performer,
+                                songwriter,
+                                composer,
+                                isrc));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: If no session metadata was found but medium has recorded sectors
+        if (tracks.Count == 0)
+        {
+            var mediaStatus = recorder.QueryMediaStatus();
+            if (mediaStatus.UsedSectors > 0)
+            {
+                tracks.Add(new AudioDiscoveredTrack(
+                    1,
+                    0,
+                    mediaStatus.UsedSectors,
+                    OpticalConstants.CdLeadInFrames,
+                    "Track 01",
+                    cdText?.AlbumPerformer ?? "Unknown Artist"));
+            }
+        }
+
+        return (tracks, cdText);
+    }
+
+    /// <summary>
+    /// Rips audio tracks from an inserted optical disc into individual .wav files wrapped with standard 44-byte headers
+    /// and optionally generates a companion .cue sheet.
+    /// </summary>
+    public async Task<AudioCdRipResult> RipAudioCdAsync(
+        IDiscRecorderBackend recorder,
+        IBurnEngineBackend engine,
+        string outputDirectory,
+        AudioRipOptions? options = null,
+        IProgress<BurnProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        options ??= new AudioRipOptions();
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var mediaStatus = recorder.QueryMediaStatus();
+        if (!mediaStatus.MediaPresent)
+        {
+            return AudioCdRipResult.Failed("No optical media present in recorder.");
+        }
+
+        Directory.CreateDirectory(outputDirectory);
+
+        var (allTracks, cdText) = QueryTracksAndCdText(recorder);
+        if (allTracks.Count == 0)
+        {
+            return AudioCdRipResult.Failed("No recorded audio tracks found on media.");
+        }
+
+        var tracksToRip = options.TrackNumbersToRip != null && options.TrackNumbersToRip.Count > 0
+            ? allTracks.Where(t => options.TrackNumbersToRip.Contains(t.TrackNumber)).ToList()
+            : allTracks.ToList();
+
+        if (tracksToRip.Count == 0)
+        {
+            return AudioCdRipResult.Failed("None of the specified track numbers were found on the disc.");
+        }
+
+        var sw = Stopwatch.StartNew();
+        var rippedFilePaths = new List<string>(tracksToRip.Count);
+        int totalSectorsRead = 0;
+
+        foreach (var track in tracksToRip)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string safePerformer = SanitizeFileName(track.Performer);
+            if (string.IsNullOrEmpty(safePerformer)) safePerformer = "Unknown Artist";
+
+            string safeTitle = SanitizeFileName(track.Title);
+            if (string.IsNullOrEmpty(safeTitle)) safeTitle = $"Track {track.TrackNumber:D2}";
+
+            string fileName = $"{track.TrackNumber:D2} - {safePerformer} - {safeTitle}.wav";
+            string targetWavPath = Path.Combine(outputDirectory, fileName);
+
+            int pcmByteLength = track.SectorCount * OpticalConstants.RawSectorSize;
+            byte[] wavHeader = WavFileCodec.CreateWavHeader(
+                pcmByteLength,
+                OpticalConstants.CdAudioSampleRate,
+                OpticalConstants.CdAudioChannels,
+                OpticalConstants.CdAudioBitsPerSample);
+
+            await using (var fileStream = new FileStream(targetWavPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+            {
+                // Write standard 44-byte RIFF WAVE header
+                await fileStream.WriteAsync(wavHeader, cancellationToken).ConfigureAwait(false);
+
+                // Read raw 2352-byte audio sectors from disc directly into the file stream
+                var ripResult = await engine.ReadSectorsAsync(
+                    recorder,
+                    track.StartLba,
+                    track.SectorCount,
+                    raw2352Mode: true,
+                    sectorConsumer: async (lba, memory) =>
+                    {
+                        await fileStream.WriteAsync(memory, cancellationToken).ConfigureAwait(false);
+                    },
+                    progress: progress,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (!ripResult.Success && !options.ContinueOnUnreadableSector)
+                {
+                    return AudioCdRipResult.Failed(
+                        $"Failed to rip track {track.TrackNumber} ('{track.Title}'): {ripResult.ErrorMessage}",
+                        ripResult.Exception);
+                }
+            }
+
+            rippedFilePaths.Add(targetWavPath);
+            totalSectorsRead += track.SectorCount;
+        }
+
+        // Generate companion CUE sheet
+        string? cueSheetPath = null;
+        if (options.GenerateCueSheet && rippedFilePaths.Count > 0)
+        {
+            cueSheetPath = Path.Combine(outputDirectory, options.CueSheetFileName ?? "album.cue");
+            var cueFiles = new List<CueFileEntry>();
+
+            for (int i = 0; i < tracksToRip.Count; i++)
+            {
+                var trk = tracksToRip[i];
+                string wavFileName = Path.GetFileName(rippedFilePaths[i]);
+
+                var cueTrack = new CueTrack(
+                    TrackNumber: trk.TrackNumber,
+                    DataType: CueTrackDataType.Audio,
+                    Title: trk.Title,
+                    Performer: trk.Performer,
+                    Songwriter: trk.Songwriter,
+                    Isrc: trk.Isrc,
+                    PreGap: trk.PreGapFrames > 0 ? MsfAddress.FromFrameCount(trk.PreGapFrames) : null,
+                    Indices: new[] { new CueIndex(1, new MsfAddress(0, 0, 0)) }
+                );
+
+                cueFiles.Add(new CueFileEntry(wavFileName, "WAVE", new[] { cueTrack }));
+            }
+
+            var cueSheet = new CueSheet(
+                Title: cdText?.AlbumTitle,
+                Performer: cdText?.AlbumPerformer,
+                Songwriter: cdText?.Songwriter,
+                Files: cueFiles
+            );
+
+            await CueSheetWriter.WriteToFileAsync(cueSheet, cueSheetPath, cancellationToken).ConfigureAwait(false);
+        }
+
+        sw.Stop();
+        return AudioCdRipResult.Succeeded(rippedFilePaths, totalSectorsRead, sw.Elapsed, cueSheetPath, cdText);
+    }
+}

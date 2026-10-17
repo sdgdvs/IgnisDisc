@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Audio;
 using CdBurner.Core.Primitives;
 
 namespace CdBurner.Hardware.Simulation;
@@ -242,6 +243,10 @@ public class VirtualBurnEngine : IBurnEngineBackend
             {
                 trkSectors = OpticalConstants.BytesToSectors(trk.TotalPcmBytes, OpticalConstants.RawSectorSize);
             }
+            else if (trk.PcmStream != null && trk.PcmStream.CanSeek && trk.PcmStream.Length > 0)
+            {
+                trkSectors = OpticalConstants.BytesToSectors(trk.PcmStream.Length, OpticalConstants.RawSectorSize);
+            }
             else if (!string.IsNullOrEmpty(trk.FilePath) && File.Exists(trk.FilePath))
             {
                 trkSectors = OpticalConstants.BytesToSectors(new FileInfo(trk.FilePath).Length, OpticalConstants.RawSectorSize);
@@ -320,7 +325,21 @@ public class VirtualBurnEngine : IBurnEngineBackend
             int trkStartLba = currentLba;
 
             Stream? trackStream = null;
-            if (!string.IsNullOrEmpty(trk.FilePath) && File.Exists(trk.FilePath))
+            bool shouldDisposeStream = true;
+            if (trk.PcmStreamFactory != null)
+            {
+                trackStream = trk.PcmStreamFactory();
+            }
+            else if (trk.PcmStream != null)
+            {
+                trackStream = trk.PcmStream;
+                shouldDisposeStream = false;
+                if (trackStream.CanSeek)
+                {
+                    trackStream.Position = 0;
+                }
+            }
+            else if (!string.IsNullOrEmpty(trk.FilePath) && File.Exists(trk.FilePath))
             {
                 trackStream = File.OpenRead(trk.FilePath);
             }
@@ -365,7 +384,7 @@ public class VirtualBurnEngine : IBurnEngineBackend
             }
             finally
             {
-                if (trackStream != null)
+                if (shouldDisposeStream && trackStream != null)
                 {
                     await trackStream.DisposeAsync();
                 }
@@ -395,10 +414,23 @@ public class VirtualBurnEngine : IBurnEngineBackend
         {
             medium.Sessions.Add(session);
 
-            if (options.WriteCdText && medium.CdTextBytes == null)
+            if (options.WriteCdText)
             {
-                // Assign minimal CD-Text descriptor block if requested
-                medium.CdTextBytes = new byte[18 * (tracks.Count + 1)];
+                if (options.CdTextBytes != null && options.CdTextBytes.Length > 0)
+                {
+                    medium.CdTextBytes = options.CdTextBytes.ToArray();
+                }
+                else if (medium.CdTextBytes == null)
+                {
+                    var albumMeta = new CdTextAlbumMetadata(
+                        AlbumTitle: "Virtual Audio CD",
+                        AlbumPerformer: tracks.FirstOrDefault(t => !string.IsNullOrEmpty(t.Performer))?.Performer ?? "Artist",
+                        Tracks: tracks.Select(t => new CdTextTrackMetadata(
+                            TrackNumber: t.TrackNumber > 0 ? t.TrackNumber : 1,
+                            Title: t.Title ?? $"Track {t.TrackNumber}",
+                            Performer: t.Performer ?? "")).ToList());
+                    medium.CdTextBytes = CdTextPackBuilder.BuildPacks(albumMeta);
+                }
             }
 
             if (options.UseDiscAtOnce)

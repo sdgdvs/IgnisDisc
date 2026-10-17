@@ -275,6 +275,7 @@ public class AudioBurnOptions
     public bool WriteCdText { get; init; }
     public bool UseDiscAtOnce { get; init; } = true;
     public int PreGapFrames { get; init; } = OpticalConstants.CdLeadInFrames; // default 150 frames = 2.0s
+    public byte[]? CdTextBytes { get; init; }
 }
 
 /// <summary>
@@ -292,4 +293,6 @@ public class AudioTrackSource
     public int PreGapFrames { get; init; }
     public TimeSpan Duration { get; init; }
     public long TotalPcmBytes { get; init; }
+    public Stream? PcmStream { get; init; }
+    public Func<Stream>? PcmStreamFactory { get; init; }
 }
