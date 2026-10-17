@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+artifacts/
+state/logs/
+state/current-turn-prompt.md
+*.user
+*.suo
+*.tmp
