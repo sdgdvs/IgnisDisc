@@ -1,0 +1,42 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ========================================================================= -->
+    <!-- Windows 11 Fluent Light Mica / Surface Brushes                             -->
+    <!-- ========================================================================= -->
+
+    <SolidColorBrush x:Key="SurfaceBackgroundBrush" Color="#F3F3F3" />
+    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="CardHoverBackgroundBrush" Color="#F9FAFB" />
+    <SolidColorBrush x:Key="CardBorderBrush" Color="#E2E8F0" />
+    <SolidColorBrush x:Key="RailBackgroundBrush" Color="#EAEFF5" />
+    <SolidColorBrush x:Key="RailSelectedBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="RibbonBackgroundBrush" Color="#EDF2F7" />
+    <SolidColorBrush x:Key="StatusBarBackgroundBrush" Color="#E2E8F0" />
+
+    <!-- Text & Typography Brushes -->
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#0F172A" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#475569" />
+    <SolidColorBrush x:Key="TextMutedBrush" Color="#64748B" />
+    <SolidColorBrush x:Key="TextDisabledBrush" Color="#94A3B8" />
+
+    <!-- Windows 11 Accent Brushes -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#0078D4" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="#1A86D9" />
+    <SolidColorBrush x:Key="AccentPressedBrush" Color="#006CBE" />
+    <SolidColorBrush x:Key="AccentForegroundBrush" Color="#FFFFFF" />
+
+    <!-- Capacity Meter Semantic Brushes -->
+    <SolidColorBrush x:Key="CapacitySafeBrush" Color="#107C41" />
+    <SolidColorBrush x:Key="CapacityWarningBrush" Color="#D97706" />
+    <SolidColorBrush x:Key="CapacityOverburnBrush" Color="#DC2626" />
+
+    <!-- Control Elements & Interactive State Brushes -->
+    <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="ControlBorderBrush" Color="#CBD5E1" />
+    <SolidColorBrush x:Key="ControlHoverBrush" Color="#F1F5F9" />
+    <SolidColorBrush x:Key="ControlPressedBrush" Color="#E2E8F0" />
+    <SolidColorBrush x:Key="ControlDisabledBackgroundBrush" Color="#F8FAFC" />
+    <SolidColorBrush x:Key="ControlDisabledBorderBrush" Color="#E2E8F0" />
+
+</ResourceDictionary>

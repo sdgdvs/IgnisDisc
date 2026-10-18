@@ -466,7 +466,11 @@ public class MainViewModel : ObservableObject, IDisposable
             }
         };
 
-        _settings.SettingsSaved += (_, _) => ReloadRecordersList();
+        _settings.SettingsSaved += (_, _) =>
+        {
+            ReloadRecordersList();
+            SelectDefaultWriteSpeed();
+        };
 
         // Initialize Commands
         RefreshDrivesCommand = new RelayCommand(RefreshDrives);
@@ -631,6 +635,45 @@ public class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Selects the best matching write speed based on the configured default multiplier (defaults to 16x).
+    /// </summary>
+    public void SelectDefaultWriteSpeed()
+    {
+        if (AvailableWriteSpeeds.Count == 0)
+        {
+            SelectedWriteSpeed = null;
+            return;
+        }
+
+        int targetMultiplier = _settings.DefaultWriteSpeedMultiplier > 0 ? _settings.DefaultWriteSpeedMultiplier : 16;
+
+        // 1. Try exact or near-match multiplier (e.g. 16.0x)
+        var match = AvailableWriteSpeeds.FirstOrDefault(s => Math.Abs(s.Multiplier - targetMultiplier) < 0.5);
+        if (match.BytesPerSecond > 0)
+        {
+            SelectedWriteSpeed = match;
+            return;
+        }
+
+        // 2. Try the closest speed >= targetMultiplier (to avoid too-slow speeds on modern media)
+        var higherOrEqual = AvailableWriteSpeeds
+            .Where(s => s.Multiplier >= targetMultiplier)
+            .OrderBy(s => s.Multiplier)
+            .FirstOrDefault();
+        if (higherOrEqual.BytesPerSecond > 0)
+        {
+            SelectedWriteSpeed = higherOrEqual;
+            return;
+        }
+
+        // 3. Fallback: closest supported speed
+        var closest = AvailableWriteSpeeds
+            .OrderBy(s => Math.Abs(s.Multiplier - targetMultiplier))
+            .FirstOrDefault();
+        SelectedWriteSpeed = closest.BytesPerSecond > 0 ? closest : AvailableWriteSpeeds[^1];
+    }
+
+    /// <summary>
     /// Updates media status, supported write speeds, and capacity assessment for current recorder.
     /// </summary>
     public void UpdateMediaStatus()
@@ -654,7 +697,7 @@ public class MainViewModel : ObservableObject, IDisposable
             {
                 if (!_selectedWriteSpeed.HasValue || !AvailableWriteSpeeds.Contains(_selectedWriteSpeed.Value))
                 {
-                    SelectedWriteSpeed = AvailableWriteSpeeds[^1];
+                    SelectDefaultWriteSpeed();
                 }
             }
             else

@@ -1,4 +1,5 @@
 using System.Windows;
+using CdBurner.App.Themes;
 using CdBurner.App.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +27,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         Closing += OnMainWindowClosing;
+        Loaded += (s, e) => ThemeManager.UpdateWindow(this);
     }
 
     private void OnMainWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)

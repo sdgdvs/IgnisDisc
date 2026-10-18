@@ -354,7 +354,7 @@ public sealed class Phase23_ProgressAndUtilitiesViewModelTests : IDisposable
             vm.ResetSettingsCommand.Execute(null);
 
             // Assert 2: Reset back to defaults
-            Assert.Equal(8, vm.DefaultWriteSpeedMultiplier);
+            Assert.Equal(16, vm.DefaultWriteSpeedMultiplier);
             Assert.True(vm.VerifyAfterBurnByDefault);
             Assert.Equal(ThemeMode.System, vm.ThemeMode);
         }
@@ -400,6 +400,51 @@ public sealed class Phase23_ProgressAndUtilitiesViewModelTests : IDisposable
         Assert.Equal(NavigationTab.Settings, mainVm.SelectedNavigationTab);
         var settingsWorkspace = Assert.IsType<WorkspaceViewModel>(mainVm.CurrentWorkspaceViewModel);
         Assert.Equal(mainVm.Settings, settingsWorkspace.Content);
+    }
+
+    [Fact]
+    public void ThemeManager_And_SettingsViewModel_ThemeSwitching_UpdatesModeAndProperties()
+    {
+        // Arrange
+        var vm = new SettingsViewModel();
+        Assert.Equal(ThemeMode.System, vm.ThemeMode);
+        Assert.Contains(ThemeMode.Light, vm.AvailableThemes);
+        Assert.Contains(ThemeMode.Dark, vm.AvailableThemes);
+        Assert.Contains(ThemeMode.System, vm.AvailableThemes);
+
+        // Act 1: Switch to Light mode
+        vm.ThemeMode = ThemeMode.Light;
+        Assert.Equal(ThemeMode.Light, vm.ThemeMode);
+        Assert.Equal(ThemeMode.Light, CdBurner.App.Themes.ThemeManager.CurrentMode);
+        Assert.True(CdBurner.App.Themes.ThemeManager.CurrentIsLight);
+
+        // Act 2: Switch to Dark mode
+        vm.ThemeMode = ThemeMode.Dark;
+        Assert.Equal(ThemeMode.Dark, vm.ThemeMode);
+        Assert.Equal(ThemeMode.Dark, CdBurner.App.Themes.ThemeManager.CurrentMode);
+        Assert.False(CdBurner.App.Themes.ThemeManager.CurrentIsLight);
+
+        // Act 3: Switch to System mode
+        vm.ThemeMode = ThemeMode.System;
+        Assert.Equal(ThemeMode.System, vm.ThemeMode);
+        Assert.Equal(ThemeMode.System, CdBurner.App.Themes.ThemeManager.CurrentMode);
+    }
+
+    [Fact]
+    public void MainViewModel_DefaultWriteSpeed_Selects16xMultiplier()
+    {
+        // Arrange
+        using var mainVm = new MainViewModel(_deviceManager, _burnEngine);
+
+        // Select virtual CD recorder
+        var virtualCd = mainVm.AvailableRecorders.FirstOrDefault(r => r.UniqueId == "VDRV-01");
+        Assert.NotNull(virtualCd);
+        mainVm.SelectedRecorder = virtualCd;
+
+        // Assert: AvailableWriteSpeeds populated and default speed is 16x (or higher, never slow 4x/8x)
+        Assert.NotEmpty(mainVm.AvailableWriteSpeeds);
+        Assert.NotNull(mainVm.SelectedWriteSpeed);
+        Assert.Equal(16.0, mainVm.SelectedWriteSpeed.Value.Multiplier);
     }
 
     #endregion

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CdBurner.App.Mvvm;
+using CdBurner.App.Themes;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Persistence;
 
@@ -102,7 +103,13 @@ public class SettingsViewModel : ObservableObject
     public ThemeMode ThemeMode
     {
         get => _themeMode;
-        set => SetProperty(ref _themeMode, value);
+        set
+        {
+            if (SetProperty(ref _themeMode, value))
+            {
+                ThemeManager.ApplyTheme(value);
+            }
+        }
     }
 
     /// <summary>
@@ -232,6 +239,7 @@ public class SettingsViewModel : ObservableObject
 
         _settingsService.CurrentSettings = settings;
         _settingsService.Save();
+        ThemeManager.ApplyTheme(ThemeMode);
         StatusMessage = "Settings saved successfully.";
         SettingsSaved?.Invoke(this, EventArgs.Empty);
     }

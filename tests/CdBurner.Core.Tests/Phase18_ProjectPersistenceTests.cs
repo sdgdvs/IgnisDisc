@@ -512,7 +512,7 @@ public class Phase18_ProjectPersistenceTests : IDisposable
 
         // Verify default settings
         var def = service1.CurrentSettings;
-        Assert.Equal(8, def.DefaultWriteSpeedMultiplier);
+        Assert.Equal(16, def.DefaultWriteSpeedMultiplier);
         Assert.True(def.VerifyAfterBurnByDefault);
         Assert.False(def.EjectAfterBurnByDefault);
         Assert.True(def.EnableBurnFreeByDefault);
@@ -558,7 +558,7 @@ public class Phase18_ProjectPersistenceTests : IDisposable
         // 5. Test ResetToDefaults
         service2.ResetToDefaults();
         var reset = service2.CurrentSettings;
-        Assert.Equal(8, reset.DefaultWriteSpeedMultiplier);
+        Assert.Equal(16, reset.DefaultWriteSpeedMultiplier);
         Assert.True(reset.VerifyAfterBurnByDefault);
         Assert.Equal(ThemeMode.System, reset.ThemeMode);
     }

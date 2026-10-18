@@ -158,6 +158,38 @@ public sealed class Phase22_AudioAndImageViewModelTests : IDisposable
     }
 
     [Fact]
+    public void AudioBurnViewModel_ClearAllTracks_ResetsCompilationStateAndTotals()
+    {
+        // Arrange
+        string wav1 = Path.Combine(_tempDir, "Track01_clear.wav");
+        string wav2 = Path.Combine(_tempDir, "Track02_clear.wav");
+        byte[] pcm1 = new byte[75 * OpticalConstants.RawSectorSize];
+        byte[] pcm2 = new byte[150 * OpticalConstants.RawSectorSize];
+        WavFileCodec.WriteWavFile(wav1, pcm1);
+        WavFileCodec.WriteWavFile(wav2, pcm2);
+
+        var vm = new AudioBurnViewModel(_deviceManager, _burnEngine);
+        Assert.False(vm.ClearAllTracksCommand.CanExecute(null));
+
+        // Act 1: Add tracks
+        vm.AddAudioFilesCommand.Execute(new[] { wav1, wav2 });
+        Assert.Equal(2, vm.Tracks.Count);
+        Assert.True(vm.ClearAllTracksCommand.CanExecute(null));
+        Assert.True(vm.TotalDuration.ToFrameCount() > 0);
+
+        // Act 2: Clear all tracks
+        vm.ClearAllTracksCommand.Execute(null);
+
+        // Assert 2: Entire compilation cleared and commands updated
+        Assert.Empty(vm.Tracks);
+        Assert.Null(vm.SelectedTrack);
+        Assert.Equal(0, vm.TotalDuration.ToFrameCount());
+        Assert.False(vm.ClearAllTracksCommand.CanExecute(null));
+        Assert.False(vm.StartAudioBurnCommand.CanExecute(null));
+        Assert.Contains("Cleared all tracks", vm.StatusMessage);
+    }
+
+    [Fact]
     public async Task ImageStudioViewModel_InspectBurnAndVerifyIso_SucceedsWithBitForBitMatch()
     {
         // Arrange 1: Build a synthetic ISO file

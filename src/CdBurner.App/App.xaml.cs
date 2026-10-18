@@ -1,6 +1,8 @@
 using System.Windows;
+using CdBurner.App.Themes;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Persistence;
 using CdBurner.Hardware.Burning;
 using CdBurner.Hardware.Devices;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +54,15 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        try
+        {
+            var settings = new AppSettingsService().CurrentSettings;
+            ThemeManager.Initialize(settings.ThemeMode);
+        }
+        catch
+        {
+        }
 
         var mainWindow = Services.GetRequiredService<MainWindow>();
         MainWindow = mainWindow;

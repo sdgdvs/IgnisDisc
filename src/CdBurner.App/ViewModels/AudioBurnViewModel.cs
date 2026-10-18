@@ -263,6 +263,7 @@ public class AudioBurnViewModel : ObservableObject
                 StartAudioBurnCommand.RaiseCanExecuteChanged();
                 RipAudioCdCommand.RaiseCanExecuteChanged();
                 CancelBurnCommand.RaiseCanExecuteChanged();
+                ClearAllTracksCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -333,6 +334,11 @@ public class AudioBurnViewModel : ObservableObject
     public RelayCommand RemoveTrackCommand { get; }
 
     /// <summary>
+    /// Removes all tracks from the compilation.
+    /// </summary>
+    public RelayCommand ClearAllTracksCommand { get; }
+
+    /// <summary>
     /// Moves the selected track up one position in the track sequence.
     /// </summary>
     public RelayCommand MoveTrackUpCommand { get; }
@@ -400,6 +406,7 @@ public class AudioBurnViewModel : ObservableObject
         });
 
         RemoveTrackCommand = new RelayCommand(p => RemoveTrack(p as AudioTrackRowViewModel), _ => SelectedTrack != null || Tracks.Count > 0);
+        ClearAllTracksCommand = new RelayCommand(_ => ClearAllTracks(), _ => !IsBusy && Tracks.Count > 0);
         MoveTrackUpCommand = new RelayCommand(p => MoveTrackUp(p as AudioTrackRowViewModel), _ => CanMoveTrackUp(SelectedTrack));
         MoveTrackDownCommand = new RelayCommand(p => MoveTrackDown(p as AudioTrackRowViewModel), _ => CanMoveTrackDown(SelectedTrack));
         StartAudioBurnCommand = new AsyncRelayCommand(async p => await StartAudioBurnAsync(p as string), _ => !IsBusy && Tracks.Count > 0);
@@ -599,6 +606,24 @@ public class AudioBurnViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Removes all audio tracks from the compilation to allow burning consecutive CDs rapidly.
+    /// </summary>
+    public void ClearAllTracks()
+    {
+        if (Tracks.Count == 0) return;
+
+        Tracks.Clear();
+        SelectedTrack = null;
+        RecalculateTotals();
+        MoveTrackUpCommand.RaiseCanExecuteChanged();
+        MoveTrackDownCommand.RaiseCanExecuteChanged();
+        RemoveTrackCommand.RaiseCanExecuteChanged();
+        ClearAllTracksCommand.RaiseCanExecuteChanged();
+        StartAudioBurnCommand.RaiseCanExecuteChanged();
+        StatusMessage = "Cleared all tracks from compilation.";
+    }
+
+    /// <summary>
     /// Moves the specified track up one position in the track order.
     /// </summary>
     public void MoveTrackUp(AudioTrackRowViewModel? track = null)
@@ -662,6 +687,7 @@ public class AudioBurnViewModel : ObservableObject
         MoveTrackUpCommand.RaiseCanExecuteChanged();
         MoveTrackDownCommand.RaiseCanExecuteChanged();
         RemoveTrackCommand.RaiseCanExecuteChanged();
+        ClearAllTracksCommand.RaiseCanExecuteChanged();
         StartAudioBurnCommand.RaiseCanExecuteChanged();
     }
 

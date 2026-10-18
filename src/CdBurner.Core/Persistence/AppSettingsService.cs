@@ -18,9 +18,9 @@ public enum ThemeMode
 public class AppSettings
 {
     /// <summary>
-    /// Default optical burn speed multiplier (e.g. 8 for 8X; 0 indicates maximum speed).
+    /// Default optical burn speed multiplier (e.g. 16 for 16X; 0 indicates maximum speed).
     /// </summary>
-    public int DefaultWriteSpeedMultiplier { get; set; } = 8;
+    public int DefaultWriteSpeedMultiplier { get; set; } = 16;
 
     /// <summary>
     /// Whether to automatically verify written media sectors against source hash after burning.
