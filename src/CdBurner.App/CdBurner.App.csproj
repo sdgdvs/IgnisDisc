@@ -3,7 +3,9 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <RootNamespace>CdBurner.App</RootNamespace>
-    <AssemblyName>CdBurner.App</AssemblyName>
+    <AssemblyName>IgnisDisc</AssemblyName>
+    <Product>IgnisDisc Optical Studio</Product>
+    <Title>IgnisDisc Optical Studio</Title>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>

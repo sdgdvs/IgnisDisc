@@ -615,7 +615,7 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
                 else if (!System.Windows.Application.Current.Resources.Contains("AccentButtonStyle"))
                 {
                     var appResources = (System.Windows.ResourceDictionary)System.Windows.Application.LoadComponent(
-                        new Uri("/CdBurner.App;component/App.xaml", UriKind.Relative));
+                        new Uri("/IgnisDisc;component/App.xaml", UriKind.Relative));
                     System.Windows.Application.Current.Resources.MergedDictionaries.Add(appResources);
                 }
 
@@ -628,6 +628,7 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
                 var mainWindow = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<CdBurner.App.MainWindow>(provider);
                 Assert.NotNull(mainWindow);
                 Assert.Same(mainVm, mainWindow.DataContext);
+                Assert.Equal("IgnisDisc Optical Studio", mainWindow.Title);
 
                 // Instantiate every single WPF UserControl view and bind its ViewModel
                 var dataView = new CdBurner.App.Views.DataBurnView { DataContext = mainVm.DataBurn };

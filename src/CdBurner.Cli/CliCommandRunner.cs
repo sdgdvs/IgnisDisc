@@ -63,7 +63,7 @@ public static class CliCommandRunner
         {
             if (parsed.HasFlag("version") || parsed.HasFlag("v"))
             {
-                stdout.WriteLine("CdBurner CLI v1.0.0 (.NET 10.0 Windows)");
+                stdout.WriteLine("IgnisDisc (CdBurner CLI) v1.0.0 (.NET 10.0 Windows)");
                 return 0;
             }
 
@@ -1081,8 +1081,8 @@ public static class CliCommandRunner
 
     private static void PrintHelp(TextWriter stdout)
     {
-        stdout.WriteLine("CdBurner Optical CLI (cdburner-cli.exe)");
-        stdout.WriteLine("Usage: cdburner-cli <command> [options]");
+        stdout.WriteLine("IgnisDisc Optical CLI (ignisdisc-cli.exe / cdburner-cli.exe)");
+        stdout.WriteLine("Usage: ignisdisc-cli <command> [options]");
         stdout.WriteLine();
         stdout.WriteLine("Supported Commands:");
         stdout.WriteLine("  drives [--json]");

@@ -89,7 +89,7 @@ public partial class App : Application
 
         MessageBox.Show(
             $"An unexpected error occurred:\n\n{e.Exception.Message}",
-            "CdBurner Optical Studio",
+            "IgnisDisc Optical Studio",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
         e.Handled = true;

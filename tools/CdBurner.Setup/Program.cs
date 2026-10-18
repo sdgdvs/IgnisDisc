@@ -11,10 +11,10 @@ namespace CdBurner.Setup;
 
 internal static class Program
 {
-    public const string AppTitle = "CdBurner Optical Studio";
+    public const string AppTitle = "IgnisDisc Optical Studio";
     public const string AppVersion = "1.0.0";
     public const string Publisher = "Ignis Optical Engineering";
-    public const string UninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CdBurner";
+    public const string UninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\IgnisDisc";
 
     [STAThread]
     public static int Main(string[] args)
@@ -22,7 +22,7 @@ internal static class Program
         string defaultInstallDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
-            "CdBurner");
+            "IgnisDisc");
 
         bool silent = false;
         bool uninstall = false;
@@ -94,20 +94,21 @@ internal static class Program
     public static Stream OpenPayloadStream()
     {
         var asm = Assembly.GetExecutingAssembly();
-        var stream = asm.GetManifestResourceStream("CdBurner.Payload.zip");
+        var stream = asm.GetManifestResourceStream("IgnisDisc.Payload.zip")
+                     ?? asm.GetManifestResourceStream("CdBurner.Payload.zip");
         if (stream != null)
         {
             return stream;
         }
 
         string exeDir = AppContext.BaseDirectory;
-        string fallbackZip = Path.Combine(exeDir, "CdBurner-Portable-win-x64.zip");
+        string fallbackZip = Path.Combine(exeDir, "IgnisDisc-Portable-win-x64.zip");
         if (File.Exists(fallbackZip))
         {
             return File.OpenRead(fallbackZip);
         }
 
-        throw new FileNotFoundException("Embedded installer payload (CdBurner.Payload.zip) was not found.");
+        throw new FileNotFoundException("Embedded installer payload (IgnisDisc.Payload.zip) was not found.");
     }
 
     public static void InstallPayload(
@@ -155,8 +156,8 @@ internal static class Program
             }
         }
 
-        string appExePath = Path.Combine(installDir, "CdBurner.App.exe");
-        string uninstallerPath = Path.Combine(installDir, "Uninstall-CdBurner.exe");
+        string appExePath = Path.Combine(installDir, "IgnisDisc.exe");
+        string uninstallerPath = Path.Combine(installDir, "Uninstall-IgnisDisc.exe");
 
         try
         {
@@ -180,7 +181,7 @@ internal static class Program
                 Path.Combine(desktopDir, $"{AppTitle}.lnk"),
                 appExePath,
                 installDir,
-                "Master CD, DVD, ISO/CUE & Red Book Audio Discs");
+                "IgnisDisc Optical Studio — Master CD, DVD, ISO/CUE & Red Book Audio Discs");
         }
 
         if (createStartMenuShortcut)
@@ -194,18 +195,18 @@ internal static class Program
                 Path.Combine(startMenuDir, $"{AppTitle}.lnk"),
                 appExePath,
                 installDir,
-                "Master CD, DVD, ISO/CUE & Red Book Audio Discs");
+                "IgnisDisc Optical Studio — Master CD, DVD, ISO/CUE & Red Book Audio Discs");
         }
 
         if (addToPath)
         {
-            progress?.Report((95, "Adding cdburner-cli to User PATH..."));
+            progress?.Report((95, "Adding ignisdisc-cli to User PATH..."));
             AddDirectoryToUserPath(installDir);
         }
 
         if (registerUninstaller)
         {
-            progress?.Report((98, "Registering application with Windows Installed Apps..."));
+            progress?.Report((98, "Registering IgnisDisc with Windows Installed Apps..."));
             RegisterUninstallerInRegistry(installDir, appExePath, uninstallerPath);
         }
 
@@ -376,7 +377,7 @@ internal sealed class SetupWizardWindow : Window
         var headerStack = new StackPanel { Margin = new Thickness(0, 0, 0, 20) };
         headerStack.Children.Add(new TextBlock
         {
-            Text = "💿 CdBurner Optical Studio",
+            Text = "💿 IgnisDisc Optical Studio",
             FontSize = 24,
             FontWeight = FontWeights.Bold,
             Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(248, 250, 252))
@@ -440,7 +441,7 @@ internal sealed class SetupWizardWindow : Window
         {
             using var dlg = new System.Windows.Forms.FolderBrowserDialog
             {
-                Description = "Select installation folder for CdBurner Optical Studio",
+                Description = "Select installation folder for IgnisDisc Optical Studio",
                 SelectedPath = _installDirBox.Text,
                 ShowNewFolderButton = true
             };
@@ -455,7 +456,7 @@ internal sealed class SetupWizardWindow : Window
 
         _desktopShortcutCheck = new System.Windows.Controls.CheckBox
         {
-            Content = "Create Desktop shortcut (CdBurner Optical Studio)",
+            Content = "Create Desktop shortcut (IgnisDisc Optical Studio)",
             IsChecked = true,
             Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(226, 232, 240)),
             Margin = new Thickness(0, 4, 0, 6)
@@ -473,7 +474,7 @@ internal sealed class SetupWizardWindow : Window
 
         _addToPathCheck = new System.Windows.Controls.CheckBox
         {
-            Content = "Add cdburner-cli.exe to User PATH for command-line automation",
+            Content = "Add ignisdisc-cli.exe to User PATH for command-line automation",
             IsChecked = true,
             Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(226, 232, 240)),
             Margin = new Thickness(0, 4, 0, 18)
@@ -494,7 +495,7 @@ internal sealed class SetupWizardWindow : Window
 
         _statusText = new TextBlock
         {
-            Text = "Ready to install CdBurner Optical Studio (GUI) and cdburner-cli.",
+            Text = "Ready to install IgnisDisc Optical Studio (GUI) and ignisdisc-cli.",
             FontSize = 12,
             Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
             TextTrimming = TextTrimming.CharacterEllipsis
@@ -528,7 +529,7 @@ internal sealed class SetupWizardWindow : Window
 
         _launchButton = new System.Windows.Controls.Button
         {
-            Content = "🚀 Launch CdBurner Studio",
+            Content = "🚀 Launch IgnisDisc Studio",
             Padding = new Thickness(18, 9, 18, 9),
             FontWeight = FontWeights.SemiBold,
             Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(16, 185, 129)),
@@ -614,7 +615,7 @@ internal sealed class SetupWizardWindow : Window
 
     private void OnLaunchClicked(object sender, RoutedEventArgs e)
     {
-        string appExe = Path.Combine(_installDirBox.Text.Trim(), "CdBurner.App.exe");
+        string appExe = Path.Combine(_installDirBox.Text.Trim(), "IgnisDisc.exe");
         if (File.Exists(appExe))
         {
             Process.Start(new ProcessStartInfo

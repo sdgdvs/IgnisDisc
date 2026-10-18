@@ -2,7 +2,9 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>CdBurner-Setup</AssemblyName>
+    <AssemblyName>IgnisDisc-Setup</AssemblyName>
+    <Product>IgnisDisc Optical Studio</Product>
+    <Title>IgnisDisc Optical Studio Setup</Title>
     <RootNamespace>CdBurner.Setup</RootNamespace>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
@@ -15,7 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="payload.zip" LogicalName="CdBurner.Payload.zip" Condition="Exists('payload.zip')" />
+    <EmbeddedResource Include="payload.zip" LogicalName="IgnisDisc.Payload.zip" Condition="Exists('payload.zip')" />
   </ItemGroup>
 
 </Project>

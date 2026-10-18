@@ -7,7 +7,7 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="pack://application:,,,/CdBurner.App;component/Themes/FluentTheme.xaml" />
+                <ResourceDictionary Source="pack://application:,,,/IgnisDisc;component/Themes/FluentTheme.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
             <!-- Converters -->
