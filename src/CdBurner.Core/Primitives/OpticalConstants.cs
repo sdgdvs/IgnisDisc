@@ -41,6 +41,12 @@ public static class OpticalConstants
     public const int CdLeadInSeconds = 2;
 
     /// <summary>
+    /// Minimum Red Book audio track length in frames (4.0 seconds = 300 frames).
+    /// Red Book specification requires each index/track to be at least 4 seconds long.
+    /// </summary>
+    public const int CdMinTrackFrames = 300;
+
+    /// <summary>
     /// CD-DA sampling rate in Hertz (44,100 Hz).
     /// </summary>
     public const int CdAudioSampleRate = 44100;

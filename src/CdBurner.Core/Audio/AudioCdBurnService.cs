@@ -96,19 +96,40 @@ public class AudioCdBurnService
                 cancellationToken.ThrowIfCancellationRequested();
                 var trackItem = compilation.Tracks[i];
 
+                progress?.Report(new BurnProgressSnapshot
+                {
+                    CurrentActionDescription = $"Preparing track {i + 1}/{compilation.Tracks.Count}: {trackItem.Title}",
+                    CurrentLba = i,
+                    TotalLba = Math.Max(1, compilation.Tracks.Count),
+                    BufferLevelPercent = 100.0
+                });
+
                 Stream pcmStream;
-                if (trackItem.CustomPcmStreamFactory != null)
+                try
                 {
-                    pcmStream = trackItem.CustomPcmStreamFactory();
+                    if (trackItem.CustomPcmStreamFactory != null)
+                    {
+                        pcmStream = trackItem.CustomPcmStreamFactory();
+                    }
+                    else if (!string.IsNullOrEmpty(trackItem.SourceFilePath) && File.Exists(trackItem.SourceFilePath))
+                    {
+                        pcmStream = _audioDecoder.OpenRedBookPcmStream(trackItem.SourceFilePath);
+                    }
+                    else
+                    {
+                        return BurnOperationResult.Failed(
+                            $"Audio source not found for track {trackItem.TrackNumber}: '{trackItem.SourceFilePath}'.");
+                    }
                 }
-                else if (!string.IsNullOrEmpty(trackItem.SourceFilePath) && File.Exists(trackItem.SourceFilePath))
-                {
-                    pcmStream = _audioDecoder.OpenRedBookPcmStream(trackItem.SourceFilePath);
-                }
-                else
+                catch (DrmProtectedAudioException drmEx)
                 {
                     return BurnOperationResult.Failed(
-                        $"Audio source not found for track {trackItem.TrackNumber}: '{trackItem.SourceFilePath}'.");
+                        $"Track {trackItem.TrackNumber} ('{trackItem.Title}') cannot be burned: {drmEx.Message}");
+                }
+                catch (Exception ex)
+                {
+                    return BurnOperationResult.Failed(
+                        $"Failed to decode track {trackItem.TrackNumber} ('{trackItem.Title}'): {ex.Message}");
                 }
 
                 intermediateStreams.Add(pcmStream);
@@ -117,9 +138,17 @@ public class AudioCdBurnService
                 bool shouldNormalize = compilation.NormalizeAllTracks || trackItem.NormalizeAudio || options.PerformNormalization;
                 if (shouldNormalize)
                 {
-                    var normalized = RedBookPcmDspProcessor.NormalizePcmStream(pcmStream);
-                    intermediateStreams.Add(normalized);
-                    pcmStream = normalized;
+                    try
+                    {
+                        var normalized = RedBookPcmDspProcessor.NormalizePcmStream(pcmStream);
+                        intermediateStreams.Add(normalized);
+                        pcmStream = normalized;
+                    }
+                    catch (Exception ex)
+                    {
+                        return BurnOperationResult.Failed(
+                            $"DSP normalization failed for track {trackItem.TrackNumber} ('{trackItem.Title}'): {ex.Message}");
+                    }
                 }
 
                 // Padding to 2352-byte boundary

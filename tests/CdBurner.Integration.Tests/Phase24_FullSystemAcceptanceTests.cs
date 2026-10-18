@@ -628,7 +628,7 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
                 var mainWindow = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<CdBurner.App.MainWindow>(provider);
                 Assert.NotNull(mainWindow);
                 Assert.Same(mainVm, mainWindow.DataContext);
-                Assert.Equal("IgnisDisc Optical Studio v1.02", mainWindow.Title);
+                Assert.Equal("IgnisDisc Optical Studio v1.03", mainWindow.Title);
 
                 // Instantiate every single WPF UserControl view and bind its ViewModel
                 var dataView = new CdBurner.App.Views.DataBurnView { DataContext = mainVm.DataBurn };
@@ -713,6 +713,32 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
         Assert.DoesNotContain(virtualRec, mainVm.AvailableRecorders);
         Assert.Single(mainVm.AvailableRecorders);
         Assert.Same(physicalRec, mainVm.SelectedRecorder);
+    }
+
+    [Fact]
+    public void AcceptanceWorkflow7_AudioBurnViewModel_SkipsDrmM4pAndPreventsBogusDurations()
+    {
+        var deviceManager = new CdBurner.Hardware.Devices.DiscDeviceManager(enablePhysicalEnumeration: false);
+        var burnEngine = new VirtualBurnEngine();
+        var audioVm = new CdBurner.App.ViewModels.AudioBurnViewModel(deviceManager, burnEngine);
+
+        string tempM4p = Path.Combine(_testTempDir, "apple_music_track.m4p");
+        // Create an 8 MB dummy file (which previously was falsely computed as 44 seconds duration)
+        File.WriteAllBytes(tempM4p, new byte[8 * 1024 * 1024]);
+
+        // When adding the m4p file:
+        audioVm.AddAudioFiles(new[] { tempM4p });
+
+        // 1. The m4p track MUST NOT be added to the compilation
+        Assert.Empty(audioVm.Tracks);
+
+        // 2. Compilation duration must remain zero, NOT 44 seconds
+        Assert.Equal(0, audioVm.TotalDuration.ToFrameCount());
+        Assert.Equal("00:00:00", audioVm.TotalDurationText);
+
+        // 3. StatusMessage must report that DRM-protected Apple Music file was skipped
+        Assert.Contains("Skipped", audioVm.StatusMessage);
+        Assert.Contains("DRM-protected", audioVm.StatusMessage);
     }
 
     private sealed class FakeDeviceService : IDiscDeviceService

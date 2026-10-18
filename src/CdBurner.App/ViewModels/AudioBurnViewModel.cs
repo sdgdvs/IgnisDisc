@@ -427,85 +427,161 @@ public class AudioBurnViewModel : ObservableObject
     /// </summary>
     public void AddAudioFile(string filePath)
     {
-        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
-        {
-            return;
-        }
-
-        if (Tracks.Count >= AudioCdCompilation.MaxTracks)
-        {
-            StatusMessage = $"Audio CD supports a maximum of {AudioCdCompilation.MaxTracks} tracks.";
-            return;
-        }
-
-        int trackNum = Tracks.Count + 1;
-        string fileName = Path.GetFileNameWithoutExtension(filePath);
-        string title = fileName;
-        string performer = AlbumPerformer;
-        int durationFrames = 0;
-        long fileSize = 0;
-
-        try
-        {
-            var fi = new FileInfo(filePath);
-            fileSize = fi.Length;
-        }
-        catch { }
-
-        try
-        {
-            var meta = _audioDecoder.ProbeAudioFile(filePath);
-            if (!string.IsNullOrWhiteSpace(meta.Title)) title = meta.Title;
-            if (!string.IsNullOrWhiteSpace(meta.Artist)) performer = meta.Artist;
-
-            if (meta.TotalRedBookBytes > 0)
-            {
-                durationFrames = OpticalConstants.BytesToSectors(meta.TotalRedBookBytes, OpticalConstants.RawSectorSize);
-            }
-            else if (meta.Duration > TimeSpan.Zero)
-            {
-                durationFrames = (int)Math.Round(meta.Duration.TotalSeconds * OpticalConstants.AudioFramesPerSecond);
-            }
-        }
-        catch
-        {
-            // Fallback for raw PCM or non-standard test files
-            if (fileSize > 0)
-            {
-                durationFrames = OpticalConstants.BytesToSectors(fileSize, OpticalConstants.RawSectorSize);
-            }
-            if (durationFrames == 0)
-            {
-                durationFrames = OpticalConstants.CdLeadInFrames; // 150 frames (2.0s) default
-            }
-        }
-
-        var row = new AudioTrackRowViewModel
-        {
-            TrackNumber = trackNum,
-            SourceFilePath = filePath,
-            Title = title,
-            Performer = performer,
-            Songwriter = AlbumSongwriter,
-            PreGapFrames = trackNum == 1 ? DefaultPreGapFrames : 0,
-            DurationFrames = durationFrames,
-            FileSizeBytes = fileSize
-        };
-
-        Tracks.Add(row);
-        SelectedTrack = row;
-        ReindexTracks();
+        AddAudioFiles(new[] { filePath });
     }
 
     /// <summary>
-    /// Adds multiple physical audio files to the compilation.
+    /// Adds multiple physical audio files to the compilation, skipping and reporting any DRM-protected or unreadable files.
     /// </summary>
     public void AddAudioFiles(IEnumerable<string> filePaths)
     {
         ArgumentNullException.ThrowIfNull(filePaths);
-        foreach (var path in filePaths)
+
+        var pathList = filePaths.Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p)).ToList();
+        if (pathList.Count == 0) return;
+
+        var drmProtectedFiles = new List<string>();
+        var unreadableFiles = new List<(string FilePath, string Reason)>();
+        int addedCount = 0;
+
+        foreach (var path in pathList)
         {
-            AddAudioFile(path);
+            if (Tracks.Count >= AudioCdCompilation.MaxTracks)
+            {
+                StatusMessage = $"Audio CD compilation has reached the Red Book limit of {AudioCdCompilation.MaxTracks} tracks.";
+                break;
+            }
+
+            // 1. Explicit DRM check (.m4p, FairPlay atoms, ASF DRM)
+            if (AudioDrmDetector.IsDrmProtected(path, out string drmDescription))
+            {
+                drmProtectedFiles.Add(path);
+                continue;
+            }
+
+            long fileSize = 0;
+            try
+            {
+                fileSize = new FileInfo(path).Length;
+            }
+            catch { }
+
+            string fileName = Path.GetFileNameWithoutExtension(path);
+            string title = fileName;
+            string performer = AlbumPerformer;
+            int durationFrames = 0;
+
+            try
+            {
+                var meta = _audioDecoder.ProbeAudioFile(path);
+                if (!string.IsNullOrWhiteSpace(meta.Title)) title = meta.Title;
+                if (!string.IsNullOrWhiteSpace(meta.Artist)) performer = meta.Artist;
+
+                if (meta.TotalRedBookBytes > 0)
+                {
+                    durationFrames = OpticalConstants.BytesToSectors(meta.TotalRedBookBytes, OpticalConstants.RawSectorSize);
+                }
+                else if (meta.Duration > TimeSpan.Zero)
+                {
+                    durationFrames = (int)Math.Round(meta.Duration.TotalSeconds * OpticalConstants.AudioFramesPerSecond);
+                }
+                else
+                {
+                    throw new InvalidDataException("Audio probe reported zero duration.");
+                }
+            }
+            catch (DrmProtectedAudioException)
+            {
+                drmProtectedFiles.Add(path);
+                continue;
+            }
+            catch (Exception ex)
+            {
+                string ext = Path.GetExtension(path);
+                // Allow raw PCM fallback strictly for headerless .raw / .pcm files
+                if ((string.Equals(ext, ".raw", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(ext, ".pcm", StringComparison.OrdinalIgnoreCase)) && fileSize > 0)
+                {
+                    durationFrames = OpticalConstants.BytesToSectors(fileSize, OpticalConstants.RawSectorSize);
+                }
+                else
+                {
+                    unreadableFiles.Add((path, ex.Message));
+                    continue;
+                }
+            }
+
+            int trackNum = Tracks.Count + 1;
+            var row = new AudioTrackRowViewModel
+            {
+                TrackNumber = trackNum,
+                SourceFilePath = path,
+                Title = title,
+                Performer = performer,
+                Songwriter = AlbumSongwriter,
+                PreGapFrames = trackNum == 1 ? DefaultPreGapFrames : 0,
+                DurationFrames = durationFrames,
+                FileSizeBytes = fileSize
+            };
+
+            Tracks.Add(row);
+            SelectedTrack = row;
+            addedCount++;
+        }
+
+        if (addedCount > 0)
+        {
+            ReindexTracks();
+        }
+
+        // Inform user about skipped DRM or corrupted files
+        if (drmProtectedFiles.Count > 0)
+        {
+            string fileList = string.Join("\n", drmProtectedFiles.Take(6).Select(p => $"  • {Path.GetFileName(p)}"));
+            if (drmProtectedFiles.Count > 6)
+            {
+                fileList += $"\n  ...and {drmProtectedFiles.Count - 6} more file(s)";
+            }
+
+            string warning = $"The following {drmProtectedFiles.Count} file(s) are encrypted with Apple FairPlay DRM (.m4p) and cannot be added or burned to an Audio CD:\n\n" +
+                             $"{fileList}\n\n" +
+                             "Why: Apple Music subscription downloads are encrypted by Apple to prevent copying to physical media.\n\n" +
+                             "To burn an Audio CD, please use DRM-free audio formats such as WAV, MP3, FLAC, M4A, OGG, or WMA (including DRM-free purchases from iTunes Store).";
+
+            StatusMessage = $"Skipped {drmProtectedFiles.Count} DRM-protected Apple Music file(s). Use DRM-free tracks.";
+
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                System.Windows.MessageBox.Show(
+                    warning,
+                    "DRM-Protected Audio Files Skipped — IgnisDisc",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+            }
+        }
+        else if (unreadableFiles.Count > 0)
+        {
+            string failList = string.Join("\n", unreadableFiles.Take(6).Select(f => $"  • {Path.GetFileName(f.FilePath)}: {f.Reason}"));
+            if (unreadableFiles.Count > 6)
+            {
+                failList += $"\n  ...and {unreadableFiles.Count - 6} more file(s)";
+            }
+
+            string errorMsg = $"The following {unreadableFiles.Count} file(s) could not be read or are unsupported:\n\n{failList}";
+            StatusMessage = $"Skipped {unreadableFiles.Count} unsupported or corrupt audio file(s).";
+
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                System.Windows.MessageBox.Show(
+                    errorMsg,
+                    "Unsupported Audio Files — IgnisDisc",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+        }
+        else if (addedCount > 0)
+        {
+            StatusMessage = $"Added {addedCount} audio track(s). Total: {Tracks.Count}.";
         }
     }
 
@@ -616,7 +692,7 @@ public class AudioBurnViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Add Audio Tracks to Audio CD Compilation",
-            Filter = "Audio Files (*.wav;*.mp3;*.flac;*.ogg;*.wma;*.m4a)|*.wav;*.mp3;*.flac;*.ogg;*.wma;*.m4a|All Files (*.*)|*.*",
+            Filter = "Supported Audio Files (*.wav;*.mp3;*.flac;*.ogg;*.wma;*.m4a;*.aac)|*.wav;*.mp3;*.flac;*.ogg;*.wma;*.m4a;*.aac|WAV Audio (*.wav)|*.wav|MP3 Audio (*.mp3)|*.mp3|FLAC Audio (*.flac)|*.flac|AAC / M4A Audio (*.m4a;*.aac)|*.m4a;*.aac|All Files (*.*)|*.*",
             Multiselect = true
         };
 
@@ -740,6 +816,7 @@ public class AudioBurnViewModel : ObservableObject
 
             var progress = new Progress<BurnProgressSnapshot>(p =>
             {
+                if (!_isBusy) return; // Prevent stale background progress from overwriting final status
                 if (p.TotalLba > 0)
                 {
                     BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
@@ -767,6 +844,14 @@ public class AudioBurnViewModel : ObservableObject
             else
             {
                 StatusMessage = $"Burn failed: {burnResult.ErrorMessage}";
+                if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+                {
+                    System.Windows.MessageBox.Show(
+                        $"Audio CD burn could not be completed:\n\n{burnResult.ErrorMessage}",
+                        "Burn Failed — IgnisDisc",
+                        System.Windows.MessageBoxButton.OK,
+                        System.Windows.MessageBoxImage.Error);
+                }
             }
 
             return burnResult;
@@ -783,6 +868,14 @@ public class AudioBurnViewModel : ObservableObject
             StatusMessage = $"Burn error: {ex.Message}";
             var fail = BurnOperationResult.Failed(ex.Message);
             LastBurnResult = fail;
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                System.Windows.MessageBox.Show(
+                    $"An error occurred during Audio CD burning:\n\n{ex.Message}",
+                    "Burn Error — IgnisDisc",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
             return fail;
         }
         finally

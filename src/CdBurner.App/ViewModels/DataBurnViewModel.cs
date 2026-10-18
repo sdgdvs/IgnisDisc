@@ -745,6 +745,7 @@ public class DataBurnViewModel : ObservableObject
             var burnService = new DataBurnService(_burnEngine);
             var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
             {
+                if (!_isBusy) return;
                 if (snap.TotalLba > 0)
                 {
                     BurnProgress = Math.Clamp((double)snap.CurrentLba / snap.TotalLba * 100.0, 0, 100);

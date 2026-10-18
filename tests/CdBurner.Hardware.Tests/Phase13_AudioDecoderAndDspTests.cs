@@ -303,4 +303,60 @@ public class Phase13_AudioDecoderAndDspTests : IDisposable
         Assert.Equal(176400, decodedStream.Length);
         Assert.Equal(75, decodedStream.Length / OpticalConstants.RawSectorSize);
     }
+
+    [Fact]
+    public void AudioDrmDetector_M4pExtension_IdentifiedAsFairPlayDrm()
+    {
+        string fakeM4p = Path.Combine(_tempDirectory, "test_track.m4p");
+        File.WriteAllText(fakeM4p, "dummy audio data");
+
+        bool isDrm = AudioDrmDetector.IsDrmProtected(fakeM4p, out string drmDesc);
+        Assert.True(isDrm);
+        Assert.Contains("FairPlay", drmDesc, StringComparison.OrdinalIgnoreCase);
+
+        using var decoder = new MediaFoundationAudioDecoder();
+        var ex = Assert.Throws<DrmProtectedAudioException>(() => decoder.ProbeAudioFile(fakeM4p));
+        Assert.Contains("FairPlay", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(fakeM4p, ex.FilePath);
+    }
+
+    [Fact]
+    public void AudioDrmDetector_Mp4ContainerWithDrmsAtom_IdentifiedAsFairPlayDrm()
+    {
+        string fakeM4a = Path.Combine(_tempDirectory, "renamed_protected.m4a");
+        byte[] payload = new byte[1024];
+        // Embed 'drms' atom signature
+        byte[] drms = "drms"u8.ToArray();
+        Array.Copy(drms, 0, payload, 200, 4);
+        File.WriteAllBytes(fakeM4a, payload);
+
+        bool isDrm = AudioDrmDetector.IsDrmProtected(fakeM4a, out string drmDesc);
+        Assert.True(isDrm);
+        Assert.Contains("FairPlay", drmDesc, StringComparison.OrdinalIgnoreCase);
+
+        using var decoder = new MediaFoundationAudioDecoder();
+        Assert.Throws<DrmProtectedAudioException>(() => decoder.OpenRedBookPcmStream(fakeM4a));
+    }
+
+    [Fact]
+    public async Task AudioCdBurnService_DrmProtectedM4pTrack_FailsCleanlyWithoutThrowing()
+    {
+        string m4pPath = Path.Combine(_tempDirectory, "protected_song.m4p");
+        File.WriteAllText(m4pPath, "DRM audio bytes");
+
+        using var decoder = new MediaFoundationAudioDecoder();
+        var virtualEngine = new Simulation.VirtualBurnEngine();
+        var burnService = new AudioCdBurnService(virtualEngine, decoder);
+        var recorder = new Simulation.VirtualDiscRecorder("VDRV-01");
+        recorder.InsertMedia(Simulation.VirtualDiscMedium.CreateBlankCdR700());
+
+        var compilation = new AudioCdCompilation();
+        compilation.AddTrack(new AudioCdTrackItem(1, m4pPath, "Protected Song", "Artist"));
+
+        var result = await burnService.BurnAsync(recorder, compilation);
+
+        Assert.False(result.Success);
+        Assert.Contains("cannot be burned", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("FairPlay", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
 }

@@ -53,6 +53,11 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             throw new FileNotFoundException($"Audio file not found: '{filePath}'.", filePath);
         }
 
+        if (AudioDrmDetector.IsDrmProtected(filePath, out string drmDesc))
+        {
+            throw new DrmProtectedAudioException(filePath, drmDesc);
+        }
+
         string ext = Path.GetExtension(filePath);
         if (string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase))
         {
@@ -74,6 +79,11 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             throw new FileNotFoundException($"Audio file not found: '{filePath}'.", filePath);
         }
 
+        if (AudioDrmDetector.IsDrmProtected(filePath, out string drmDesc))
+        {
+            throw new DrmProtectedAudioException(filePath, drmDesc);
+        }
+
         string ext = Path.GetExtension(filePath);
         if (string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase))
         {
@@ -91,10 +101,20 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         EnsureMediaFoundationInitialized();
 
+        if (AudioDrmDetector.IsDrmProtected(filePath, out string drmDesc))
+        {
+            throw new DrmProtectedAudioException(filePath, drmDesc);
+        }
+
         int hr = MediaFoundationNative.MFCreateSourceReaderFromURL(filePath, IntPtr.Zero, out IMFSourceReader reader);
         if (hr != 0)
         {
-            throw new COMException($"MFCreateSourceReaderFromURL failed for '{filePath}' with HRESULT 0x{hr:X8}.", hr);
+            if (hr == unchecked((int)0xC00D36FA) ||
+                (hr == unchecked((int)0x80004005) && (string.Equals(Path.GetExtension(filePath), ".m4p", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetExtension(filePath), ".m4a", StringComparison.OrdinalIgnoreCase))))
+            {
+                throw new DrmProtectedAudioException(filePath, "Apple FairPlay DRM");
+            }
+            throw new COMException($"Failed to open audio file '{Path.GetFileName(filePath)}' for decoding via Windows Media Foundation (HRESULT 0x{hr:X8}). The file may be corrupt, DRM-protected, or in an unsupported format.", hr);
         }
 
         IMFMediaType? partialType = null;
@@ -266,7 +286,12 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
         int hr = MediaFoundationNative.MFCreateSourceReaderFromURL(filePath, IntPtr.Zero, out IMFSourceReader reader);
         if (hr != 0)
         {
-            throw new COMException($"MFCreateSourceReaderFromURL failed for '{filePath}' with HRESULT 0x{hr:X8}.", hr);
+            if (hr == unchecked((int)0xC00D36FA) ||
+                (hr == unchecked((int)0x80004005) && (string.Equals(Path.GetExtension(filePath), ".m4p", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetExtension(filePath), ".m4a", StringComparison.OrdinalIgnoreCase))))
+            {
+                throw new DrmProtectedAudioException(filePath, "Apple FairPlay DRM");
+            }
+            throw new COMException($"Failed to open audio file '{Path.GetFileName(filePath)}' via Windows Media Foundation (HRESULT 0x{hr:X8}). The file may be corrupt, DRM-protected, or in an unsupported format.", hr);
         }
 
         IMFMediaType? nativeType = null;
