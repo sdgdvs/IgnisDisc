@@ -233,6 +233,9 @@
                             BorderThickness="1">
                         <DataGrid ItemsSource="{Binding Tracks}"
                                   SelectedItem="{Binding SelectedTrack}"
+                                  AllowDrop="True"
+                                  PreviewDragOver="OnPreviewDragOver"
+                                  Drop="OnDrop"
                                   AutoGenerateColumns="False"
                                   CanUserAddRows="False"
                                   CanUserDeleteRows="False"
@@ -283,6 +286,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -297,7 +301,29 @@
                                              Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
 
-                            <Button Grid.Column="1"
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                                <TextBlock Text="Burn To:"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,8,0" />
+                                <ComboBox Width="260"
+                                          ItemsSource="{Binding AvailableRecorders}"
+                                          SelectedItem="{Binding SelectedRecorder}"
+                                          ToolTip="Select the optical drive to burn this Audio CD to">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding VolumePath}" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding VendorId}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,4,0" />
+                                                <TextBlock Text="{Binding ProductId}" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <Button Grid.Column="2"
                                     Content="🔥 Burn Audio CD"
                                     Command="{Binding StartAudioBurnCommand}"
                                     Style="{StaticResource AccentButtonStyle}"
@@ -399,7 +425,7 @@
                                        FontWeight="SemiBold"
                                        HorizontalAlignment="Center"
                                        Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <TextBlock Text="Select target recorder in top ribbon, configure destination directory, and click 'Rip Audio CD'."
+                            <TextBlock Text="Select source optical drive below, configure destination directory, and click 'Rip Audio CD'."
                                        FontSize="12"
                                        Foreground="{DynamicResource TextMutedBrush}"
                                        HorizontalAlignment="Center"
@@ -419,6 +445,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -433,7 +460,29 @@
                                              Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
 
-                            <Button Grid.Column="1"
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                                <TextBlock Text="Rip From:"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,8,0" />
+                                <ComboBox Width="260"
+                                          ItemsSource="{Binding AvailableRecorders}"
+                                          SelectedItem="{Binding SelectedRecorder}"
+                                          ToolTip="Select the optical drive containing the Audio CD to rip">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding VolumePath}" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding VendorId}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,4,0" />
+                                                <TextBlock Text="{Binding ProductId}" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <Button Grid.Column="2"
                                     Content="💿 Rip Audio CD"
                                     Command="{Binding RipAudioCdCommand}"
                                     Style="{StaticResource AccentButtonStyle}"

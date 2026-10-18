@@ -18,6 +18,7 @@ public sealed class ManagedComStream : IStream, IDisposable
 
     private readonly Stream _sourceStream;
     private readonly bool _leaveOpen;
+    private readonly Action<int>? _onBytesRead;
     private bool _disposed;
 
     /// <summary>
@@ -25,10 +26,12 @@ public sealed class ManagedComStream : IStream, IDisposable
     /// </summary>
     /// <param name="sourceStream">The underlying managed stream to wrap.</param>
     /// <param name="leaveOpen">True to leave the source stream open after disposing the wrapper; false to dispose it.</param>
-    public ManagedComStream(Stream sourceStream, bool leaveOpen = false)
+    /// <param name="onBytesRead">Optional callback invoked whenever bytes are read from the stream.</param>
+    public ManagedComStream(Stream sourceStream, bool leaveOpen = false, Action<int>? onBytesRead = null)
     {
         _sourceStream = sourceStream ?? throw new ArgumentNullException(nameof(sourceStream));
         _leaveOpen = leaveOpen;
+        _onBytesRead = onBytesRead;
     }
 
     /// <summary>
@@ -71,6 +74,11 @@ public sealed class ManagedComStream : IStream, IDisposable
         if (pcbRead != nint.Zero)
         {
             Marshal.WriteInt32(pcbRead, bytesRead);
+        }
+
+        if (bytesRead > 0)
+        {
+            _onBytesRead?.Invoke(bytesRead);
         }
     }
 

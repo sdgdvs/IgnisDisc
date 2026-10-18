@@ -658,6 +658,23 @@ public class DataBurnViewModel : ObservableObject
             targetRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase))
                              ?? DeviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase));
         }
+        else if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+        {
+            var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
+                _deviceService,
+                AvailableRecorders,
+                SelectedRecorder,
+                $"Burn Data Disc ({VolumeLabel})");
+
+            if (confirmed == null)
+            {
+                StatusMessage = "Data disc burn cancelled by user.";
+                return DataBurnResult.Failed(StatusMessage);
+            }
+
+            SelectedRecorder = confirmed;
+            targetRecorder = confirmed;
+        }
 
         targetRecorder ??= SelectedRecorder;
         if (targetRecorder == null)
@@ -690,7 +707,7 @@ public class DataBurnViewModel : ObservableObject
         }
 
         IsBusy = true;
-        StatusMessage = $"Burning data compilation to {targetRecorder.UniqueId}...";
+        StatusMessage = $"Burning data compilation to {targetRecorder.VolumePath} ({targetRecorder.ProductId})...";
         BurnProgress = 0;
 
         try
@@ -706,15 +723,31 @@ public class DataBurnViewModel : ObservableObject
             var burnService = new DataBurnService(_burnEngine);
             var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
             {
-                BurnProgress = Math.Clamp(snap.BufferLevelPercent, 0, 100);
+                if (snap.TotalLba > 0)
+                {
+                    BurnProgress = Math.Clamp((double)snap.CurrentLba / snap.TotalLba * 100.0, 0, 100);
+                }
+                else
+                {
+                    BurnProgress = Math.Clamp(snap.BufferLevelPercent, 0, 100);
+                }
+
                 if (!string.IsNullOrEmpty(snap.CurrentActionDescription))
                 {
-                    StatusMessage = snap.CurrentActionDescription;
+                    StatusMessage = $"{snap.CurrentActionDescription} ({BurnProgress:F0}%)";
                 }
             });
 
             var result = await burnService.BurnCompilationAsync(targetRecorder, Compilation.Root, burnOptions, buildOptions, progressHandler, cancellationToken);
-            StatusMessage = result.Success ? "Data burn completed successfully." : $"Burn failed: {result.ErrorMessage}";
+            if (result.Success)
+            {
+                BurnProgress = 100.0;
+                StatusMessage = $"Data burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath}).";
+            }
+            else
+            {
+                StatusMessage = $"Burn failed: {result.ErrorMessage}";
+            }
             return result;
         }
         finally
@@ -887,7 +920,8 @@ public class DataBurnViewModel : ObservableObject
             AvailableRecorders.Add(r);
         }
 
-        SelectedRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+        SelectedRecorder = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual)
+                           ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                            ?? AvailableRecorders.FirstOrDefault();
     }
 

@@ -640,4 +640,11 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
     {
         Dispose(false);
     }
+
+    public override string ToString()
+    {
+        string vp = VolumePath;
+        string name = $"{VendorId} {ProductId}".Trim();
+        return string.IsNullOrEmpty(vp) ? name : $"{vp} {name}".Trim();
+    }
 }

@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using CdBurner.App.Mvvm;
+using CdBurner.Core.Abstractions;
 using CdBurner.Core.Persistence;
 
 namespace CdBurner.App.ViewModels;
@@ -20,9 +22,29 @@ public class SettingsViewModel : ObservableObject
     private string _ffmpegExecutablePath = string.Empty;
     private bool _enableVirtualDrive;
     private int _logRingBufferCapacity;
+    private IDiscRecorderBackend? _selectedRecorder;
     private string _statusMessage = "Ready";
 
+    /// <summary>
+    /// Raised when settings are saved or reset so the shell can apply changes immediately.
+    /// </summary>
+    public event EventHandler? SettingsSaved;
+
     #region Properties
+
+    /// <summary>
+    /// Available optical recorders discovered on the system.
+    /// </summary>
+    public ObservableCollection<IDiscRecorderBackend> AvailableRecorders { get; } = new();
+
+    /// <summary>
+    /// Currently selected default optical recorder drive.
+    /// </summary>
+    public IDiscRecorderBackend? SelectedRecorder
+    {
+        get => _selectedRecorder;
+        set => SetProperty(ref _selectedRecorder, value);
+    }
 
     /// <summary>
     /// Underlying persistent configuration service.
@@ -211,6 +233,7 @@ public class SettingsViewModel : ObservableObject
         _settingsService.CurrentSettings = settings;
         _settingsService.Save();
         StatusMessage = "Settings saved successfully.";
+        SettingsSaved?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -221,5 +244,6 @@ public class SettingsViewModel : ObservableObject
         _settingsService.ResetToDefaults();
         LoadSettings();
         StatusMessage = "Settings reset to default values.";
+        SettingsSaved?.Invoke(this, EventArgs.Empty);
     }
 }

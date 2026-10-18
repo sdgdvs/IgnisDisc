@@ -173,6 +173,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -187,7 +188,29 @@
                                              Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
 
-                            <Button Grid.Column="1"
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                                <TextBlock Text="Burn To:"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,8,0" />
+                                <ComboBox Width="260"
+                                          ItemsSource="{Binding AvailableRecorders}"
+                                          SelectedItem="{Binding SelectedRecorder}"
+                                          ToolTip="Select the optical drive to burn this image to">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding VolumePath}" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding VendorId}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,4,0" />
+                                                <TextBlock Text="{Binding ProductId}" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <Button Grid.Column="2"
                                     Content="🔥 Burn Image to Disc"
                                     Command="{Binding BurnImageToDiscCommand}"
                                     Style="{StaticResource AccentButtonStyle}"

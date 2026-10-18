@@ -285,4 +285,9 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
             _disposed = true;
         }
     }
+
+    public override string ToString()
+    {
+        return $"{VolumePath} {ProductId} (Virtual Simulator)".Trim();
+    }
 }

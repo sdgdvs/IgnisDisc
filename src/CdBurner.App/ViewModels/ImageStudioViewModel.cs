@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Security.Cryptography;
 using System.Windows.Input;
@@ -196,6 +197,11 @@ public class ImageStudioViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Discovered optical recorder drives.
+    /// </summary>
+    public ObservableCollection<IDiscRecorderBackend> AvailableRecorders { get; } = new();
+
+    /// <summary>
     /// Currently selected optical recorder drive.
     /// </summary>
     public IDiscRecorderBackend? SelectedRecorder
@@ -351,9 +357,15 @@ public class ImageStudioViewModel : ObservableObject
         VerifyDiscAgainstImageCommand = new AsyncRelayCommand(async p => await VerifyDiscAgainstImageAsync(p as string), _ => !IsBusy && !string.IsNullOrWhiteSpace(SourceImagePath));
         BrowseRipTargetFileCommand = new RelayCommand(BrowseRipTargetFile);
 
-        // Pre-select default recorder
-        SelectedRecorder = _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
-                           ?? _deviceService.GetRecorders().FirstOrDefault();
+        foreach (var r in _deviceService.GetRecorders())
+        {
+            AvailableRecorders.Add(r);
+        }
+
+        // Pre-select physical optical recorder if available
+        SelectedRecorder = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual)
+                           ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+                           ?? AvailableRecorders.FirstOrDefault();
     }
 
     #region Image Inspection Operations
@@ -517,6 +529,25 @@ public class ImageStudioViewModel : ObservableObject
             return fail;
         }
 
+        if (string.IsNullOrWhiteSpace(driveId) && CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+        {
+            var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
+                _deviceService,
+                AvailableRecorders,
+                SelectedRecorder,
+                $"Burn Disc Image ({Path.GetFileName(SourceImagePath)})");
+
+            if (confirmed == null)
+            {
+                StatusMessage = "Image burn cancelled by user.";
+                var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
+                LastBurnResult = cancelled;
+                return cancelled;
+            }
+
+            SelectedRecorder = confirmed;
+        }
+
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
@@ -545,7 +576,7 @@ public class ImageStudioViewModel : ObservableObject
 
         IsBusy = true;
         BurnProgress = 0;
-        StatusMessage = $"Burning image '{Path.GetFileName(SourceImagePath)}' to {recorder.UniqueId}...";
+        StatusMessage = $"Burning image '{Path.GetFileName(SourceImagePath)}' to {recorder.VolumePath} ({recorder.ProductId})...";
 
         try
         {
@@ -979,7 +1010,8 @@ public class ImageStudioViewModel : ObservableObject
             return SelectedRecorder;
         }
 
-        var defaultRec = _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+        var defaultRec = _deviceService.GetRecorders().FirstOrDefault(r => !r.IsVirtual)
+                         ?? _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                          ?? _deviceService.GetRecorders().FirstOrDefault();
         if (defaultRec != null)
         {

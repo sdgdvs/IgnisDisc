@@ -219,6 +219,11 @@ public class AudioBurnViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Available optical recorders discovered on the system.
+    /// </summary>
+    public ObservableCollection<IDiscRecorderBackend> AvailableRecorders { get; } = new();
+
+    /// <summary>
     /// Optical recorder selected as target for burning or ripping.
     /// </summary>
     public IDiscRecorderBackend? SelectedRecorder
@@ -383,9 +388,15 @@ public class AudioBurnViewModel : ObservableObject
         RipAudioCdCommand = new AsyncRelayCommand(async p => await RipAudioCdAsync(p as string), _ => !IsBusy);
         BrowseRipOutputFolderCommand = new RelayCommand(BrowseRipOutputFolder);
 
-        // Pre-select default recorder if available
-        SelectedRecorder = _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
-                           ?? _deviceService.GetRecorders().FirstOrDefault();
+        foreach (var r in _deviceService.GetRecorders())
+        {
+            AvailableRecorders.Add(r);
+        }
+
+        // Pre-select physical optical drive if available, otherwise fallback
+        SelectedRecorder = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual)
+                           ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+                           ?? AvailableRecorders.FirstOrDefault();
 
         RecalculateTotals();
     }
@@ -619,18 +630,37 @@ public class AudioBurnViewModel : ObservableObject
     /// </summary>
     public async Task<BurnOperationResult> StartAudioBurnAsync(string? driveId = null, CancellationToken ct = default)
     {
-        var recorder = ResolveRecorder(driveId);
-        if (recorder == null)
+        if (Tracks.Count == 0)
         {
-            StatusMessage = "No optical recorder selected or available.";
+            StatusMessage = "No audio tracks in compilation to burn.";
             var fail = BurnOperationResult.Failed(StatusMessage);
             LastBurnResult = fail;
             return fail;
         }
 
-        if (Tracks.Count == 0)
+        if (string.IsNullOrWhiteSpace(driveId) && CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
         {
-            StatusMessage = "No audio tracks in compilation to burn.";
+            var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
+                _deviceService,
+                AvailableRecorders,
+                SelectedRecorder,
+                $"Burn Audio CD ({Tracks.Count} Tracks)");
+
+            if (confirmed == null)
+            {
+                StatusMessage = "Audio CD burn cancelled by user.";
+                var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
+                LastBurnResult = cancelled;
+                return cancelled;
+            }
+
+            SelectedRecorder = confirmed;
+        }
+
+        var recorder = ResolveRecorder(driveId);
+        if (recorder == null)
+        {
+            StatusMessage = "No optical recorder selected or available.";
             var fail = BurnOperationResult.Failed(StatusMessage);
             LastBurnResult = fail;
             return fail;
@@ -816,7 +846,8 @@ public class AudioBurnViewModel : ObservableObject
             return SelectedRecorder;
         }
 
-        var defaultRec = _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+        var defaultRec = _deviceService.GetRecorders().FirstOrDefault(r => !r.IsVirtual)
+                         ?? _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                          ?? _deviceService.GetRecorders().FirstOrDefault();
         if (defaultRec != null)
         {

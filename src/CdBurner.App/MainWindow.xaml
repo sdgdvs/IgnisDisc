@@ -6,7 +6,7 @@
         xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
         xmlns:converters="clr-namespace:CdBurner.App.Converters"
         mc:Ignorable="d"
-        Title="IgnisDisc Optical Studio"
+        Title="IgnisDisc Optical Studio v1.01"
         Height="760"
         Width="1160"
         MinHeight="620"
@@ -110,7 +110,7 @@
 
                 <!-- Left: Drive Selector & Refresh -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Drive:"
+                    <TextBlock Text="Burn To Drive:"
                                VerticalAlignment="Center"
                                FontSize="13"
                                FontWeight="SemiBold"
@@ -118,7 +118,7 @@
                                Margin="0,0,8,0" />
 
                     <!-- Drive DropDown -->
-                    <ComboBox Width="260"
+                    <ComboBox Width="280"
                               ItemsSource="{Binding AvailableRecorders}"
                               SelectedItem="{Binding SelectedRecorder}">
                         <ComboBox.ItemTemplate>
@@ -128,6 +128,9 @@
                                                FontWeight="Bold"
                                                Foreground="{DynamicResource AccentBrush}"
                                                Margin="0,0,6,0" />
+                                    <TextBlock Text="{Binding VendorId}"
+                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                               Margin="0,0,4,0" />
                                     <TextBlock Text="{Binding ProductId}"
                                                Foreground="{DynamicResource TextPrimaryBrush}" />
                                     <TextBlock Text=" (Virtual)"

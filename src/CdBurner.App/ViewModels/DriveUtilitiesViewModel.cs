@@ -269,7 +269,8 @@ public class DriveUtilitiesViewModel : ObservableObject
             AvailableRecorders.Add(r);
         }
 
-        var defaultRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+        var defaultRecorder = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual)
+                               ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                                ?? AvailableRecorders.FirstOrDefault();
 
         SelectedRecorder = defaultRecorder;

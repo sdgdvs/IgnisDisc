@@ -63,7 +63,7 @@ public static class CliCommandRunner
         {
             if (parsed.HasFlag("version") || parsed.HasFlag("v"))
             {
-                stdout.WriteLine("IgnisDisc (CdBurner CLI) v1.0.0 (.NET 10.0 Windows)");
+                stdout.WriteLine("IgnisDisc (CdBurner CLI) v1.01 (.NET 10.0 Windows)");
                 return 0;
             }
 

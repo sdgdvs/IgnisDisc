@@ -628,7 +628,7 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
                 var mainWindow = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<CdBurner.App.MainWindow>(provider);
                 Assert.NotNull(mainWindow);
                 Assert.Same(mainVm, mainWindow.DataContext);
-                Assert.Equal("IgnisDisc Optical Studio", mainWindow.Title);
+                Assert.Equal("IgnisDisc Optical Studio v1.01", mainWindow.Title);
 
                 // Instantiate every single WPF UserControl view and bind its ViewModel
                 var dataView = new CdBurner.App.Views.DataBurnView { DataContext = mainVm.DataBurn };
@@ -673,6 +673,89 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
         {
             throw new InvalidOperationException($"STA WPF View instantiation failed: {staException}", staException);
         }
+    }
+
+    [Fact]
+    public void AcceptanceWorkflow6_DriveSelectionPriority_AndTwoWayTabSynchronization()
+    {
+        using var virtualRec = new VirtualDiscRecorder("VDRV-01", "IGNIS", "VIRTUAL DVD/CD-RW", @"V:\");
+        using var physicalRec = new FakePhysicalDiscRecorder("PHYS-H", "HL-DT-ST DVDRAM GP60NB50", @"H:\");
+
+        // Put virtual recorder first in enumeration to ensure physical priority overrides list order
+        var deviceService = new FakeDeviceService(new IDiscRecorderBackend[] { virtualRec, physicalRec });
+        var engine = new VirtualBurnEngine();
+
+        using var mainVm = new CdBurner.App.ViewModels.MainViewModel(deviceService, engine);
+
+        // 1. Default selection MUST be the physical drive, not VDRV-01
+        Assert.Same(physicalRec, mainVm.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.AudioBurn.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.DataBurn.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.DvdVideo.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.ImageStudio.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.DriveUtilities.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.Settings.SelectedRecorder);
+
+        // 2. Changing drive in Settings synchronizes to AudioBurn and all other tabs
+        mainVm.Settings.SelectedRecorder = virtualRec;
+        Assert.Same(virtualRec, mainVm.SelectedRecorder);
+        Assert.Same(virtualRec, mainVm.AudioBurn.SelectedRecorder);
+        Assert.Same(virtualRec, mainVm.DataBurn.SelectedRecorder);
+
+        // 3. Changing drive in AudioBurn synchronizes back to MainViewModel and Settings
+        mainVm.AudioBurn.SelectedRecorder = physicalRec;
+        Assert.Same(physicalRec, mainVm.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.Settings.SelectedRecorder);
+        Assert.Same(physicalRec, mainVm.DriveUtilities.SelectedRecorder);
+
+        // 4. Disabling virtual drive in Settings removes VDRV-01 from AvailableRecorders
+        mainVm.Settings.EnableVirtualDrive = false;
+        Assert.DoesNotContain(virtualRec, mainVm.AvailableRecorders);
+        Assert.Single(mainVm.AvailableRecorders);
+        Assert.Same(physicalRec, mainVm.SelectedRecorder);
+    }
+
+    private sealed class FakeDeviceService : IDiscDeviceService
+    {
+        private readonly IReadOnlyList<IDiscRecorderBackend> _recorders;
+        public FakeDeviceService(IReadOnlyList<IDiscRecorderBackend> recorders) => _recorders = recorders;
+        public event EventHandler<DeviceChangeEventArgs>? DeviceChanged { add { } remove { } }
+        public IReadOnlyList<IDiscRecorderBackend> GetRecorders(bool includeVirtual = true)
+            => includeVirtual ? _recorders : _recorders.Where(r => !r.IsVirtual).ToList();
+        public IDiscRecorderBackend? GetRecorderById(string uniqueId)
+            => _recorders.FirstOrDefault(r => r.UniqueId == uniqueId);
+    }
+
+    private sealed class FakePhysicalDiscRecorder : IDiscRecorderBackend
+    {
+        public FakePhysicalDiscRecorder(string id, string product, string volumePath)
+        {
+            UniqueId = id;
+            ProductId = product;
+            VolumePath = volumePath;
+        }
+        public string UniqueId { get; }
+        public string VendorId => "HL-DT-ST";
+        public string ProductId { get; }
+        public string ProductRevision => "1.00";
+        public string VolumePath { get; }
+        public bool IsVirtual => false;
+        public DriveCapabilitiesDto GetCapabilities() => new() { CanWriteCdR = true, CanWriteDvdR = true };
+        public MediaStatusDto QueryMediaStatus() => new()
+        {
+            MediaPresent = true,
+            IsBlank = true,
+            MediaType = DiscMediaType.CdR,
+            TotalSectors = 359847,
+            FreeSectors = 359847,
+            TotalCapacityBytes = 359847L * 2048,
+            FreeCapacityBytes = 359847L * 2048
+        };
+        public void EjectMedia() { }
+        public void CloseTray() { }
+        public bool AcquireExclusiveAccess(string clientName) => true;
+        public void ReleaseExclusiveAccess() { }
+        public void Dispose() { }
     }
 
     #endregion

@@ -473,6 +473,15 @@ public class DvdVideoViewModel : ObservableObject
     /// </summary>
     public async Task<DataBurnResult> StartDvdBurnAsync(object? parameter = null, CancellationToken cancellationToken = default)
     {
+        if (!IsStructureValid)
+        {
+            ValidateAndPlanLayout();
+            if (!IsStructureValid)
+            {
+                return DataBurnResult.Failed($"Cannot burn DVD: VIDEO_TS structure is invalid. {string.Join("; ", ValidationMessages)}");
+            }
+        }
+
         IDiscRecorderBackend? targetRecorder = null;
         if (parameter is IDiscRecorderBackend rec)
         {
@@ -482,6 +491,23 @@ public class DvdVideoViewModel : ObservableObject
         {
             targetRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase))
                              ?? DeviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase));
+        }
+        else if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+        {
+            var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
+                _deviceService,
+                AvailableRecorders,
+                SelectedRecorder,
+                $"Burn DVD-Video Disc ({VolumeLabel})");
+
+            if (confirmed == null)
+            {
+                StatusMessage = "DVD-Video burn cancelled by user.";
+                return DataBurnResult.Failed(StatusMessage);
+            }
+
+            SelectedRecorder = confirmed;
+            targetRecorder = confirmed;
         }
 
         targetRecorder ??= SelectedRecorder;
@@ -496,15 +522,6 @@ public class DvdVideoViewModel : ObservableObject
             return DataBurnResult.Failed("No optical recorder selected or available.");
         }
 
-        if (!IsStructureValid)
-        {
-            ValidateAndPlanLayout();
-            if (!IsStructureValid)
-            {
-                return DataBurnResult.Failed($"Cannot burn DVD: VIDEO_TS structure is invalid. {string.Join("; ", ValidationMessages)}");
-            }
-        }
-
         // Auto-mount blank DVD media on virtual drive if needed
         if (targetRecorder is VirtualDiscRecorder vRec)
         {
@@ -516,7 +533,7 @@ public class DvdVideoViewModel : ObservableObject
         }
 
         IsBusy = true;
-        StatusMessage = $"Burning DVD-Video disc to {targetRecorder.UniqueId}...";
+        StatusMessage = $"Burning DVD-Video disc to {targetRecorder.VolumePath} ({targetRecorder.ProductId})...";
         BurnProgress = 0;
 
         try
@@ -545,15 +562,31 @@ public class DvdVideoViewModel : ObservableObject
             var burnService = new DataBurnService(_burnEngine);
             var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
             {
-                BurnProgress = Math.Clamp(snap.BufferLevelPercent, 0, 100);
+                if (snap.TotalLba > 0)
+                {
+                    BurnProgress = Math.Clamp((double)snap.CurrentLba / snap.TotalLba * 100.0, 0, 100);
+                }
+                else
+                {
+                    BurnProgress = Math.Clamp(snap.BufferLevelPercent, 0, 100);
+                }
+
                 if (!string.IsNullOrEmpty(snap.CurrentActionDescription))
                 {
-                    StatusMessage = snap.CurrentActionDescription;
+                    StatusMessage = $"{snap.CurrentActionDescription} ({BurnProgress:F0}%)";
                 }
             });
 
             var result = await burnService.BurnCompilationAsync(targetRecorder, root, burnOptions, buildOptions, progressHandler, cancellationToken);
-            StatusMessage = result.Success ? "DVD-Video burn completed successfully." : $"Burn failed: {result.ErrorMessage}";
+            if (result.Success)
+            {
+                BurnProgress = 100.0;
+                StatusMessage = $"DVD-Video burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath}).";
+            }
+            else
+            {
+                StatusMessage = $"Burn failed: {result.ErrorMessage}";
+            }
             return result;
         }
         finally
@@ -575,7 +608,8 @@ public class DvdVideoViewModel : ObservableObject
             AvailableRecorders.Add(r);
         }
 
-        SelectedRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+        SelectedRecorder = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual)
+                           ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                            ?? AvailableRecorders.FirstOrDefault();
     }
 

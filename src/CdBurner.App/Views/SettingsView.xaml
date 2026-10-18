@@ -44,6 +44,33 @@
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                Margin="0,0,0,12" />
 
+                    <!-- Default Target Optical Drive -->
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="240" />
+                            <ColumnDefinition Width="300" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="Default Target Optical Drive:"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding AvailableRecorders}"
+                                  SelectedItem="{Binding SelectedRecorder}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding VolumePath}" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding VendorId}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,4,0" />
+                                        <TextBlock Text="{Binding ProductId}" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+
                     <!-- Default Write Speed Multiplier -->
                     <Grid Margin="0,0,0,12">
                         <Grid.ColumnDefinitions>

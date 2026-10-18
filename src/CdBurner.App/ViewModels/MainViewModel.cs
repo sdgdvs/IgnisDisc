@@ -28,6 +28,8 @@ public class MainViewModel : ObservableObject, IDisposable
     private readonly SettingsViewModel _settings;
 
     private IDiscRecorderBackend? _selectedRecorder;
+    private bool _syncingRecorder;
+    private bool _hadPhysicalRecorder;
     private MediaStatusDto _currentMediaStatus = new() { MediaType = DiscMediaType.NoMedia, MediaPresent = false };
     private WriteSpeedDescriptor? _selectedWriteSpeed;
     private NavigationTab _selectedNavigationTab = (NavigationTab)(-1);
@@ -102,12 +104,23 @@ public class MainViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedRecorder, value))
             {
-                if (_dataBurn != null) _dataBurn.SelectedRecorder = value;
-                if (_dvdVideo != null) _dvdVideo.SelectedRecorder = value;
-                if (_audioBurn != null) _audioBurn.SelectedRecorder = value;
-                if (_imageStudio != null) _imageStudio.SelectedRecorder = value;
-                if (_driveUtilities != null) _driveUtilities.SelectedRecorder = value;
-                if (_virtualDrive != null) _virtualDrive.SelectedRecorder = value;
+                bool prevSync = _syncingRecorder;
+                _syncingRecorder = true;
+                try
+                {
+                    if (_dataBurn != null) _dataBurn.SelectedRecorder = value;
+                    if (_dvdVideo != null) _dvdVideo.SelectedRecorder = value;
+                    if (_audioBurn != null) _audioBurn.SelectedRecorder = value;
+                    if (_imageStudio != null) _imageStudio.SelectedRecorder = value;
+                    if (_driveUtilities != null) _driveUtilities.SelectedRecorder = value;
+                    if (_virtualDrive != null) _virtualDrive.SelectedRecorder = value;
+                    if (_settings != null) _settings.SelectedRecorder = value;
+                }
+                finally
+                {
+                    _syncingRecorder = prevSync;
+                }
+
                 UpdateMediaStatus();
                 OnPropertyChanged(nameof(IsDriveVirtual));
                 OnPropertyChanged(nameof(DriveStatusSummary));
@@ -365,7 +378,57 @@ public class MainViewModel : ObservableObject, IDisposable
             {
                 CurrentCapacity = _dataBurn.Capacity;
             }
+            else if (e.PropertyName == nameof(DataBurnViewModel.SelectedRecorder) && !_syncingRecorder && _dataBurn.SelectedRecorder != null)
+            {
+                SelectedRecorder = _dataBurn.SelectedRecorder;
+            }
         };
+
+        _dvdVideo.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(DvdVideoViewModel.SelectedRecorder) && !_syncingRecorder && _dvdVideo.SelectedRecorder != null)
+            {
+                SelectedRecorder = _dvdVideo.SelectedRecorder;
+            }
+        };
+
+        _audioBurn.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(AudioBurnViewModel.SelectedRecorder) && !_syncingRecorder && _audioBurn.SelectedRecorder != null)
+            {
+                SelectedRecorder = _audioBurn.SelectedRecorder;
+            }
+        };
+
+        _imageStudio.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ImageStudioViewModel.SelectedRecorder) && !_syncingRecorder && _imageStudio.SelectedRecorder != null)
+            {
+                SelectedRecorder = _imageStudio.SelectedRecorder;
+            }
+        };
+
+        _driveUtilities.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(DriveUtilitiesViewModel.SelectedRecorder) && !_syncingRecorder && _driveUtilities.SelectedRecorder != null)
+            {
+                SelectedRecorder = _driveUtilities.SelectedRecorder;
+            }
+        };
+
+        _settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.SelectedRecorder) && !_syncingRecorder && _settings.SelectedRecorder != null)
+            {
+                SelectedRecorder = _settings.SelectedRecorder;
+            }
+            else if (e.PropertyName == nameof(SettingsViewModel.EnableVirtualDrive))
+            {
+                ReloadRecordersList();
+            }
+        };
+
+        _settings.SettingsSaved += (_, _) => ReloadRecordersList();
 
         // Initialize Commands
         RefreshDrivesCommand = new RelayCommand(RefreshDrives);
@@ -456,27 +519,73 @@ public class MainViewModel : ObservableObject, IDisposable
 
     private void ReloadRecordersList()
     {
-        var recorders = _deviceService.GetRecorders();
+        var rawRecorders = _deviceService.GetRecorders();
+        bool hasAnyPhysical = rawRecorders.Any(r => !r.IsVirtual);
+
+        // Order physical drives first so hardware drives are always top priority
+        var ordered = rawRecorders
+            .Where(r => !r.IsVirtual || _settings.EnableVirtualDrive || !hasAnyPhysical)
+            .OrderBy(r => r.IsVirtual ? 1 : 0)
+            .ThenBy(r => r.VolumePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var previousSelection = _selectedRecorder;
 
-        AvailableRecorders.Clear();
-        _driveUtilities.AvailableRecorders.Clear();
-        _virtualDrive.AvailableRecorders.Clear();
-        foreach (var r in recorders)
+        bool prevSync = _syncingRecorder;
+        _syncingRecorder = true;
+        try
         {
-            AvailableRecorders.Add(r);
-            _driveUtilities.AvailableRecorders.Add(r);
-            _virtualDrive.AvailableRecorders.Add(r);
+            AvailableRecorders.Clear();
+            _dataBurn.AvailableRecorders.Clear();
+            _dvdVideo.AvailableRecorders.Clear();
+            _audioBurn.AvailableRecorders.Clear();
+            _imageStudio.AvailableRecorders.Clear();
+            _driveUtilities.AvailableRecorders.Clear();
+            _virtualDrive.AvailableRecorders.Clear();
+            _settings.AvailableRecorders.Clear();
+
+            foreach (var r in ordered)
+            {
+                AvailableRecorders.Add(r);
+                _dataBurn.AvailableRecorders.Add(r);
+                _dvdVideo.AvailableRecorders.Add(r);
+                _audioBurn.AvailableRecorders.Add(r);
+                _imageStudio.AvailableRecorders.Add(r);
+                _driveUtilities.AvailableRecorders.Add(r);
+                _settings.AvailableRecorders.Add(r);
+            }
+
+            foreach (var r in rawRecorders)
+            {
+                _virtualDrive.AvailableRecorders.Add(r);
+            }
+        }
+        finally
+        {
+            _syncingRecorder = prevSync;
         }
 
-        if (previousSelection != null && AvailableRecorders.Contains(previousSelection))
+        var firstPhysical = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual);
+        bool newlyDiscoveredPhysical = firstPhysical != null && !_hadPhysicalRecorder;
+        if (firstPhysical != null)
+        {
+            _hadPhysicalRecorder = true;
+        }
+
+        if (newlyDiscoveredPhysical && firstPhysical != null)
+        {
+            // Automatically switch from virtual drive to the newly discovered physical optical drive
+            SelectedRecorder = firstPhysical;
+        }
+        else if (previousSelection != null && AvailableRecorders.Contains(previousSelection))
         {
             SelectedRecorder = previousSelection;
         }
         else
         {
-            // Prefer selecting "VDRV-01" simulator drive, or fallback to first available
-            var target = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
+            // Prefer physical optical drive first, then fallback to virtual simulator
+            var target = firstPhysical
+                         ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                          ?? AvailableRecorders.FirstOrDefault();
 
             SelectedRecorder = target;

@@ -256,6 +256,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend
         bool acquiredLock = false;
         IDiscFormat2TrackAtOnce? tao = null;
         IDiscFormat2RawCD? rawCd = null;
+        IRawCDImageCreator? rawCreator = null;
         var sw = Stopwatch.StartNew();
 
         try
@@ -277,31 +278,150 @@ public class Imapi2BurnEngine : IBurnEngineBackend
 
             acquiredLock = recorder.AcquireExclusiveAccess(ClientName);
 
+            // Compute total padded Red Book bytes and sectors across all tracks
+            const long MinRedBookTrackBytes = 300L * OpticalConstants.RawSectorSize; // 4 seconds (300 frames) minimum per Red Book standard
+            long totalPaddedBytes = 0;
+            foreach (var t in tracks)
+            {
+                long rawBytes = Math.Max(0L, t.TotalPcmBytes);
+                long aligned = ((rawBytes + OpticalConstants.RawSectorSize - 1) / OpticalConstants.RawSectorSize) * OpticalConstants.RawSectorSize;
+                totalPaddedBytes += Math.Max(MinRedBookTrackBytes, aligned);
+            }
+            int totalSectors = Math.Max(1, OpticalConstants.BytesToSectors(totalPaddedBytes, OpticalConstants.RawSectorSize));
+            long bytesWritten = 0;
+
+            void ReportAudioProgress(int bytesDelta, string statusMsg)
+            {
+                if (progress == null) return;
+                long currentBytes = Interlocked.Add(ref bytesWritten, bytesDelta);
+                int currentSector = Math.Clamp(OpticalConstants.BytesToSectors(currentBytes, OpticalConstants.RawSectorSize), 0, totalSectors);
+                TimeSpan elapsed = sw.Elapsed;
+                TimeSpan remaining = currentSector > 0 && currentSector < totalSectors
+                    ? TimeSpan.FromSeconds(elapsed.TotalSeconds * (totalSectors - currentSector) / currentSector)
+                    : TimeSpan.Zero;
+                double speedMult = elapsed.TotalSeconds > 0.1
+                    ? (currentBytes / elapsed.TotalSeconds) / (75.0 * OpticalConstants.RawSectorSize)
+                    : (options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0);
+
+                progress.Report(new BurnProgressSnapshot
+                {
+                    ElapsedTime = elapsed,
+                    RemainingTime = remaining,
+                    CurrentLba = currentSector,
+                    TotalLba = totalSectors,
+                    BufferLevelPercent = 95.0,
+                    CurrentSpeedMultiplier = speedMult,
+                    CurrentBytesPerSecond = (long)(speedMult * 75 * OpticalConstants.RawSectorSize),
+                    CurrentActionDescription = statusMsg
+                });
+            }
+
+            ReportAudioProgress(0, "Preparing optical drive and laser calibration for Audio CD...");
+
+            bool completedViaDao = false;
+
             if (options.UseDiscAtOnce)
             {
                 rawCd = Imapi2ComFactory.CreateDiscFormat2RawCD();
-                if (rawCd == null)
+                rawCreator = Imapi2ComFactory.CreateRawCDImageCreator();
+
+                if (rawCd != null && rawCreator != null)
                 {
-                    return BurnOperationResult.Failed("Failed to instantiate MsftDiscFormat2RawCD COM object.");
+                    var disposables = new List<IDisposable>();
+                    System.Runtime.InteropServices.ComTypes.IStream? resultImageStream = null;
+                    try
+                    {
+                        rawCd.put_Recorder(comRecorder);
+                        rawCd.put_ClientName(ClientName);
+
+                        try { rawCd.put_BufferUnderrunFreeDisabled(false); } catch { }
+
+                        for (int i = 0; i < tracks.Count; i++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var trk = tracks[i];
+                            Stream? rawStream = OpenAudioTrackStream(trk);
+                            if (rawStream == null) continue;
+
+                            var paddedStream = new RedBookPaddedStream(rawStream, leaveOpen: false);
+                            disposables.Add(paddedStream);
+
+                            int trackNum = i + 1;
+                            var trackComStream = new ManagedComStream(
+                                paddedStream,
+                                leaveOpen: true,
+                                bytesRead => ReportAudioProgress(bytesRead, $"Writing Audio CD (DAO) Track {trackNum}/{tracks.Count}..."));
+                            disposables.Add(trackComStream);
+
+                            rawCreator.AddTrack(0 /* IMAPI_CD_SECTOR_AUDIO */, trackComStream);
+                        }
+
+                        resultImageStream = rawCreator.CreateResultImage();
+                        ImapiFormat2RawCdDataType resultingSectorType = rawCreator.get_ResultingImageType();
+
+                        // PrepareMedia MUST be called before put_RequestedSectorType and SetWriteSpeed
+                        rawCd.PrepareMedia();
+
+                        try { rawCd.put_RequestedSectorType(resultingSectorType); } catch { }
+
+                        if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
+                        {
+                            int sectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
+                            try { rawCd.SetWriteSpeed(sectorsPerSec, false); } catch { }
+                        }
+
+                        CancellationTokenRegistration daoReg = default;
+                        if (cancellationToken.CanBeCanceled)
+                        {
+                            daoReg = cancellationToken.Register(() =>
+                            {
+                                try { rawCd.CancelWrite(); } catch { }
+                            });
+                        }
+
+                        bool writeStarted = false;
+                        try
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            writeStarted = true;
+                            ReportAudioProgress(0, $"Writing Audio CD (Disc-At-Once) to {recorder.VolumePath}...");
+                            rawCd.WriteMedia(resultImageStream);
+                            ReportAudioProgress(0, "Finalizing Audio CD lead-out...");
+                            completedViaDao = true;
+                        }
+                        catch
+                        {
+                            if (writeStarted)
+                            {
+                                throw;
+                            }
+                        }
+                        finally
+                        {
+                            daoReg.Dispose();
+                            try { rawCd.ReleaseMedia(); } catch { }
+                        }
+                    }
+                    catch when (!completedViaDao && !cancellationToken.IsCancellationRequested)
+                    {
+                        // If DAO preparation failed before writing started (e.g. drive only supports TAO), fall back to TAO below.
+                        Interlocked.Exchange(ref bytesWritten, 0);
+                    }
+                    finally
+                    {
+                        if (resultImageStream != null && Marshal.IsComObject(resultImageStream))
+                        {
+                            try { Marshal.FinalReleaseComObject(resultImageStream); } catch { }
+                        }
+                        foreach (var d in disposables)
+                        {
+                            try { d.Dispose(); } catch { }
+                        }
+                    }
                 }
-
-                rawCd.Recorder = comRecorder;
-                rawCd.ClientName = ClientName;
-
-                if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
-                {
-                    int sectorsPerSec = options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize;
-                    try { rawCd.SetWriteSpeed(sectorsPerSec, false); } catch { }
-                }
-
-                rawCd.PrepareMedia();
-
-                using var compositeStream = new CompositeAudioStream(tracks);
-                using var comStream = new ManagedComStream(compositeStream, leaveOpen: true);
-                rawCd.WriteMedia(comStream);
-                rawCd.ReleaseMedia();
             }
-            else
+
+            if (!completedViaDao)
             {
                 tao = Imapi2ComFactory.CreateDiscFormat2TrackAtOnce();
                 if (tao == null)
@@ -309,41 +429,83 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                     return BurnOperationResult.Failed("Failed to instantiate MsftDiscFormat2TrackAtOnce COM object.");
                 }
 
-                tao.Recorder = comRecorder;
-                tao.ClientName = ClientName;
+                tao.put_Recorder(comRecorder);
+                tao.put_ClientName(ClientName);
 
-                if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
-                {
-                    int sectorsPerSec = options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize;
-                    try { tao.SetWriteSpeed(sectorsPerSec, false); } catch { }
-                }
+                try { tao.put_BufferUnderrunFreeDisabled(false); } catch { }
+                try { tao.put_DoNotFinalizeMedia(false); } catch { }
 
                 tao.PrepareMedia();
 
-                foreach (var trk in tracks)
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    Stream? s = trk.PcmStream ?? (trk.PcmStreamFactory != null ? trk.PcmStreamFactory() : (!string.IsNullOrEmpty(trk.FilePath) ? File.OpenRead(trk.FilePath) : null));
-                    if (s == null) continue;
-
-                    using (s)
-                    using (var comStream = new ManagedComStream(s, leaveOpen: true))
+                    if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
                     {
-                        tao.AddAudioTrack(comStream);
+                        int sectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
+                        try { tao.SetWriteSpeed(sectorsPerSec, false); } catch { }
                     }
-                }
 
-                tao.ReleaseMedia();
+                    CancellationTokenRegistration taoReg = default;
+                    if (cancellationToken.CanBeCanceled)
+                    {
+                        taoReg = cancellationToken.Register(() =>
+                        {
+                            try { tao.CancelAddTrack(); } catch { }
+                        });
+                    }
+
+                    try
+                    {
+                        for (int i = 0; i < tracks.Count; i++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var trk = tracks[i];
+                            Stream? rawStream = OpenAudioTrackStream(trk);
+                            if (rawStream == null) continue;
+
+                            int trackNum = i + 1;
+                            ReportAudioProgress(0, $"Writing Audio Track {trackNum}/{tracks.Count}: {trk.Title}...");
+
+                            using var paddedStream = new RedBookPaddedStream(rawStream, leaveOpen: false);
+                            using var comStream = new ManagedComStream(
+                                paddedStream,
+                                leaveOpen: true,
+                                bytesRead => ReportAudioProgress(bytesRead, $"Writing Audio Track {trackNum}/{tracks.Count}: {trk.Title}..."));
+
+                            tao.AddAudioTrack(comStream);
+                        }
+                    }
+                    finally
+                    {
+                        taoReg.Dispose();
+                    }
+
+                    ReportAudioProgress(0, "Finalizing Audio CD table of contents...");
+                }
+                finally
+                {
+                    try { tao.ReleaseMedia(); } catch { }
+                }
             }
 
             sw.Stop();
-            int totalSectors = tracks.Sum(t => OpticalConstants.BytesToSectors(t.TotalPcmBytes, OpticalConstants.RawSectorSize));
             double speedMultiplier = options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0;
 
             if (options.EjectWhenDone)
             {
                 try { recorder.EjectMedia(); } catch { }
             }
+
+            progress?.Report(new BurnProgressSnapshot
+            {
+                ElapsedTime = sw.Elapsed,
+                RemainingTime = TimeSpan.Zero,
+                CurrentLba = totalSectors,
+                TotalLba = totalSectors,
+                BufferLevelPercent = 0.0,
+                CurrentSpeedMultiplier = speedMultiplier,
+                CurrentActionDescription = $"Audio CD burn completed ({tracks.Count} tracks written to {recorder.VolumePath})."
+            });
 
             return BurnOperationResult.Succeeded(totalSectors, sw.Elapsed, speedMultiplier);
         }
@@ -369,6 +531,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend
         }
         finally
         {
+            if (rawCreator != null) Imapi2ComFactory.FinalRelease(ref rawCreator);
             if (tao != null) Imapi2ComFactory.FinalRelease(ref tao);
             if (rawCd != null) Imapi2ComFactory.FinalRelease(ref rawCd);
             if (createdComRecorder && comRecorder != null) Imapi2ComFactory.FinalRelease(ref comRecorder);
@@ -377,6 +540,30 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                 try { recorder.ReleaseExclusiveAccess(); } catch { }
             }
         }
+    }
+
+    private static Stream? OpenAudioTrackStream(AudioTrackSource trk)
+    {
+        if (trk.PcmStream != null)
+        {
+            if (trk.PcmStream.CanSeek)
+            {
+                trk.PcmStream.Position = 0;
+            }
+            return trk.PcmStream;
+        }
+
+        if (trk.PcmStreamFactory != null)
+        {
+            return trk.PcmStreamFactory();
+        }
+
+        if (!string.IsNullOrEmpty(trk.FilePath) && File.Exists(trk.FilePath))
+        {
+            return File.OpenRead(trk.FilePath);
+        }
+
+        return null;
     }
 
     /// <inheritdoc/>
@@ -549,4 +736,134 @@ internal sealed class CompositeAudioStream : Stream
         base.Dispose(disposing);
     }
 }
+
+/// <summary>
+/// Wraps a raw 16-bit 44.1kHz stereo PCM audio track stream so that it is guaranteed seekable,
+/// aligned to 2352-byte Red Book sector boundaries, and padded with digital silence to at least
+/// 300 frames (4 seconds = 705,600 bytes) as required by IMAPIv2 (<see cref="IDiscFormat2TrackAtOnce"/>
+/// and <see cref="IRawCDImageCreator"/>).
+/// </summary>
+internal sealed class RedBookPaddedStream : Stream
+{
+    public const long MinRedBookTrackBytes = 300L * OpticalConstants.RawSectorSize; // 705,600 bytes
+
+    private readonly Stream _inner;
+    private readonly bool _leaveOpen;
+    private readonly long _innerLength;
+    private readonly long _paddedLength;
+    private long _position;
+
+    public RedBookPaddedStream(Stream source, bool leaveOpen = false)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (!source.CanSeek)
+        {
+            var ms = new MemoryStream();
+            source.CopyTo(ms);
+            ms.Position = 0;
+            if (!leaveOpen)
+            {
+                source.Dispose();
+            }
+            _inner = ms;
+            _leaveOpen = false;
+        }
+        else
+        {
+            _inner = source;
+            _leaveOpen = leaveOpen;
+        }
+
+        _innerLength = _inner.Length;
+        long sectorAligned = ((_innerLength + OpticalConstants.RawSectorSize - 1) / OpticalConstants.RawSectorSize) * OpticalConstants.RawSectorSize;
+        _paddedLength = Math.Max(MinRedBookTrackBytes, sectorAligned);
+        _position = 0;
+        if (_inner.Position != 0)
+        {
+            _inner.Position = 0;
+        }
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => true;
+    public override bool CanWrite => false;
+    public override long Length => _paddedLength;
+
+    public override long Position
+    {
+        get => _position;
+        set => Seek(value, SeekOrigin.Begin);
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        if (count <= 0 || _position >= _paddedLength)
+        {
+            return 0;
+        }
+
+        int totalToRead = (int)Math.Min(count, _paddedLength - _position);
+        int bytesReadTotal = 0;
+
+        if (_position < _innerLength)
+        {
+            int fromInner = (int)Math.Min(totalToRead, _innerLength - _position);
+            if (_inner.Position != _position)
+            {
+                _inner.Position = _position;
+            }
+
+            while (bytesReadTotal < fromInner)
+            {
+                int r = _inner.Read(buffer, offset + bytesReadTotal, fromInner - bytesReadTotal);
+                if (r <= 0) break;
+                bytesReadTotal += r;
+                _position += r;
+            }
+        }
+
+        int remainingPad = totalToRead - bytesReadTotal;
+        if (remainingPad > 0)
+        {
+            Array.Clear(buffer, offset + bytesReadTotal, remainingPad);
+            _position += remainingPad;
+            bytesReadTotal += remainingPad;
+        }
+
+        return bytesReadTotal;
+    }
+
+    public override long Seek(long offset, SeekOrigin origin)
+    {
+        long target = origin switch
+        {
+            SeekOrigin.Begin => offset,
+            SeekOrigin.Current => _position + offset,
+            SeekOrigin.End => _paddedLength + offset,
+            _ => throw new ArgumentOutOfRangeException(nameof(origin))
+        };
+
+        _position = Math.Clamp(target, 0L, _paddedLength);
+        if (_position <= _innerLength)
+        {
+            _inner.Position = _position;
+        }
+        return _position;
+    }
+
+    public override void Flush() { }
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_leaveOpen)
+        {
+            _inner.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}
+
 

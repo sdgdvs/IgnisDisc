@@ -330,6 +330,27 @@
 
                 <!-- Action Buttons -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Burn To:"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,8,0" />
+                    <ComboBox Width="250"
+                              ItemsSource="{Binding AvailableRecorders}"
+                              SelectedItem="{Binding SelectedRecorder}"
+                              ToolTip="Select the optical drive to burn this DVD-Video disc to"
+                              Margin="0,0,12,0">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding VolumePath}" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,6,0" />
+                                    <TextBlock Text="{Binding VendorId}" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,4,0" />
+                                    <TextBlock Text="{Binding ProductId}" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
                     <Button Content="💾 Build DVD ISO..."
                             Command="{Binding BuildDvdIsoCommand}"
                             ToolTip="Build compliant DVD-Video ISO image with 32 KB ECC gap alignment"
