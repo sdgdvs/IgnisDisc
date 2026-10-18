@@ -77,6 +77,23 @@ public partial class App : Application
         }
     }
 
+    protected override void OnExit(ExitEventArgs e)
+    {
+        try
+        {
+            if (Services?.GetService<MainViewModel>() is MainViewModel mainVm)
+            {
+                mainVm.CancelAllActiveOperations();
+                mainVm.Dispose();
+            }
+        }
+        catch
+        {
+        }
+
+        base.OnExit(e);
+    }
+
     private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
         try

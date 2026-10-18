@@ -25,5 +25,36 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        Closing += OnMainWindowClosing;
+    }
+
+    private void OnMainWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (DataContext is MainViewModel mainVm && mainVm.IsAnyBurnActive)
+        {
+            var res = MessageBox.Show(
+                "An optical disc operation is currently in progress.\n\nAre you sure you want to abort the burn and exit? The drive motor will be stopped immediately.",
+                "IgnisDisc Optical Studio",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (res != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            mainVm.CancelAllActiveOperations();
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        if (DataContext is MainViewModel mainVm)
+        {
+            mainVm.CancelAllActiveOperations();
+            mainVm.Dispose();
+        }
     }
 }

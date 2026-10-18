@@ -13,6 +13,7 @@
 
     <UserControl.Resources>
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
         <converters:AudioRecordingModeToBooleanConverter x:Key="RecordingModeConverter" />
     </UserControl.Resources>
 
@@ -323,14 +324,25 @@
                                 </ComboBox>
                             </StackPanel>
 
-                            <Button Grid.Column="2"
-                                    Content="🔥 Burn Audio CD"
-                                    Command="{Binding StartAudioBurnCommand}"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Padding="24,10"
-                                    FontSize="14"
-                                    FontWeight="SemiBold"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🛑 Cancel Burn"
+                                        Command="{Binding CancelBurnCommand}"
+                                        Background="#D83B01"
+                                        Foreground="White"
+                                        FontWeight="Bold"
+                                        ToolTip="Cancel ongoing burn and stop drive"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                        Padding="18,10"
+                                        FontSize="14"
+                                        Margin="0,0,8,0" />
+                                <Button Content="🔥 Burn Audio CD"
+                                        Command="{Binding StartAudioBurnCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"
+                                        Padding="24,10"
+                                        FontSize="14"
+                                        FontWeight="SemiBold" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>

@@ -8,7 +8,13 @@
     <Title>IgnisDisc Optical Studio</Title>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\IgnisDisc.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\IgnisDisc.ico" />
+    <Resource Include="Assets\IgnisDisc.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />

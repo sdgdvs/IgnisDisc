@@ -303,6 +303,18 @@ public class DataBurnViewModel : ObservableObject
         private set => SetProperty(ref _lastExportedIsoPath, value);
     }
 
+    /// <summary>
+    /// Currently selected write speed for burning operations.
+    /// </summary>
+    public WriteSpeedDescriptor? SelectedWriteSpeed
+    {
+        get => _selectedWriteSpeed;
+        set => SetProperty(ref _selectedWriteSpeed, value);
+    }
+
+    private WriteSpeedDescriptor? _selectedWriteSpeed;
+    private CancellationTokenSource? _activeBurnCts;
+
     #endregion
 
     #region Commands
@@ -317,6 +329,7 @@ public class DataBurnViewModel : ObservableObject
     public AsyncRelayCommand ImportPreviousSessionCommand { get; }
     public AsyncRelayCommand ExportIsoCommand { get; }
     public AsyncRelayCommand StartDataBurnCommand { get; }
+    public RelayCommand CancelBurnCommand { get; }
 
     #endregion
 
@@ -358,6 +371,7 @@ public class DataBurnViewModel : ObservableObject
             await ExportIsoAsync(path);
         });
         StartDataBurnCommand = new AsyncRelayCommand(async param => await StartDataBurnAsync(param));
+        CancelBurnCommand = new RelayCommand(_ => CancelActiveBurn(), _ => IsBusy);
 
         RefreshDrives();
         RefreshCurrentItems();
@@ -706,7 +720,14 @@ public class DataBurnViewModel : ObservableObject
             }
         }
 
+        _activeBurnCts?.Dispose();
+        _activeBurnCts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource();
+        var activeToken = _activeBurnCts.Token;
+
         IsBusy = true;
+        CancelBurnCommand.RaiseCanExecuteChanged();
         StatusMessage = $"Burning data compilation to {targetRecorder.VolumePath} ({targetRecorder.ProductId})...";
         BurnProgress = 0;
 
@@ -717,7 +738,8 @@ public class DataBurnViewModel : ObservableObject
             {
                 VolumeLabel = VolumeLabel,
                 CloseDisc = CloseDisc,
-                VerifyAfterBurn = VerifyAfterBurn
+                VerifyAfterBurn = VerifyAfterBurn,
+                Speed = SelectedWriteSpeed
             };
 
             var burnService = new DataBurnService(_burnEngine);
@@ -738,7 +760,7 @@ public class DataBurnViewModel : ObservableObject
                 }
             });
 
-            var result = await burnService.BurnCompilationAsync(targetRecorder, Compilation.Root, burnOptions, buildOptions, progressHandler, cancellationToken);
+            var result = await burnService.BurnCompilationAsync(targetRecorder, Compilation.Root, burnOptions, buildOptions, progressHandler, activeToken);
             if (result.Success)
             {
                 BurnProgress = 100.0;
@@ -752,7 +774,28 @@ public class DataBurnViewModel : ObservableObject
         }
         finally
         {
+            _activeBurnCts?.Dispose();
+            _activeBurnCts = null;
             IsBusy = false;
+            CancelBurnCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// Cancels any actively executing data disc burn operation.
+    /// </summary>
+    public void CancelActiveBurn()
+    {
+        if (_activeBurnCts != null && !_activeBurnCts.IsCancellationRequested)
+        {
+            StatusMessage = "Cancelling data disc burn...";
+            try
+            {
+                _activeBurnCts.Cancel();
+            }
+            catch
+            {
+            }
         }
     }
 

@@ -239,6 +239,18 @@ public class AudioBurnViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Currently selected write speed for burning operations.
+    /// </summary>
+    public WriteSpeedDescriptor? SelectedWriteSpeed
+    {
+        get => _selectedWriteSpeed;
+        set => SetProperty(ref _selectedWriteSpeed, value);
+    }
+
+    private WriteSpeedDescriptor? _selectedWriteSpeed;
+    private CancellationTokenSource? _activeBurnCts;
+
+    /// <summary>
     /// Indicates whether a burn or rip operation is currently executing.
     /// </summary>
     public bool IsBusy
@@ -250,6 +262,7 @@ public class AudioBurnViewModel : ObservableObject
             {
                 StartAudioBurnCommand.RaiseCanExecuteChanged();
                 RipAudioCdCommand.RaiseCanExecuteChanged();
+                CancelBurnCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -335,6 +348,11 @@ public class AudioBurnViewModel : ObservableObject
     public AsyncRelayCommand StartAudioBurnCommand { get; }
 
     /// <summary>
+    /// Cancels any actively executing Audio CD burn operation.
+    /// </summary>
+    public RelayCommand CancelBurnCommand { get; }
+
+    /// <summary>
     /// Extracts Red Book audio tracks from the inserted CD into WAV files and CUE sheet.
     /// </summary>
     public AsyncRelayCommand RipAudioCdCommand { get; }
@@ -385,6 +403,7 @@ public class AudioBurnViewModel : ObservableObject
         MoveTrackUpCommand = new RelayCommand(p => MoveTrackUp(p as AudioTrackRowViewModel), _ => CanMoveTrackUp(SelectedTrack));
         MoveTrackDownCommand = new RelayCommand(p => MoveTrackDown(p as AudioTrackRowViewModel), _ => CanMoveTrackDown(SelectedTrack));
         StartAudioBurnCommand = new AsyncRelayCommand(async p => await StartAudioBurnAsync(p as string), _ => !IsBusy && Tracks.Count > 0);
+        CancelBurnCommand = new RelayCommand(_ => CancelActiveBurn(), _ => IsBusy);
         RipAudioCdCommand = new AsyncRelayCommand(async p => await RipAudioCdAsync(p as string), _ => !IsBusy);
         BrowseRipOutputFolderCommand = new RelayCommand(BrowseRipOutputFolder);
 
@@ -676,7 +695,14 @@ public class AudioBurnViewModel : ObservableObject
             }
         }
 
+        _activeBurnCts?.Dispose();
+        _activeBurnCts = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();
+        var activeToken = _activeBurnCts.Token;
+
         IsBusy = true;
+        CancelBurnCommand.RaiseCanExecuteChanged();
         BurnProgress = 0;
         StatusMessage = $"Preparing Audio CD compilation for {recorder.UniqueId}...";
 
@@ -726,10 +752,11 @@ public class AudioBurnViewModel : ObservableObject
                 UseDiscAtOnce = (RecordingMode == AudioRecordingMode.DiscAtOnceGapless),
                 WriteCdText = IncludeCdText,
                 PerformNormalization = NormalizeAllTracks,
-                PreGapFrames = DefaultPreGapFrames
+                PreGapFrames = DefaultPreGapFrames,
+                Speed = SelectedWriteSpeed
             };
 
-            var burnResult = await _audioBurnService.BurnAsync(recorder, compilation, audioBurnOptions, progress, ct);
+            var burnResult = await _audioBurnService.BurnAsync(recorder, compilation, audioBurnOptions, progress, activeToken);
             LastBurnResult = burnResult;
 
             if (burnResult.Success)
@@ -744,6 +771,13 @@ public class AudioBurnViewModel : ObservableObject
 
             return burnResult;
         }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Audio CD burn cancelled by user.";
+            var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
+            LastBurnResult = cancelled;
+            return cancelled;
+        }
         catch (Exception ex)
         {
             StatusMessage = $"Burn error: {ex.Message}";
@@ -753,7 +787,28 @@ public class AudioBurnViewModel : ObservableObject
         }
         finally
         {
+            _activeBurnCts?.Dispose();
+            _activeBurnCts = null;
             IsBusy = false;
+            CancelBurnCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// Cancels any actively executing Audio CD burn operation.
+    /// </summary>
+    public void CancelActiveBurn()
+    {
+        if (_activeBurnCts != null && !_activeBurnCts.IsCancellationRequested)
+        {
+            StatusMessage = "Cancelling Audio CD burn...";
+            try
+            {
+                _activeBurnCts.Cancel();
+            }
+            catch
+            {
+            }
         }
     }
 

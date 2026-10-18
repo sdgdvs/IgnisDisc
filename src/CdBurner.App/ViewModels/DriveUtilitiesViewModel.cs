@@ -223,6 +223,13 @@ public class DriveUtilitiesViewModel : ObservableObject
     /// </summary>
     public RelayCommand RefreshCapabilitiesCommand { get; }
 
+    /// <summary>
+    /// Command to cancel the active scan, erase, or booktype operation.
+    /// </summary>
+    public RelayCommand CancelCommand { get; }
+
+    private CancellationTokenSource? _activeCts;
+
     #endregion
 
     /// <summary>
@@ -254,8 +261,27 @@ public class DriveUtilitiesViewModel : ObservableObject
             canExecute: _ => SelectedRecorder != null && !IsBusy);
 
         RefreshCapabilitiesCommand = new RelayCommand(RefreshCapabilities);
+        CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => IsBusy);
 
         RefreshRecorders();
+    }
+
+    /// <summary>
+    /// Cancels any actively running scan, erase, or hardware utility operation.
+    /// </summary>
+    public void CancelActiveOperation()
+    {
+        if (_activeCts != null && !_activeCts.IsCancellationRequested)
+        {
+            StatusMessage = "Cancelling hardware operation...";
+            try
+            {
+                _activeCts.Cancel();
+            }
+            catch
+            {
+            }
+        }
     }
 
     /// <summary>
@@ -305,6 +331,12 @@ public class DriveUtilitiesViewModel : ObservableObject
             return BurnOperationResult.Failed(StatusMessage);
         }
 
+        _activeCts?.Dispose();
+        _activeCts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource();
+        var ct = _activeCts.Token;
+
         IsBusy = true;
         OperationProgress = 0.0;
         StatusMessage = $"Erasing media in {targetRecorder.UniqueId} ({(IsFullEraseSelected ? "Full Erase" : "Quick Erase")})...";
@@ -320,10 +352,15 @@ public class DriveUtilitiesViewModel : ObservableObject
                 }
             });
 
-            var result = await _eraseService.EraseAsync(targetRecorder, IsFullEraseSelected, progress, cancellationToken);
+            var result = await _eraseService.EraseAsync(targetRecorder, IsFullEraseSelected, progress, ct);
             StatusMessage = result.Success ? "Erase operation completed successfully." : $"Erase failed: {result.ErrorMessage}";
             MediaDetails = targetRecorder.QueryMediaStatus();
             return result;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Erase operation cancelled by user.";
+            return BurnOperationResult.CancelledResult(StatusMessage);
         }
         catch (Exception ex)
         {
@@ -332,6 +369,8 @@ public class DriveUtilitiesViewModel : ObservableObject
         }
         finally
         {
+            _activeCts?.Dispose();
+            _activeCts = null;
             IsBusy = false;
         }
     }
@@ -383,6 +422,12 @@ public class DriveUtilitiesViewModel : ObservableObject
             return new SurfaceScanReport(0, 0, 0, 0, 0, 0, 0, Array.Empty<SurfaceScanBlockResult>());
         }
 
+        _activeCts?.Dispose();
+        _activeCts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource();
+        var ct = _activeCts.Token;
+
         IsBusy = true;
         ScanBlocks.Clear();
         LatestScanReport = null;
@@ -411,11 +456,18 @@ public class DriveUtilitiesViewModel : ObservableObject
                 BlockProgress = blockProgress
             };
 
-            var report = await _scanService.ScanAsync(targetRecorder, options, snapProgress, cancellationToken);
+            var report = await _scanService.ScanAsync(targetRecorder, options, snapProgress, ct);
             LatestScanReport = report;
             OperationProgress = 100.0;
             StatusMessage = $"Surface scan finished: {report.TotalSectorsScanned:N0} sectors, {report.GoodBlocks} good, {report.SlowBlocks} slow, {report.DamagedBlocks} damaged.";
             return report;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Surface scan cancelled by user.";
+            var fallbackReport = new SurfaceScanReport(0, 0, 0, 0, 0, 0, 0, Array.Empty<SurfaceScanBlockResult>());
+            LatestScanReport = fallbackReport;
+            return fallbackReport;
         }
         catch (Exception ex)
         {
@@ -426,6 +478,8 @@ public class DriveUtilitiesViewModel : ObservableObject
         }
         finally
         {
+            _activeCts?.Dispose();
+            _activeCts = null;
             IsBusy = false;
         }
     }

@@ -13,6 +13,7 @@
 
     <UserControl.Resources>
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
         <converters:FileSystemPresetToStringConverter x:Key="PresetToString" />
 
         <ObjectDataProvider x:Key="FileSystemPresets"
@@ -367,10 +368,20 @@
                             Command="{Binding ExportIsoCommand}"
                             ToolTip="Compile and build ISO disc image to disk"
                             Margin="0,0,10,0" />
+                    <Button Content="🛑 Cancel Burn"
+                            Command="{Binding CancelBurnCommand}"
+                            Background="#D83B01"
+                            Foreground="White"
+                            FontWeight="Bold"
+                            ToolTip="Cancel the ongoing burn and stop the drive"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                            Margin="0,0,10,0"
+                            MinWidth="110" />
                     <Button Content="🔥 Burn to Disc"
                             Command="{Binding StartDataBurnCommand}"
                             Style="{StaticResource AccentButtonStyle}"
                             ToolTip="Burn compilation to selected optical recorder"
+                            Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"
                             MinWidth="120" />
                 </StackPanel>
             </Grid>

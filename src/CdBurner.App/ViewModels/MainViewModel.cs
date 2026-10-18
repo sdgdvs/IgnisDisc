@@ -152,7 +152,45 @@ public class MainViewModel : ObservableObject, IDisposable
     public WriteSpeedDescriptor? SelectedWriteSpeed
     {
         get => _selectedWriteSpeed;
-        set => SetProperty(ref _selectedWriteSpeed, value);
+        set
+        {
+            if (SetProperty(ref _selectedWriteSpeed, value))
+            {
+                if (_dataBurn != null) _dataBurn.SelectedWriteSpeed = value;
+                if (_audioBurn != null) _audioBurn.SelectedWriteSpeed = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Indicates whether any burn, erase, or surface scan operation is actively executing.
+    /// </summary>
+    public bool IsAnyBurnActive =>
+        (_dataBurn?.IsBusy ?? false) ||
+        (_audioBurn?.IsBusy ?? false) ||
+        (_dvdVideo?.IsBusy ?? false) ||
+        (_imageStudio?.IsBusy ?? false) ||
+        (_driveUtilities?.IsBusy ?? false);
+
+    /// <summary>
+    /// Safely cancels all running burns/scans and stops optical drives from spinning.
+    /// </summary>
+    public void CancelAllActiveOperations()
+    {
+        try { _dataBurn?.CancelActiveBurn(); } catch { }
+        try { _audioBurn?.CancelActiveBurn(); } catch { }
+        try { _driveUtilities?.CancelActiveOperation(); } catch { }
+
+        if (_selectedRecorder != null)
+        {
+            try
+            {
+                _selectedRecorder.ReleaseExclusiveAccess();
+            }
+            catch
+            {
+            }
+        }
     }
 
     /// <summary>

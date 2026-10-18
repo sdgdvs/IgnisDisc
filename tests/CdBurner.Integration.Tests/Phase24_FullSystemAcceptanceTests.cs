@@ -628,7 +628,7 @@ public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
                 var mainWindow = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<CdBurner.App.MainWindow>(provider);
                 Assert.NotNull(mainWindow);
                 Assert.Same(mainVm, mainWindow.DataContext);
-                Assert.Equal("IgnisDisc Optical Studio v1.01", mainWindow.Title);
+                Assert.Equal("IgnisDisc Optical Studio v1.02", mainWindow.Title);
 
                 // Instantiate every single WPF UserControl view and bind its ViewModel
                 var dataView = new CdBurner.App.Views.DataBurnView { DataContext = mainVm.DataBurn };

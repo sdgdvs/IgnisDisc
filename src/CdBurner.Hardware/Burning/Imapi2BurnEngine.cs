@@ -79,9 +79,6 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                 createdComRecorder = true;
             }
 
-            // Acquire exclusive access if needed
-            acquiredLock = recorder.AcquireExclusiveAccess(ClientName);
-
             // 2. Create and configure MsftDiscFormat2Data
             formatData = Imapi2ComFactory.CreateDiscFormat2Data();
             if (formatData == null)
@@ -110,13 +107,36 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             {
             }
 
-            // Write speed
-            if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
+            // Write speed: explicitly configure safe CLV/Z-CLV write speed for portable USB drives
+            int targetSectorsPerSec = -1;
+            if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0 && options.Speed.Value.BytesPerSecond != int.MaxValue)
             {
-                int sectorsPerSec = options.Speed.Value.BytesPerSecond / OpticalConstants.DataSectorSize;
+                targetSectorsPerSec = options.Speed.Value.BytesPerSecond / OpticalConstants.DataSectorSize;
+            }
+            else
+            {
                 try
                 {
-                    formatData.SetWriteSpeed(sectorsPerSec, false);
+                    var supportedSpeeds = formatData.SupportedWriteSpeeds;
+                    if (supportedSpeeds != null && supportedSpeeds.Length > 0)
+                    {
+                        var maxVal = supportedSpeeds.GetValue(supportedSpeeds.Length - 1);
+                        if (maxVal != null)
+                        {
+                            targetSectorsPerSec = Convert.ToInt32(maxVal);
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            if (targetSectorsPerSec > 0)
+            {
+                try
+                {
+                    formatData.SetWriteSpeed(targetSectorsPerSec, false);
                 }
                 catch
                 {
@@ -127,8 +147,26 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             eventSink = new DiscFormatDataEventsSink(progress);
             eventSink.Connect(formatData);
 
-            // 4. Wrap image stream in COM IStream
-            comStream = new ManagedComStream(imageStream, leaveOpen: true);
+            // 4. Wrap image stream in COM IStream with real-time sector progress
+            long totalStreamBytes = imageStream.CanSeek ? imageStream.Length : 0;
+            long readStreamBytes = 0;
+            comStream = new ManagedComStream(imageStream, leaveOpen: true, onBytesRead: delta =>
+            {
+                long current = Interlocked.Add(ref readStreamBytes, delta);
+                if (totalStreamBytes > 0 && progress != null)
+                {
+                    int totalSecs = OpticalConstants.BytesToSectors(totalStreamBytes, OpticalConstants.DataSectorSize);
+                    int currentSec = Math.Clamp(OpticalConstants.BytesToSectors(current, OpticalConstants.DataSectorSize), 0, totalSecs);
+                    progress.Report(new BurnProgressSnapshot
+                    {
+                        CurrentActionDescription = "WritingData",
+                        CurrentLba = currentSec,
+                        TotalLba = totalSecs,
+                        BufferLevelPercent = 100.0,
+                        ElapsedTime = sw.Elapsed
+                    });
+                }
+            });
 
             // 5. Register cancellation hook
             CancellationTokenRegistration reg = default;

@@ -13,6 +13,7 @@
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <ApplicationIcon>IgnisDisc.ico</ApplicationIcon>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
 

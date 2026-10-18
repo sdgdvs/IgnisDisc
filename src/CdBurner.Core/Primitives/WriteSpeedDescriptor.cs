@@ -61,6 +61,11 @@ public readonly record struct WriteSpeedDescriptor : IComparable<WriteSpeedDescr
     /// </summary>
     public double MegabytesPerSecond => BytesPerSecond / (1024.0 * 1024.0);
 
+    /// <summary>
+    /// Formatted display name for UI dropdown binding.
+    /// </summary>
+    public string DisplayName => ToString();
+
     public override string ToString() => $"{Multiplier:0.#}x ({MegabytesPerSecond:0.##} MB/s)";
 
     public int CompareTo(WriteSpeedDescriptor other) => BytesPerSecond.CompareTo(other.BytesPerSecond);
