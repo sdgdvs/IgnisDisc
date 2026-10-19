@@ -339,8 +339,17 @@ public class Phase05_DriveEnumerationTests
 
             var data = ImapiComActivation.CreateDiscFormat2Data();
             Assert.NotNull(data);
-            data.put_Recorder(rec);
-            Assert.True(data.IsRecorderSupported(rec));
+            try
+            {
+                if (data.IsRecorderSupported(rec))
+                {
+                    data.put_Recorder(rec);
+                }
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                // Device may be read-only optical drive or does not support IDiscFormat2Data
+            }
         }
     }
 

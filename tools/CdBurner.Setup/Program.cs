@@ -15,11 +15,12 @@ internal static class Program
     public const string AppVersion = "1.04";
     public const string Publisher = "Ignis Optical Engineering";
     public const string UninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\IgnisDisc";
+    public const string LegacyUninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CdBurner";
 
     [STAThread]
     public static int Main(string[] args)
     {
-        string defaultInstallDir = Path.Combine(
+        string defaultInstallDir = GetExistingInstallLocation() ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
             "IgnisDisc");
@@ -91,6 +92,157 @@ internal static class Program
         return window.ExitCode;
     }
 
+    public static string? GetExistingInstallLocation()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(UninstallRegKeyPath)
+                            ?? Registry.CurrentUser.OpenSubKey(LegacyUninstallRegKeyPath);
+            if (key?.GetValue("InstallLocation") is string loc && Directory.Exists(loc))
+            {
+                return loc;
+            }
+        }
+        catch { }
+
+        string defaultDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            "IgnisDisc");
+        if (Directory.Exists(defaultDir) && File.Exists(Path.Combine(defaultDir, "IgnisDisc.exe")))
+        {
+            return defaultDir;
+        }
+
+        string legacyDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            "CdBurner");
+        if (Directory.Exists(legacyDir) && File.Exists(Path.Combine(legacyDir, "CdBurner.App.exe")))
+        {
+            return legacyDir;
+        }
+
+        return null;
+    }
+
+    public static string? GetExistingInstallVersion()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(UninstallRegKeyPath)
+                            ?? Registry.CurrentUser.OpenSubKey(LegacyUninstallRegKeyPath);
+            if (key?.GetValue("DisplayVersion") is string ver && !string.IsNullOrWhiteSpace(ver))
+            {
+                return ver;
+            }
+        }
+        catch { }
+
+        string defaultDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            "IgnisDisc");
+        string exe = Path.Combine(defaultDir, "IgnisDisc.exe");
+        if (File.Exists(exe))
+        {
+            try
+            {
+                var vi = FileVersionInfo.GetVersionInfo(exe);
+                return vi.ProductVersion?.Split('+')[0] ?? vi.FileVersion;
+            }
+            catch { }
+        }
+
+        string legacyDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            "CdBurner");
+        string legacyExe = Path.Combine(legacyDir, "CdBurner.App.exe");
+        if (File.Exists(legacyExe))
+        {
+            try
+            {
+                var vi = FileVersionInfo.GetVersionInfo(legacyExe);
+                return vi.ProductVersion?.Split('+')[0] ?? vi.FileVersion;
+            }
+            catch { }
+        }
+
+        return null;
+    }
+
+    public static bool EnsureRunningProcessesClosed(string installDir, bool silent)
+    {
+        string[] processNames = { "IgnisDisc", "CdBurner.App", "ignisdisc-cli", "cdburner-cli" };
+        var running = new List<Process>();
+
+        foreach (var name in processNames)
+        {
+            foreach (var p in Process.GetProcessesByName(name))
+            {
+                try
+                {
+                    string? exePath = null;
+                    try { exePath = p.MainModule?.FileName; } catch { }
+
+                    if (string.IsNullOrEmpty(exePath) ||
+                        string.IsNullOrEmpty(installDir) ||
+                        exePath.StartsWith(Path.GetFullPath(installDir), StringComparison.OrdinalIgnoreCase))
+                    {
+                        running.Add(p);
+                    }
+                }
+                catch
+                {
+                    running.Add(p);
+                }
+            }
+        }
+
+        if (running.Count == 0)
+        {
+            return true;
+        }
+
+        if (!silent)
+        {
+            var res = System.Windows.MessageBox.Show(
+                $"{AppTitle} is currently running.\n\nClick OK to close it automatically and proceed with the update, or Cancel to abort.",
+                $"{AppTitle} Setup",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Information);
+
+            if (res != MessageBoxResult.OK)
+            {
+                return false;
+            }
+        }
+
+        foreach (var p in running)
+        {
+            try
+            {
+                if (!p.HasExited)
+                {
+                    p.CloseMainWindow();
+                    if (!p.WaitForExit(2000))
+                    {
+                        p.Kill();
+                        p.WaitForExit(1000);
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                p.Dispose();
+            }
+        }
+
+        return true;
+    }
+
     public static Stream OpenPayloadStream()
     {
         var asm = Assembly.GetExecutingAssembly();
@@ -120,6 +272,13 @@ internal static class Program
         IProgress<(double Percent, string Status)>? progress)
     {
         Directory.CreateDirectory(installDir);
+        progress?.Report((2, "Checking for running instances..."));
+
+        if (!EnsureRunningProcessesClosed(installDir, silent: progress == null))
+        {
+            throw new InvalidOperationException($"Update was cancelled because {AppTitle} is currently running.");
+        }
+
         progress?.Report((5, $"Preparing target directory: {installDir}"));
 
         using (Stream payloadStream = OpenPayloadStream())
@@ -269,6 +428,12 @@ internal static class Program
                 key.SetValue("NoModify", 1, RegistryValueKind.DWord);
                 key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
             }
+
+            try
+            {
+                Registry.CurrentUser.DeleteSubKeyTree(LegacyUninstallRegKeyPath, throwOnMissingSubKey: false);
+            }
+            catch { }
         }
         catch
         {
@@ -352,13 +517,19 @@ internal sealed class SetupWizardWindow : Window
     private readonly System.Windows.Controls.Button _installButton;
     private readonly System.Windows.Controls.Button _launchButton;
     private readonly System.Windows.Controls.Button _closeButton;
+    private readonly bool _isUpgrade;
     private bool _isInstalled;
 
     public int ExitCode { get; private set; }
 
     public SetupWizardWindow(string defaultInstallDir)
     {
-        Title = $"{Program.AppTitle} v{Program.AppVersion} — Setup";
+        string? previousVer = Program.GetExistingInstallVersion();
+        _isUpgrade = !string.IsNullOrEmpty(previousVer);
+
+        Title = _isUpgrade
+            ? $"{Program.AppTitle} — Upgrade to v{Program.AppVersion}"
+            : $"{Program.AppTitle} v{Program.AppVersion} — Setup";
         Width = 640;
         Height = 470;
         MinWidth = 600;
@@ -384,9 +555,11 @@ internal sealed class SetupWizardWindow : Window
         });
         headerStack.Children.Add(new TextBlock
         {
-            Text = $"Version {Program.AppVersion} • Self-Contained Windows 10/11 x64 Installer (No .NET Runtime Required)",
+            Text = _isUpgrade
+                ? $"Existing Version {previousVer} Detected • Ready to Upgrade to v{Program.AppVersion}"
+                : $"Version {Program.AppVersion} • Self-Contained Windows 10/11 x64 Installer (No .NET Runtime Required)",
             FontSize = 12.5,
-            Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
+            Foreground = new SolidColorBrush(_isUpgrade ? System.Windows.Media.Color.FromRgb(56, 189, 248) : System.Windows.Media.Color.FromRgb(148, 163, 184)),
             Margin = new Thickness(0, 6, 0, 0)
         });
         Grid.SetRow(headerStack, 0);
@@ -495,7 +668,9 @@ internal sealed class SetupWizardWindow : Window
 
         _statusText = new TextBlock
         {
-            Text = "Ready to install IgnisDisc Optical Studio (GUI) and ignisdisc-cli.",
+            Text = _isUpgrade
+                ? $"Ready to upgrade to IgnisDisc v{Program.AppVersion}. User settings in AppData are safely preserved."
+                : "Ready to install IgnisDisc Optical Studio (GUI) and ignisdisc-cli.",
             FontSize = 12,
             Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
             TextTrimming = TextTrimming.CharacterEllipsis
@@ -516,10 +691,10 @@ internal sealed class SetupWizardWindow : Window
 
         _installButton = new System.Windows.Controls.Button
         {
-            Content = "Install Now",
+            Content = _isUpgrade ? "Upgrade Now" : "Install Now",
             Padding = new Thickness(22, 9, 22, 9),
             FontWeight = FontWeights.SemiBold,
-            Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(2, 132, 199)),
+            Background = new SolidColorBrush(_isUpgrade ? System.Windows.Media.Color.FromRgb(16, 185, 129) : System.Windows.Media.Color.FromRgb(2, 132, 199)),
             Foreground = System.Windows.Media.Brushes.White,
             BorderThickness = new Thickness(0),
             Margin = new Thickness(0, 0, 10, 0)
@@ -596,7 +771,10 @@ internal sealed class SetupWizardWindow : Window
                 progress));
 
             _isInstalled = true;
-            _installButton.Content = "✓ Installed";
+            _installButton.Content = _isUpgrade ? "✓ Upgraded" : "✓ Installed";
+            _statusText.Text = _isUpgrade
+                ? $"IgnisDisc was successfully upgraded to v{Program.AppVersion}."
+                : $"IgnisDisc v{Program.AppVersion} installed successfully.";
             _launchButton.Visibility = Visibility.Visible;
             ExitCode = 0;
         }
