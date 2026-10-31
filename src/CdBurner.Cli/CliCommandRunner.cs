@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Archival;
 using CdBurner.Core.Audio;
 using CdBurner.Core.Burning;
 using CdBurner.Core.Compilation;
@@ -42,7 +43,7 @@ public static class CliCommandRunner
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
-        "lookup", "keep-wav", "continue-on-error", "verify-accuraterip"
+        "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only"
     };
 
     /// <summary>
@@ -151,6 +152,8 @@ public static class CliCommandRunner
             "rip" or "rip-disc" => await HandleRipAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "rip-audio" or "ripaudio" => await HandleRipAudioAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "detect-offset" or "detectoffset" => await HandleDetectOffsetAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
+            "archive-stage" or "archivestage" => await HandleArchiveStageAsync(cmd, stdout).ConfigureAwait(false),
+            "archive-verify" or "archiveverify" => await HandleArchiveVerifyAsync(cmd, stdout).ConfigureAwait(false),
             "verify" or "verify-disc" => await HandleVerifyAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "erase" or "erase-disc" => await HandleEraseAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "scan" or "scan-disc" => await HandleScanAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
@@ -963,7 +966,8 @@ public static class CliCommandRunner
             ContinueOnUnreadableSector = cmd.HasFlag("continue-on-error"),
             TrackNumbersToRip = requestedTracks,
             MetadataOverride = metadataOverride,
-            ReadOffsetSamples = readOffset
+            ReadOffsetSamples = readOffset,
+            SecureMode = cmd.HasFlag("secure")
         };
 
         var ripper = new AudioCdRipperService();
@@ -1144,8 +1148,11 @@ public static class CliCommandRunner
                     crc32 = t.Crc32.ToString("X8"),
                     accurateRipV1 = t.AccurateRipV1.ToString("x8"),
                     accurateRipV2 = t.AccurateRipV2.ToString("x8"),
-                    unreadableSectors = t.UnreadableSectors
+                    unreadableSectors = t.UnreadableSectors,
+                    recoveredSectors = t.RecoveredSectors,
+                    suspectSectors = t.SuspectSectors
                 }).ToList(),
+                secureMode = !cmd.HasFlag("secure") ? "off" : result.SecureModeUsed ? "c2" : "unsupported",
                 accurateRip = accurateRipStatus == null ? null : new
                 {
                     status = accurateRipStatus,
@@ -1177,6 +1184,16 @@ public static class CliCommandRunner
         stdout.WriteLine($"  AccurateRip:      {ids?.AccurateRipDatabasePath ?? "n/a"}");
         stdout.WriteLine($"  Metadata Source:  {metadataSource}");
         stdout.WriteLine($"  Read Offset:      {readOffset:+0;-0;0} samples");
+        if (cmd.HasFlag("secure"))
+        {
+            stdout.WriteLine(result.SecureModeUsed
+                ? $"  Secure Mode:      C2 error pointers ({result.TrackInfos.Sum(t => t.RecoveredSectors)} sectors recovered, {result.TrackInfos.Sum(t => t.SuspectSectors)} still suspect)"
+                : "  Secure Mode:      requested, but the drive does not report C2 error pointers (plain read used)");
+            foreach (var t in result.TrackInfos.Where(t => t.SuspectSectors > 0))
+            {
+                stdout.WriteLine($"    Track {t.TrackNumber:D2}: {t.SuspectSectors} suspect sector(s) - check AccurateRip or re-rip");
+            }
+        }
         if (result.BadSectorLbas.Count > 0)
         {
             stdout.WriteLine($"  Bad Sectors:      {result.BadSectorLbas.Count} (zero-filled)");
@@ -1292,6 +1309,133 @@ public static class CliCommandRunner
         stdout.WriteLine($"  Tracks Checked: {string.Join(", ", detection.ProbedTracks)}");
         stdout.WriteLine($"  Use it with:    rip-audio --drive {driveId} --read-offset {best.OffsetSamples:+0;-0;0} --verify-accuraterip ...");
         return 0;
+    }
+
+    private static async Task<int> HandleArchiveStageAsync(CommandLineArgs cmd, TextWriter stdout)
+    {
+        string input = cmd.GetRequiredOption("input", "--input <folder>");
+        string? staging = cmd.GetOption("staging");
+        bool planOnly = cmd.HasFlag("plan-only");
+        if (!planOnly && string.IsNullOrWhiteSpace(staging))
+        {
+            throw new CommandLineException("Missing required option --staging <folder> (or use --plan-only).");
+        }
+
+        DiscMediaType media = (cmd.GetOption("media") ?? "dvd").ToLowerInvariant() switch
+        {
+            "cd" => DiscMediaType.CdR,
+            "dvd" => DiscMediaType.DvdPlusR,                // the smaller single-layer capacity, safe for -R and +R
+            "dvd-dl" => DiscMediaType.DvdMinusRDualLayer,   // the smaller dual-layer capacity
+            var other => throw new CommandLineException($"Invalid media '{other}'. Supported: cd, dvd, dvd-dl.")
+        };
+
+        string redundancyOpt = cmd.GetOption("redundancy") ?? "10";
+        if (!int.TryParse(redundancyOpt, NumberStyles.Integer, CultureInfo.InvariantCulture, out int redundancy) || redundancy is < 0 or > 100)
+        {
+            throw new CommandLineException($"Invalid redundancy '{redundancyOpt}'. Expected a percentage between 0 and 100.");
+        }
+
+        var plan = ArchiveSpanPlanner.Plan(input, media, redundancy);
+
+        string? par2Path = null;
+        if (!planOnly && redundancy > 0)
+        {
+            par2Path = Par2Runner.FindPar2Executable()
+                ?? throw new CommandLineException(
+                    "PAR2 recovery data needs par2cmdline (par2.exe on PATH). Install it, or pass --redundancy 0 for manifests only.");
+        }
+
+        IReadOnlyList<string> stagedDiscs = Array.Empty<string>();
+        if (!planOnly)
+        {
+            var progress = cmd.IsJson ? null : new Progress<string>(message => stdout.WriteLine($"  {message}"));
+            stagedDiscs = await ArchiveStager.StageAsync(plan, staging!, par2Path, progress).ConfigureAwait(false);
+        }
+
+        if (cmd.IsJson)
+        {
+            stdout.WriteLine(JsonSerializer.Serialize(new
+            {
+                success = true,
+                setId = plan.SetId,
+                media = media.ToString(),
+                redundancyPercent = plan.RedundancyPercent,
+                usableSectorsPerDisc = plan.UsableSectorsPerDisc,
+                totalBytes = plan.TotalBytes,
+                discs = plan.Discs.Select(d => new
+                {
+                    discNumber = d.DiscNumber,
+                    files = d.Files.Count,
+                    dataBytes = d.DataBytes,
+                    path = stagedDiscs.Count >= d.DiscNumber ? stagedDiscs[d.DiscNumber - 1] : null
+                }),
+                planOnly
+            }, JsonOptions));
+            return 0;
+        }
+
+        stdout.WriteLine(planOnly ? "Archive plan:" : "Archive staged successfully:");
+        stdout.WriteLine($"  Set ID:           {plan.SetId}");
+        stdout.WriteLine($"  Media:            {media.GetDisplayName()}");
+        stdout.WriteLine($"  Redundancy:       {plan.RedundancyPercent}% PAR2");
+        stdout.WriteLine($"  Total Data:       {plan.TotalBytes / 1048576.0:N1} MB in {plan.Discs.Sum(d => d.Files.Count):N0} files");
+        stdout.WriteLine($"  Discs:            {plan.Discs.Count}");
+        foreach (var d in plan.Discs)
+        {
+            string where = stagedDiscs.Count >= d.DiscNumber ? $"  -> {stagedDiscs[d.DiscNumber - 1]}" : string.Empty;
+            stdout.WriteLine($"    Disc {d.DiscNumber:D2}: {d.Files.Count:N0} files, {d.DataBytes / 1048576.0:N1} MB{where}");
+        }
+        if (!planOnly && stagedDiscs.Count > 0)
+        {
+            stdout.WriteLine($"  Burn each disc with: burn-data --drive <id> --input \"{stagedDiscs[0]}\" --udf --verify");
+            stdout.WriteLine("  Check a burned disc later with: archive-verify --path <drive letter>");
+        }
+        return 0;
+    }
+
+    private static async Task<int> HandleArchiveVerifyAsync(CommandLineArgs cmd, TextWriter stdout)
+    {
+        string path = cmd.GetRequiredOption("path", "--path <folder|drive>");
+        if (path.Length == 2 && path[1] == ':')
+        {
+            path += "\\";
+        }
+
+        var progress = cmd.IsJson ? null : new Progress<string>(_ => { });
+        var result = await ArchiveManifest.VerifyAsync(path, progress).ConfigureAwait(false);
+
+        if (cmd.IsJson)
+        {
+            stdout.WriteLine(JsonSerializer.Serialize(new
+            {
+                success = result.IsIntact,
+                setId = result.SetId,
+                discNumber = result.DiscNumber,
+                discCount = result.DiscCount,
+                filesChecked = result.FilesChecked,
+                missing = result.Missing,
+                corrupt = result.Corrupt,
+                hasRecoveryData = result.HasRecoveryData
+            }, JsonOptions));
+            return result.IsIntact ? 0 : 1;
+        }
+
+        stdout.WriteLine(result.IsIntact ? "Archive disc is intact:" : "Archive disc has PROBLEMS:");
+        if (result.SetId != null)
+        {
+            stdout.WriteLine($"  Set ID:           {result.SetId} (disc {result.DiscNumber} of {result.DiscCount})");
+        }
+        stdout.WriteLine($"  Files Checked:    {result.FilesChecked:N0}");
+        stdout.WriteLine($"  Missing:          {result.Missing.Count}");
+        stdout.WriteLine($"  Corrupt:          {result.Corrupt.Count}");
+        stdout.WriteLine($"  Recovery Data:    {(result.HasRecoveryData ? "present (PAR2)" : "none")}");
+        foreach (var m in result.Missing) stdout.WriteLine($"    MISSING  {m}");
+        foreach (var c in result.Corrupt) stdout.WriteLine($"    CORRUPT  {c}");
+        if (!result.IsIntact && result.HasRecoveryData)
+        {
+            stdout.WriteLine("  Copy the disc to a folder and run: par2 repair RECOVERY\\recovery.par2");
+        }
+        return result.IsIntact ? 0 : 1;
     }
 
     private static async Task<int> HandleVerifyAsync(
@@ -1625,10 +1769,14 @@ public static class CliCommandRunner
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
-        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--json]");
+        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--secure] [--json]");
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
+        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl] [--redundancy <0-100>] [--json]");
+        stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data.");
+        stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
+        stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
         stdout.WriteLine("  erase --drive <id> [--full] [--json]");
@@ -1647,7 +1795,7 @@ public static class CliCommandRunner
         if (string.Equals(subcommand, "rip-audio", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subcommand, "ripaudio", StringComparison.OrdinalIgnoreCase))
         {
-            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--json]");
+            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--secure] [--json]");
             stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
             return;
         }

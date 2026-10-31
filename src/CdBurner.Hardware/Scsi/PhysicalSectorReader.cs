@@ -211,6 +211,181 @@ public static partial class PhysicalSectorReader
         return tracks;
     }
 
+    // READ CD byte 9: bit 4 = user data (all 2352 bytes for CD-DA), bits 2..1 = 01b -> 294-byte C2 error pointer block.
+    private const byte ReadCdUserDataWithC2 = 0x12;
+    private const byte SectorTypeCdda = 1;
+    private const int C2PointerBytes = 294;
+    private const int AudioWithC2Size = OpticalConstants.RawSectorSize + C2PointerBytes;
+    private const int CacheFlushSectors = 1024; // ~2.4 MB: larger than the read cache of typical consumer drives
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> C2SupportCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True if the drive returns C2 error pointers for audio reads. Probed once per volume with a single READ CD
+    /// at <paramref name="probeLba"/> (an audio sector); requires SCSI pass-through.
+    /// </summary>
+    public static bool ProbeC2Support(string volumePath, int probeLba)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return false;
+        }
+
+        return C2SupportCache.GetOrAdd(volumePath, path =>
+        {
+            using var rw = OpenDevice(path, FileAccess.ReadWrite, out _);
+            if (rw == null)
+            {
+                return false;
+            }
+
+            using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
+            byte[] buffer = new byte[AudioWithC2Size];
+            byte[] cdb = MmcCommandBuilder.BuildReadCdCdb(probeLba, 1, SectorTypeCdda, ReadCdUserDataWithC2);
+            var result = transport.ExecuteCommand(cdb, buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
+            return result.IsSuccess && result.DataTransferLength >= AudioWithC2Size;
+        });
+    }
+
+    /// <summary>
+    /// Reads raw audio sectors with C2 error pointers via SCSI pass-through. For each sector the consumer receives the
+    /// 2352 audio bytes and the number of bytes the drive flagged as uncorrected (popcount of the 294-byte C2 block).
+    /// Stops at the first sector the drive cannot return at all, like <see cref="ReadAsync"/>.
+    /// </summary>
+    public static Task<RipOperationResult> ReadAudioWithC2Async(
+        string volumePath,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, int, ValueTask> sectorConsumer,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sectorConsumer);
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return Task.FromResult(RipOperationResult.Failed("C2 audio reads require a physical drive on Windows."));
+        }
+
+        return Task.Run(async () =>
+        {
+            var sw = Stopwatch.StartNew();
+            using var rw = OpenDevice(volumePath, FileAccess.ReadWrite, out int win32Error);
+            if (rw == null)
+            {
+                return RipOperationResult.Failed(
+                    $"C2 audio reads need SCSI pass-through, which could not open {volumePath} (Win32 error {win32Error}). Try running as administrator.");
+            }
+
+            using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
+            byte[] buffer = new byte[ChunkSectors * AudioWithC2Size];
+            int readCount = 0;
+
+            string? ReadChunk(int lba, int count)
+            {
+                var span = buffer.AsSpan(0, count * AudioWithC2Size);
+                byte[] cdb = MmcCommandBuilder.BuildReadCdCdb(lba, count, SectorTypeCdda, ReadCdUserDataWithC2);
+                var result = transport.ExecuteCommand(cdb, span, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
+                if (result.IsSuccess && result.DataTransferLength >= span.Length)
+                {
+                    return null;
+                }
+                return result.IsSuccess ? "short transfer" : result.ErrorMessage ?? "read failed";
+            }
+
+            async ValueTask DeliverAsync(int lba, int index)
+            {
+                int offset = index * AudioWithC2Size;
+                int c2Bytes = 0;
+                foreach (byte b in buffer.AsSpan(offset + OpticalConstants.RawSectorSize, C2PointerBytes))
+                {
+                    c2Bytes += System.Numerics.BitOperations.PopCount(b);
+                }
+                await sectorConsumer(lba, buffer.AsMemory(offset, OpticalConstants.RawSectorSize), c2Bytes).ConfigureAwait(false);
+            }
+
+            while (readCount < sectorCount)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int lba = startLba + readCount;
+                int chunk = Math.Min(ChunkSectors, sectorCount - readCount);
+
+                if (ReadChunk(lba, chunk) == null)
+                {
+                    for (int i = 0; i < chunk; i++)
+                    {
+                        await DeliverAsync(lba + i, i).ConfigureAwait(false);
+                    }
+                    readCount += chunk;
+                    continue;
+                }
+
+                // Narrow down to the first sector the drive cannot return.
+                for (int i = 0; i < chunk; i++)
+                {
+                    string? error = ReadChunk(lba + i, 1);
+                    if (error != null)
+                    {
+                        return new RipOperationResult
+                        {
+                            Success = false,
+                            ErrorMessage = $"Unrecovered read error at LBA {lba + i}: {error}",
+                            SectorsRead = readCount,
+                            BadSectorsCount = 1,
+                            BadSectorsList = new[] { lba + i },
+                            TotalTime = sw.Elapsed
+                        };
+                    }
+                    await DeliverAsync(lba + i, 0).ConfigureAwait(false);
+                    readCount++;
+                }
+            }
+
+            return RipOperationResult.Succeeded(readCount, sw.Elapsed);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Evicts <paramref name="nearLba"/> from the drive's read cache by reading about 2.4 MB of audio half a disc away.
+    /// Read errors are ignored; only the side effect matters.
+    /// </summary>
+    public static Task FlushReadCacheAsync(string volumePath, int nearLba, int audioEndLba, CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath) || audioEndLba <= 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Task.Run(() =>
+        {
+            int span = Math.Min(CacheFlushSectors, audioEndLba);
+            int farLba = (nearLba + audioEndLba / 2) % audioEndLba;
+            farLba = Math.Clamp(farLba, 0, Math.Max(0, audioEndLba - span));
+
+            // Keep the flush window clear of the sector being re-read.
+            if (nearLba >= farLba && nearLba < farLba + span)
+            {
+                farLba = nearLba >= span ? 0 : Math.Max(0, audioEndLba - span);
+            }
+
+            using var rw = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+            if (rw == null)
+            {
+                return;
+            }
+
+            using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
+            byte[] buffer = new byte[ChunkSectors * OpticalConstants.RawSectorSize];
+            for (int done = 0; done < span; done += ChunkSectors)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int count = Math.Min(ChunkSectors, span - done);
+                byte[] cdb = MmcCommandBuilder.BuildReadCdCdb(farLba + done, count, SectorTypeCdda, 0x10);
+                transport.ExecuteCommand(cdb, buffer.AsSpan(0, count * OpticalConstants.RawSectorSize),
+                    ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
+            }
+        }, cancellationToken);
+    }
+
     /// <summary>
     /// Reads the raw CD-Text packs from the disc lead-in (READ TOC format 5). Tries IOCTL_CDROM_READ_TOC_EX on a
     /// read-only handle first (no elevation needed), then SCSI pass-through. Returns the packs without the 4-byte

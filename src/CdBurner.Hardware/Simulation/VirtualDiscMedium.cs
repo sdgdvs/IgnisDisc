@@ -107,6 +107,12 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
     public HashSet<int> SimulatedBadLbas { get; } = new();
 
     /// <summary>
+    /// LBAs whose audio reads (via <c>VirtualBurnEngine.ReadAudioSectorsWithC2Async</c>) report C2 errors and return damaged data,
+    /// mapped to how many more reads stay damaged. <see cref="int.MaxValue"/> means permanently damaged.
+    /// </summary>
+    public Dictionary<int, int> SimulatedC2Errors { get; } = new();
+
+    /// <summary>
     /// Total number of logical sectors recorded so far.
     /// </summary>
     public int UsedSectors { get; set; }

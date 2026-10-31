@@ -9,7 +9,7 @@ namespace CdBurner.Hardware.Simulation;
 /// Virtual burning, erasing, and ripping engine executing deterministically against
 /// a <see cref="VirtualDiscRecorder"/> and mounted <see cref="VirtualDiscMedium"/>.
 /// </summary>
-public class VirtualBurnEngine : IBurnEngineBackend
+public class VirtualBurnEngine : IBurnEngineBackend, ISecureAudioReader
 {
     /// <summary>
     /// Optional default recorder to use if recorder argument is omitted or null.
@@ -603,5 +603,89 @@ public class VirtualBurnEngine : IBurnEngineBackend
         });
 
         return RipOperationResult.Succeeded(readCount, sw.Elapsed, badSectors);
+    }
+
+    /// <summary>Number of times <see cref="FlushReadCacheAsync"/> was called (for tests).</summary>
+    public int CacheFlushCount { get; private set; }
+
+    /// <summary>Number of bytes reported as C2-damaged for each damaged simulated read.</summary>
+    public const int SimulatedC2BytesPerDamagedSector = 16;
+
+    /// <inheritdoc/>
+    public bool SupportsC2ErrorPointers(IDiscRecorderBackend recorder, int probeLba) => true;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Sectors in <see cref="VirtualDiscMedium.SimulatedBadLbas"/> stop the read; sectors in
+    /// <see cref="VirtualDiscMedium.SimulatedC2Errors"/> return data with the first
+    /// <see cref="SimulatedC2BytesPerDamagedSector"/> bytes inverted and that many C2 bytes, until their count runs out.
+    /// </remarks>
+    public async Task<RipOperationResult> ReadAudioSectorsWithC2Async(
+        IDiscRecorderBackend recorder,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, int, ValueTask> sectorConsumer,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sectorConsumer);
+
+        var medium = ((recorder as VirtualDiscRecorder) ?? DefaultRecorder)?.CurrentMedium;
+        if (medium == null)
+        {
+            return RipOperationResult.Failed("No media present in recorder.");
+        }
+
+        if (startLba < 0 || sectorCount < 0 || (long)startLba + sectorCount > medium.TotalCapacitySectors)
+        {
+            return RipOperationResult.Failed($"Sector range starting at {startLba} is out of bounds.");
+        }
+
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < sectorCount; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int lba = startLba + i;
+
+            if (medium.SimulatedBadLbas.Contains(lba))
+            {
+                return new RipOperationResult
+                {
+                    Success = false,
+                    ErrorMessage = $"Unrecovered read error at LBA {lba} (Sense: 03/11/00)",
+                    SectorsRead = i,
+                    BadSectorsCount = 1,
+                    BadSectorsList = new[] { lba },
+                    TotalTime = sw.Elapsed
+                };
+            }
+
+            byte[] sector = new byte[OpticalConstants.RawSectorSize];
+            medium.ReadSector(lba, sector, OpticalConstants.RawSectorSize);
+
+            int c2 = 0;
+            if (medium.SimulatedC2Errors.TryGetValue(lba, out int remaining) && remaining > 0)
+            {
+                for (int b = 0; b < SimulatedC2BytesPerDamagedSector; b++)
+                {
+                    sector[b] ^= 0xFF;
+                }
+                c2 = SimulatedC2BytesPerDamagedSector;
+                if (remaining != int.MaxValue)
+                {
+                    medium.SimulatedC2Errors[lba] = remaining - 1;
+                }
+            }
+
+            await sectorConsumer(lba, sector, c2).ConfigureAwait(false);
+        }
+
+        return RipOperationResult.Succeeded(sectorCount, sw.Elapsed);
+    }
+
+    /// <inheritdoc/>
+    public Task FlushReadCacheAsync(IDiscRecorderBackend recorder, int nearLba, int audioEndLba, CancellationToken cancellationToken)
+    {
+        CacheFlushCount++;
+        return Task.CompletedTask;
     }
 }

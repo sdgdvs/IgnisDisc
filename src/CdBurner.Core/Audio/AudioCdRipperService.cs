@@ -48,6 +48,13 @@ public class AudioRipOptions
     /// or past the end of the audio area are filled with silence. Default 0 (no correction).
     /// </summary>
     public int ReadOffsetSamples { get; set; }
+
+    /// <summary>
+    /// Secure extraction: read with C2 error pointers and re-read flagged sectors after flushing the drive cache
+    /// (up to <see cref="MaxRetriesPerSector"/> rounds). Ignored, with <see cref="AudioCdRipResult.SecureModeUsed"/>
+    /// false, when the engine or drive does not support C2 error pointers.
+    /// </summary>
+    public bool SecureMode { get; set; }
 }
 
 /// <summary>
@@ -67,7 +74,9 @@ public sealed record AudioTrackRipInfo(
     uint AccurateRipV1,
     uint AccurateRipV2,
     int AudioTrackIndex,
-    int UnreadableSectors);
+    int UnreadableSectors,
+    int RecoveredSectors = 0,
+    int SuspectSectors = 0);
 
 /// <summary>
 /// Discovered audio track descriptor extracted from optical medium TOC or session metadata.
@@ -104,6 +113,9 @@ public class AudioCdRipResult
     /// <summary>LBAs that failed every retry (zero-filled when continuing past unreadable sectors).</summary>
     public IReadOnlyList<int> BadSectorLbas { get; init; } = Array.Empty<int>();
 
+    /// <summary>True if the rip used C2-based secure extraction (requested and supported by the drive).</summary>
+    public bool SecureModeUsed { get; init; }
+
     public static AudioCdRipResult Succeeded(
         IReadOnlyList<string> filePaths,
         int totalSectors,
@@ -111,8 +123,10 @@ public class AudioCdRipResult
         string? cueSheetPath = null,
         CdTextAlbumMetadata? cdText = null,
         IReadOnlyList<AudioTrackRipInfo>? trackInfos = null,
-        IReadOnlyList<int>? badSectorLbas = null) => new()
+        IReadOnlyList<int>? badSectorLbas = null,
+        bool secureModeUsed = false) => new()
     {
+        SecureModeUsed = secureModeUsed,
         Success = true,
         TracksRipped = filePaths.Count,
         TotalSectorsRead = totalSectors,
@@ -411,6 +425,11 @@ public class AudioCdRipperService
         long totalSectorsToRip = tracksToRip.Sum(t => (long)t.SectorCount);
         byte[] silence = new byte[OpticalConstants.RawSectorSize];
 
+        ISecureAudioReader? secureReader =
+            options.SecureMode && engine is ISecureAudioReader candidate && candidate.SupportsC2ErrorPointers(recorder, audioOrder[0].StartLba)
+                ? candidate
+                : null;
+
         foreach (var track in tracksToRip)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -448,8 +467,11 @@ public class AudioCdRipperService
             int bytesToSkip = (int)(firstByte - (long)firstSector * OpticalConstants.RawSectorSize);
             long bytesRemaining = trackBytes;
             int trackBadSectors = 0;
+            int trackRecovered = 0;
+            int trackSuspect = 0;
             long sectorsBeforeTrack = totalSectorsRead;
-            BatchedReadOutcome? outcome = null;
+            bool readCompleted = true;
+            int? stoppedAtLba = null;
 
             await using (var fileStream = new FileStream(targetWavPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
             {
@@ -486,34 +508,59 @@ public class AudioCdRipperService
 
                 if (readEnd > readStart)
                 {
-                    outcome = await BatchedSectorReader.ReadRangeAsync(
-                        engine,
-                        recorder,
-                        readStart,
-                        readEnd - readStart,
-                        raw2352Mode: true,
-                        options.MaxRetriesPerSector,
-                        onSector: (_, data) => EmitAsync(data),
-                        onUnreadable: async lba =>
+                    async ValueTask<bool> OnUnreadableAsync(int lba)
+                    {
+                        badSectorLbas.Add(lba);
+                        trackBadSectors++;
+                        if (!options.ContinueOnUnreadableSector)
                         {
-                            badSectorLbas.Add(lba);
-                            trackBadSectors++;
-                            if (!options.ContinueOnUnreadableSector)
-                            {
-                                return false;
-                            }
-                            await EmitAsync(silence).ConfigureAwait(false);
-                            return true;
-                        },
-                        onProgress: done => progress?.Report(new BurnProgressSnapshot
-                        {
-                            ElapsedTime = sw.Elapsed,
-                            CurrentLba = (int)Math.Min(int.MaxValue, sectorsBeforeTrack + done),
-                            TotalLba = (int)Math.Min(int.MaxValue, totalSectorsToRip),
-                            BufferLevelPercent = 100.0,
-                            CurrentActionDescription = $"RippingTrack{track.TrackNumber:D2}"
-                        }),
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                            return false;
+                        }
+                        await EmitAsync(silence).ConfigureAwait(false);
+                        return true;
+                    }
+
+                    void ReportProgress(int done) => progress?.Report(new BurnProgressSnapshot
+                    {
+                        ElapsedTime = sw.Elapsed,
+                        CurrentLba = (int)Math.Min(int.MaxValue, sectorsBeforeTrack + done),
+                        TotalLba = (int)Math.Min(int.MaxValue, totalSectorsToRip),
+                        BufferLevelPercent = 100.0,
+                        CurrentActionDescription = $"RippingTrack{track.TrackNumber:D2}"
+                    });
+
+                    if (secureReader != null)
+                    {
+                        var secure = await SecureAudioReader.ReadRangeAsync(
+                            secureReader,
+                            recorder,
+                            readStart,
+                            readEnd - readStart,
+                            audioEndLba,
+                            options.MaxRetriesPerSector,
+                            onSector: (_, data) => EmitAsync(data),
+                            onUnreadable: OnUnreadableAsync,
+                            onProgress: ReportProgress,
+                            cancellationToken: cancellationToken).ConfigureAwait(false);
+                        (readCompleted, stoppedAtLba) = (secure.Completed, secure.StoppedAtLba);
+                        trackRecovered = secure.RecoveredSectors;
+                        trackSuspect = secure.SuspectSectors;
+                    }
+                    else
+                    {
+                        var batched = await BatchedSectorReader.ReadRangeAsync(
+                            engine,
+                            recorder,
+                            readStart,
+                            readEnd - readStart,
+                            raw2352Mode: true,
+                            options.MaxRetriesPerSector,
+                            onSector: (_, data) => EmitAsync(data),
+                            onUnreadable: OnUnreadableAsync,
+                            onProgress: ReportProgress,
+                            cancellationToken: cancellationToken).ConfigureAwait(false);
+                        (readCompleted, stoppedAtLba) = (batched.Completed, batched.StoppedAtLba);
+                    }
                 }
 
                 // Sectors past the end of the audio area (positive offset on the last track): silence.
@@ -523,7 +570,7 @@ public class AudioCdRipperService
                 }
             }
 
-            if (outcome is { Completed: false })
+            if (!readCompleted)
             {
                 try
                 {
@@ -538,8 +585,8 @@ public class AudioCdRipperService
                 }
 
                 return AudioCdRipResult.Failed(
-                    $"Failed to rip track {track.TrackNumber} ('{track.Title}'): unrecovered read error at LBA {outcome.Value.StoppedAtLba} after {options.MaxRetriesPerSector} retries.",
-                    new IOException($"Unrecovered read error at LBA {outcome.Value.StoppedAtLba}."));
+                    $"Failed to rip track {track.TrackNumber} ('{track.Title}'): unrecovered read error at LBA {stoppedAtLba} after {options.MaxRetriesPerSector} retries.",
+                    new IOException($"Unrecovered read error at LBA {stoppedAtLba}."));
             }
 
             rippedFilePaths.Add(targetWavPath);
@@ -550,7 +597,9 @@ public class AudioCdRipperService
                 arChecksum.V1,
                 arChecksum.V2,
                 audioIndex,
-                trackBadSectors));
+                trackBadSectors,
+                trackRecovered,
+                trackSuspect));
             totalSectorsRead += track.SectorCount;
         }
 
@@ -594,6 +643,6 @@ public class AudioCdRipperService
         }
 
         sw.Stop();
-        return AudioCdRipResult.Succeeded(rippedFilePaths, totalSectorsRead, sw.Elapsed, cueSheetPath, cdText, trackInfos, badSectorLbas);
+        return AudioCdRipResult.Succeeded(rippedFilePaths, totalSectorsRead, sw.Elapsed, cueSheetPath, cdText, trackInfos, badSectorLbas, secureReader != null);
     }
 }

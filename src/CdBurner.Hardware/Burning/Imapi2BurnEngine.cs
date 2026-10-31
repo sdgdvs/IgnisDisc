@@ -13,7 +13,7 @@ namespace CdBurner.Hardware.Burning;
 /// via <see cref="IDiscFormat2Data"/>, <see cref="ManagedComStream"/>, and <see cref="DiscFormatDataEventsSink"/>
 /// dispatched through <see cref="MtaBurnWorker"/> on a dedicated MTA thread.
 /// </summary>
-public class Imapi2BurnEngine : IBurnEngineBackend
+public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 {
     public const string DefaultClientName = "CdBurner";
 
@@ -763,6 +763,32 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             sectorConsumer,
             progress,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public bool SupportsC2ErrorPointers(IDiscRecorderBackend recorder, int probeLba)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return PhysicalSectorReader.ProbeC2Support(recorder.VolumePath, probeLba);
+    }
+
+    /// <inheritdoc/>
+    public Task<RipOperationResult> ReadAudioSectorsWithC2Async(
+        IDiscRecorderBackend recorder,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, int, ValueTask> sectorConsumer,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return PhysicalSectorReader.ReadAudioWithC2Async(recorder.VolumePath, startLba, sectorCount, sectorConsumer, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task FlushReadCacheAsync(IDiscRecorderBackend recorder, int nearLba, int audioEndLba, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return PhysicalSectorReader.FlushReadCacheAsync(recorder.VolumePath, nearLba, audioEndLba, cancellationToken);
     }
 }
 

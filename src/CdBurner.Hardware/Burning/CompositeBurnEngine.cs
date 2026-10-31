@@ -9,7 +9,7 @@ namespace CdBurner.Hardware.Burning;
 /// (<see cref="IDiscRecorderBackend.IsVirtual"/> == true) or to <see cref="Imapi2BurnEngine"/> when targeting
 /// physical hardware drives.
 /// </summary>
-public class CompositeBurnEngine : IBurnEngineBackend
+public class CompositeBurnEngine : IBurnEngineBackend, ISecureAudioReader
 {
     private readonly IBurnEngineBackend _virtualEngine;
     private readonly IBurnEngineBackend _physicalEngine;
@@ -88,6 +88,36 @@ public class CompositeBurnEngine : IBurnEngineBackend
         ArgumentNullException.ThrowIfNull(recorder);
         var backend = SelectBackend(recorder);
         return backend.ReadSectorsAsync(recorder, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public bool SupportsC2ErrorPointers(IDiscRecorderBackend recorder, int probeLba)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return SelectBackend(recorder) is ISecureAudioReader secure && secure.SupportsC2ErrorPointers(recorder, probeLba);
+    }
+
+    /// <inheritdoc/>
+    public Task<RipOperationResult> ReadAudioSectorsWithC2Async(
+        IDiscRecorderBackend recorder,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, int, ValueTask> sectorConsumer,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return SelectBackend(recorder) is ISecureAudioReader secure
+            ? secure.ReadAudioSectorsWithC2Async(recorder, startLba, sectorCount, sectorConsumer, cancellationToken)
+            : Task.FromResult(RipOperationResult.Failed("This drive backend does not support C2 error pointers."));
+    }
+
+    /// <inheritdoc/>
+    public Task FlushReadCacheAsync(IDiscRecorderBackend recorder, int nearLba, int audioEndLba, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return SelectBackend(recorder) is ISecureAudioReader secure
+            ? secure.FlushReadCacheAsync(recorder, nearLba, audioEndLba, cancellationToken)
+            : Task.CompletedTask;
     }
 
     private IBurnEngineBackend SelectBackend(IDiscRecorderBackend recorder)
