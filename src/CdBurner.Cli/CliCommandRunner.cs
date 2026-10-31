@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Audio;
 using CdBurner.Core.Burning;
@@ -39,7 +41,8 @@ public static class CliCommandRunner
 
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v"
+        "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
+        "lookup", "keep-wav", "continue-on-error"
     };
 
     /// <summary>
@@ -146,6 +149,7 @@ public static class CliCommandRunner
             "burn-audio" or "burnaudio" => await HandleBurnAudioAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "burn-dvd" or "burndvd" => await HandleBurnDvdAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "rip" or "rip-disc" => await HandleRipAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
+            "rip-audio" or "ripaudio" => await HandleRipAudioAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "verify" or "verify-disc" => await HandleVerifyAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "erase" or "erase-disc" => await HandleEraseAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "scan" or "scan-disc" => await HandleScanAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
@@ -863,6 +867,285 @@ public static class CliCommandRunner
         return 1;
     }
 
+    private static async Task<int> HandleRipAudioAsync(
+        CommandLineArgs cmd,
+        TextWriter stdout,
+        TextWriter stderr,
+        IDiscDeviceService deviceService,
+        IBurnEngineBackend burnEngine)
+    {
+        string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        string outputFolder = cmd.GetRequiredOption("output", "--output <folder>");
+
+        string formatStr = cmd.GetOption("format") ?? "wav";
+        if (!string.Equals(formatStr, "wav", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(formatStr, "flac", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CommandLineException($"Invalid audio format '{formatStr}'. Supported formats are wav, flac.");
+        }
+        bool isFlac = string.Equals(formatStr, "flac", StringComparison.OrdinalIgnoreCase);
+
+        string? ffmpegPath = null;
+        if (isFlac)
+        {
+            ffmpegPath = FfmpegLocator.FindFfmpegExecutable();
+            if (ffmpegPath == null)
+            {
+                throw new CommandLineException("FLAC output requires ffmpeg. Install ffmpeg or use --format wav.");
+            }
+        }
+
+        List<int>? requestedTracks = null;
+        string? tracksOpt = cmd.GetOption("tracks");
+        if (!string.IsNullOrWhiteSpace(tracksOpt))
+        {
+            requestedTracks = new List<int>();
+            var tokens = tracksOpt.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (tokens.Length == 0)
+            {
+                throw new CommandLineException("Invalid track list. Expected comma-separated positive integers (e.g. --tracks 1,3,5).");
+            }
+            foreach (var token in tokens)
+            {
+                if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out int trackNum) || trackNum <= 0)
+                {
+                    throw new CommandLineException($"Invalid track number '{token}'. Track numbers must be positive integers.");
+                }
+                requestedTracks.Add(trackNum);
+            }
+        }
+
+        var recorder = FindRecorder(deviceService, driveId);
+
+        IReadOnlyList<DiscTocTrack> toc = Array.Empty<DiscTocTrack>();
+        if (recorder is IDiscTocProvider tocProvider)
+        {
+            var readToc = tocProvider.ReadTableOfContents();
+            if (readToc != null && readToc.Count > 0)
+            {
+                toc = readToc;
+            }
+        }
+
+        if (toc.Count == 0)
+        {
+            var (discoveredTracks, _) = AudioCdRipperService.QueryTracksAndCdText(recorder);
+            if (discoveredTracks != null && discoveredTracks.Count > 0)
+            {
+                toc = discoveredTracks.Select(t => new DiscTocTrack(t.TrackNumber, t.StartLba, t.SectorCount, true)).ToList();
+            }
+        }
+
+        var ids = toc.Count > 0 ? DiscIdCalculator.Calculate(toc) : null;
+
+        string? warning = null;
+        CdTextAlbumMetadata? metadataOverride = null;
+
+        if (cmd.HasFlag("lookup") && ids != null)
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                var mbClient = new MusicBrainzClient(http, "IgnisDisc/1.06 ( https://ignisdisc-studio.web.app )");
+                var releases = await mbClient.LookupDiscIdAsync(ids.MusicBrainzId).ConfigureAwait(false);
+                if (releases != null && releases.Count > 0)
+                {
+                    metadataOverride = MusicBrainzClient.ToAlbumMetadata(releases[0], ids.MusicBrainzId);
+                }
+            }
+            catch (HttpRequestException hre)
+            {
+                warning = $"MusicBrainz lookup failed: {hre.Message}";
+            }
+            catch (TaskCanceledException tce)
+            {
+                warning = $"MusicBrainz lookup timed out: {tce.Message}";
+            }
+            catch (Exception ex)
+            {
+                warning = $"MusicBrainz lookup failed: {ex.Message}";
+            }
+        }
+
+        var options = new AudioRipOptions
+        {
+            ContinueOnUnreadableSector = cmd.HasFlag("continue-on-error"),
+            TrackNumbersToRip = requestedTracks,
+            MetadataOverride = metadataOverride
+        };
+
+        var ripper = new AudioCdRipperService();
+        var result = await ripper.RipAudioCdAsync(recorder, burnEngine, outputFolder, options).ConfigureAwait(false);
+
+        string metadataSource = metadataOverride != null
+            ? "musicbrainz"
+            : (result.CdText != null ? "cd-text" : "none");
+
+        if (!result.Success)
+        {
+            if (cmd.IsJson)
+            {
+                var errObj = new
+                {
+                    success = false,
+                    driveId = recorder.UniqueId,
+                    outputFolder = Path.GetFullPath(outputFolder),
+                    format = isFlac ? "FLAC" : "WAV",
+                    tracksRipped = 0,
+                    sectorsRead = 0,
+                    totalTimeSeconds = 0.0,
+                    musicBrainzId = ids?.MusicBrainzId,
+                    freeDbId = ids?.FreeDbIdHex,
+                    accurateRipPath = ids?.AccurateRipDatabasePath,
+                    metadataSource = metadataSource,
+                    warning = warning,
+                    files = Array.Empty<string>(),
+                    cueSheet = (string?)null,
+                    error = result.ErrorMessage
+                };
+                stdout.WriteLine(JsonSerializer.Serialize(errObj, JsonOptions));
+                return 1;
+            }
+
+            stderr.WriteLine($"Rip failed: {result.ErrorMessage}");
+            return 1;
+        }
+
+        var finalOutputFiles = new List<string>();
+        if (isFlac)
+        {
+            int trackTotal = result.RippedFilePaths.Count;
+            string albumTitle = !string.IsNullOrWhiteSpace(result.CdText?.AlbumTitle) ? result.CdText.AlbumTitle : "Unknown Album";
+            string albumPerformer = !string.IsNullOrWhiteSpace(result.CdText?.AlbumPerformer) ? result.CdText.AlbumPerformer : "Unknown Artist";
+
+            foreach (var wavPath in result.RippedFilePaths)
+            {
+                string wavFileName = Path.GetFileName(wavPath);
+                int trackNumber = 1;
+                if (wavFileName.Length >= 2 && int.TryParse(wavFileName[..2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedNum))
+                {
+                    trackNumber = parsedNum;
+                }
+
+                var trackCdText = result.CdText?.Tracks?.FirstOrDefault(t => t.TrackNumber == trackNumber);
+                string trackTitle = !string.IsNullOrWhiteSpace(trackCdText?.Title)
+                    ? trackCdText.Title
+                    : $"Track {trackNumber:D2}";
+                string trackArtist = !string.IsNullOrWhiteSpace(trackCdText?.Performer)
+                    ? trackCdText.Performer
+                    : albumPerformer;
+                string? isrc = trackCdText?.Isrc;
+
+                var tags = new AudioTrackTags(
+                    Title: trackTitle,
+                    Artist: trackArtist,
+                    Album: albumTitle,
+                    TrackNumber: trackNumber,
+                    TrackTotal: trackTotal,
+                    Isrc: isrc,
+                    Date: null);
+
+                string flacPath = Path.ChangeExtension(wavPath, ".flac");
+                await FlacEncoder.EncodeAsync(ffmpegPath!, wavPath, flacPath, tags).ConfigureAwait(false);
+
+                if (!cmd.HasFlag("keep-wav"))
+                {
+                    try
+                    {
+                        File.Delete(wavPath);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                finalOutputFiles.Add(flacPath);
+            }
+
+            if (result.CueSheetPath != null && File.Exists(result.CueSheetPath))
+            {
+                string cueContent = await File.ReadAllTextAsync(result.CueSheetPath).ConfigureAwait(false);
+                var cueLines = cueContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                var updatedLines = new List<string>(cueLines.Length);
+                var cueFileRegex = new Regex(@"^FILE\s+""(?<name>.+?)\.wav""\s+WAVE$", RegexOptions.IgnoreCase);
+
+                foreach (var line in cueLines)
+                {
+                    var match = cueFileRegex.Match(line.TrimStart());
+                    if (match.Success)
+                    {
+                        int leadingSpaces = line.Length - line.TrimStart().Length;
+                        string prefix = line.Substring(0, leadingSpaces);
+                        updatedLines.Add($"{prefix}FILE \"{match.Groups["name"].Value}.flac\" WAVE");
+                    }
+                    else
+                    {
+                        updatedLines.Add(line);
+                    }
+                }
+
+                string separator = cueContent.Contains("\r\n") ? "\r\n" : "\n";
+                await File.WriteAllTextAsync(result.CueSheetPath, string.Join(separator, updatedLines)).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            finalOutputFiles.AddRange(result.RippedFilePaths);
+        }
+
+        if (cmd.IsJson)
+        {
+            var jsonResult = new
+            {
+                success = true,
+                driveId = recorder.UniqueId,
+                outputFolder = Path.GetFullPath(outputFolder),
+                format = isFlac ? "FLAC" : "WAV",
+                tracksRipped = result.TracksRipped,
+                sectorsRead = result.TotalSectorsRead,
+                totalTimeSeconds = result.TotalTime.TotalSeconds,
+                musicBrainzId = ids?.MusicBrainzId,
+                freeDbId = ids?.FreeDbIdHex,
+                accurateRipPath = ids?.AccurateRipDatabasePath,
+                metadataSource = metadataSource,
+                warning = warning,
+                files = finalOutputFiles.Select(Path.GetFullPath).ToList(),
+                cueSheet = result.CueSheetPath != null && File.Exists(result.CueSheetPath) ? Path.GetFullPath(result.CueSheetPath) : null,
+                error = (string?)null
+            };
+
+            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            return 0;
+        }
+
+        stdout.WriteLine("Audio rip completed successfully:");
+        stdout.WriteLine($"  Drive:            {recorder.UniqueId}");
+        stdout.WriteLine($"  Output Folder:    {Path.GetFullPath(outputFolder)}");
+        stdout.WriteLine($"  Format:           {(isFlac ? "FLAC" : "WAV")}");
+        stdout.WriteLine($"  Tracks Ripped:    {result.TracksRipped}");
+        stdout.WriteLine($"  Sectors Read:     {result.TotalSectorsRead:N0}");
+        stdout.WriteLine($"  Duration:         {result.TotalTime}");
+        stdout.WriteLine($"  MusicBrainz ID:   {ids?.MusicBrainzId ?? "n/a"}");
+        stdout.WriteLine($"  freedb ID:        {ids?.FreeDbIdHex ?? "n/a"}");
+        stdout.WriteLine($"  AccurateRip:      {ids?.AccurateRipDatabasePath ?? "n/a"}");
+        stdout.WriteLine($"  Metadata Source:  {metadataSource}");
+        if (!string.IsNullOrEmpty(warning))
+        {
+            stdout.WriteLine($"  Warning:          {warning}");
+        }
+        stdout.WriteLine("  Files:");
+        foreach (var file in finalOutputFiles)
+        {
+            stdout.WriteLine($"    {Path.GetFullPath(file)}");
+        }
+        if (!string.IsNullOrEmpty(result.CueSheetPath) && File.Exists(result.CueSheetPath))
+        {
+            stdout.WriteLine($"  CUE Sheet:        {Path.GetFullPath(result.CueSheetPath)}");
+        }
+
+        return 0;
+    }
+
     private static async Task<int> HandleVerifyAsync(
         CommandLineArgs cmd,
         TextWriter stdout,
@@ -1194,6 +1477,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
+        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--json]");
+        stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
         stdout.WriteLine("  erase --drive <id> [--full] [--json]");
@@ -1209,6 +1494,14 @@ public static class CliCommandRunner
 
     private static void PrintSubcommandHelp(string? subcommand, TextWriter stdout)
     {
+        if (string.Equals(subcommand, "rip-audio", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(subcommand, "ripaudio", StringComparison.OrdinalIgnoreCase))
+        {
+            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--json]");
+            stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+            return;
+        }
+
         PrintHelp(stdout);
     }
 
