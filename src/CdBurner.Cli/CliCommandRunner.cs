@@ -150,6 +150,7 @@ public static class CliCommandRunner
             "burn-dvd" or "burndvd" => await HandleBurnDvdAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "rip" or "rip-disc" => await HandleRipAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "rip-audio" or "ripaudio" => await HandleRipAudioAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
+            "detect-offset" or "detectoffset" => await HandleDetectOffsetAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "verify" or "verify-disc" => await HandleVerifyAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "erase" or "erase-disc" => await HandleEraseAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "scan" or "scan-disc" => await HandleScanAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
@@ -926,26 +927,7 @@ public static class CliCommandRunner
 
         var recorder = FindRecorder(deviceService, driveId);
 
-        IReadOnlyList<DiscTocTrack> toc = Array.Empty<DiscTocTrack>();
-        if (recorder is IDiscTocProvider tocProvider)
-        {
-            var readToc = tocProvider.ReadTableOfContents();
-            if (readToc != null && readToc.Count > 0)
-            {
-                toc = readToc;
-            }
-        }
-
-        if (toc.Count == 0)
-        {
-            var (discoveredTracks, _) = AudioCdRipperService.QueryTracksAndCdText(recorder);
-            if (discoveredTracks != null && discoveredTracks.Count > 0)
-            {
-                toc = discoveredTracks.Select(t => new DiscTocTrack(t.TrackNumber, t.StartLba, t.SectorCount, true)).ToList();
-            }
-        }
-
-        var ids = toc.Count > 0 ? DiscIdCalculator.Calculate(toc) : null;
+        var ids = CalculateDiscIds(recorder);
 
         string? warning = null;
         CdTextAlbumMetadata? metadataOverride = null;
@@ -1226,6 +1208,89 @@ public static class CliCommandRunner
             stdout.WriteLine($"  CUE Sheet:        {Path.GetFullPath(result.CueSheetPath)}");
         }
 
+        return 0;
+    }
+
+    /// <summary>
+    /// Disc IDs from the physical TOC when the drive provides one (it includes data tracks, which freedb counts),
+    /// otherwise from the discovered audio tracks.
+    /// </summary>
+    private static DiscIdentifiers? CalculateDiscIds(IDiscRecorderBackend recorder)
+    {
+        IReadOnlyList<DiscTocTrack> toc = recorder is IDiscTocProvider tocProvider
+            ? tocProvider.ReadTableOfContents()
+            : Array.Empty<DiscTocTrack>();
+
+        if (toc.Count == 0)
+        {
+            toc = AudioCdRipperService.QueryTracksAndCdText(recorder).Tracks
+                .Select(t => new DiscTocTrack(t.TrackNumber, t.StartLba, t.SectorCount, true))
+                .ToList();
+        }
+
+        return toc.Count > 0 ? DiscIdCalculator.Calculate(toc) : null;
+    }
+
+    private static async Task<int> HandleDetectOffsetAsync(
+        CommandLineArgs cmd,
+        TextWriter stdout,
+        TextWriter stderr,
+        IDiscDeviceService deviceService,
+        IBurnEngineBackend burnEngine)
+    {
+        string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        var recorder = FindRecorder(deviceService, driveId);
+
+        var tracks = AudioCdRipperService.QueryTracksAndCdText(recorder).Tracks;
+        var ids = CalculateDiscIds(recorder);
+        if (ids == null || tracks.Count == 0)
+        {
+            throw new CommandLineException("No audio tracks found. Insert an audio CD to detect the drive's read offset.");
+        }
+
+        IReadOnlyList<AccurateRipPressing> pressings;
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            pressings = await AccurateRipDatabase.FetchAsync(http, ids).ConfigureAwait(false);
+        }
+
+        if (pressings.Count == 0)
+        {
+            throw new CommandLineException(
+                "This disc is not in the AccurateRip database, so it cannot be used to detect the offset. Try a well-known commercial CD.");
+        }
+
+        var detection = await ReadOffsetDetector.DetectAsync(burnEngine, recorder, tracks, pressings).ConfigureAwait(false);
+        var best = detection.Best;
+
+        if (cmd.IsJson)
+        {
+            stdout.WriteLine(JsonSerializer.Serialize(new
+            {
+                success = best != null,
+                driveId = recorder.UniqueId,
+                readOffset = best?.OffsetSamples,
+                confidence = best?.Confidence,
+                probedTracks = detection.ProbedTracks,
+                candidates = detection.Candidates.Select(c => new { offset = c.OffsetSamples, c.Confidence, c.TrackNumber }),
+                accurateRipPath = ids.AccurateRipDatabasePath,
+                error = best == null ? (detection.ErrorMessage ?? "No offset within +/-3000 samples matched the AccurateRip database.") : null
+            }, JsonOptions));
+            return best != null ? 0 : 1;
+        }
+
+        if (best == null)
+        {
+            stderr.WriteLine($"Offset detection failed: {detection.ErrorMessage ?? "No offset within +/-3000 samples matched the AccurateRip database."}");
+            return 1;
+        }
+
+        stdout.WriteLine("Read offset detected:");
+        stdout.WriteLine($"  Drive:          {recorder.UniqueId}");
+        stdout.WriteLine($"  Read Offset:    {best.OffsetSamples:+0;-0;0} samples");
+        stdout.WriteLine($"  Confidence:     {best.Confidence} matching submissions");
+        stdout.WriteLine($"  Tracks Checked: {string.Join(", ", detection.ProbedTracks)}");
+        stdout.WriteLine($"  Use it with:    rip-audio --drive {driveId} --read-offset {best.OffsetSamples:+0;-0;0} --verify-accuraterip ...");
         return 0;
     }
 
@@ -1562,6 +1627,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
         stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--json]");
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+        stdout.WriteLine("  detect-offset --drive <id> [--json]");
+        stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
         stdout.WriteLine("  erase --drive <id> [--full] [--json]");
