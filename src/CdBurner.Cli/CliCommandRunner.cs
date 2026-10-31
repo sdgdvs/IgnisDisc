@@ -42,7 +42,7 @@ public static class CliCommandRunner
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
-        "lookup", "keep-wav", "continue-on-error"
+        "lookup", "keep-wav", "continue-on-error", "verify-accuraterip"
     };
 
     /// <summary>
@@ -915,6 +915,15 @@ public static class CliCommandRunner
             }
         }
 
+        int readOffset = 0;
+        string? readOffsetOpt = cmd.GetOption("read-offset");
+        if (readOffsetOpt != null &&
+            (!int.TryParse(readOffsetOpt, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out readOffset) ||
+             Math.Abs(readOffset) > 10_000))
+        {
+            throw new CommandLineException($"Invalid read offset '{readOffsetOpt}'. Expected an integer number of samples between -10000 and 10000 (e.g. --read-offset 6).");
+        }
+
         var recorder = FindRecorder(deviceService, driveId);
 
         IReadOnlyList<DiscTocTrack> toc = Array.Empty<DiscTocTrack>();
@@ -971,7 +980,8 @@ public static class CliCommandRunner
         {
             ContinueOnUnreadableSector = cmd.HasFlag("continue-on-error"),
             TrackNumbersToRip = requestedTracks,
-            MetadataOverride = metadataOverride
+            MetadataOverride = metadataOverride,
+            ReadOffsetSamples = readOffset
         };
 
         var ripper = new AudioCdRipperService();
@@ -1011,6 +1021,43 @@ public static class CliCommandRunner
             return 1;
         }
 
+        // AccurateRip: checksums were computed on the PCM during the rip, so this is independent of the output format.
+        string? accurateRipStatus = null;
+        var accurateRipTracks = new List<(AudioTrackRipInfo Info, AccurateRipTrackVerdict? Verdict)>();
+        if (cmd.HasFlag("verify-accuraterip"))
+        {
+            if (ids == null)
+            {
+                accurateRipStatus = "unavailable";
+            }
+            else
+            {
+                try
+                {
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                    var pressings = await AccurateRipDatabase.FetchAsync(http, ids).ConfigureAwait(false);
+                    accurateRipStatus = pressings.Count == 0 ? "not-in-database" : "checked";
+                    foreach (var info in result.TrackInfos)
+                    {
+                        accurateRipTracks.Add((info, pressings.Count == 0
+                            ? null
+                            : AccurateRipDatabase.Match(pressings, info.AudioTrackIndex, info.AccurateRipV1, info.AccurateRipV2)));
+                    }
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidDataException)
+                {
+                    accurateRipStatus = "failed";
+                    warning = (warning == null ? "" : warning + " ") + $"AccurateRip lookup failed: {ex.Message}";
+                }
+            }
+
+            if (readOffset == 0 && accurateRipStatus == "checked" && accurateRipTracks.Any(t => t.Verdict is { IsAccurate: false }))
+            {
+                warning = (warning == null ? "" : warning + " ") +
+                    "No --read-offset was given; AccurateRip only matches when the drive's read offset is corrected (see the AccurateRip drive offset list).";
+            }
+        }
+
         var finalOutputFiles = new List<string>();
         if (isFlac)
         {
@@ -1018,14 +1065,10 @@ public static class CliCommandRunner
             string albumTitle = !string.IsNullOrWhiteSpace(result.CdText?.AlbumTitle) ? result.CdText.AlbumTitle : "Unknown Album";
             string albumPerformer = !string.IsNullOrWhiteSpace(result.CdText?.AlbumPerformer) ? result.CdText.AlbumPerformer : "Unknown Artist";
 
-            foreach (var wavPath in result.RippedFilePaths)
+            foreach (var info in result.TrackInfos)
             {
-                string wavFileName = Path.GetFileName(wavPath);
-                int trackNumber = 1;
-                if (wavFileName.Length >= 2 && int.TryParse(wavFileName[..2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedNum))
-                {
-                    trackNumber = parsedNum;
-                }
+                string wavPath = info.FilePath;
+                int trackNumber = info.TrackNumber;
 
                 var trackCdText = result.CdText?.Tracks?.FirstOrDefault(t => t.TrackNumber == trackNumber);
                 string trackTitle = !string.IsNullOrWhiteSpace(trackCdText?.Title)
@@ -1111,6 +1154,28 @@ public static class CliCommandRunner
                 warning = warning,
                 files = finalOutputFiles.Select(Path.GetFullPath).ToList(),
                 cueSheet = result.CueSheetPath != null && File.Exists(result.CueSheetPath) ? Path.GetFullPath(result.CueSheetPath) : null,
+                readOffset,
+                badSectors = result.BadSectorLbas,
+                trackChecksums = result.TrackInfos.Select(t => new
+                {
+                    trackNumber = t.TrackNumber,
+                    crc32 = t.Crc32.ToString("X8"),
+                    accurateRipV1 = t.AccurateRipV1.ToString("x8"),
+                    accurateRipV2 = t.AccurateRipV2.ToString("x8"),
+                    unreadableSectors = t.UnreadableSectors
+                }).ToList(),
+                accurateRip = accurateRipStatus == null ? null : new
+                {
+                    status = accurateRipStatus,
+                    tracks = accurateRipTracks.Select(t => new
+                    {
+                        trackNumber = t.Info.TrackNumber,
+                        accurate = t.Verdict?.IsAccurate,
+                        confidence = t.Verdict?.Confidence,
+                        totalSubmissions = t.Verdict?.TotalSubmissions,
+                        matchedV2 = t.Verdict?.MatchedV2
+                    }).ToList()
+                },
                 error = (string?)null
             };
 
@@ -1129,6 +1194,24 @@ public static class CliCommandRunner
         stdout.WriteLine($"  freedb ID:        {ids?.FreeDbIdHex ?? "n/a"}");
         stdout.WriteLine($"  AccurateRip:      {ids?.AccurateRipDatabasePath ?? "n/a"}");
         stdout.WriteLine($"  Metadata Source:  {metadataSource}");
+        stdout.WriteLine($"  Read Offset:      {readOffset:+0;-0;0} samples");
+        if (result.BadSectorLbas.Count > 0)
+        {
+            stdout.WriteLine($"  Bad Sectors:      {result.BadSectorLbas.Count} (zero-filled)");
+        }
+        if (accurateRipStatus != null)
+        {
+            stdout.WriteLine($"  AccurateRip:      {accurateRipStatus}");
+            foreach (var (info, verdict) in accurateRipTracks)
+            {
+                string line = verdict == null
+                    ? "not in database"
+                    : verdict.IsAccurate
+                        ? $"accurate (confidence {verdict.Confidence}/{verdict.TotalSubmissions}, {(verdict.MatchedV2 ? "v2" : "v1")})"
+                        : $"NOT accurate (0/{verdict.TotalSubmissions} submissions match)";
+                stdout.WriteLine($"    Track {info.TrackNumber:D2}: {line}  [v1 {info.AccurateRipV1:x8} v2 {info.AccurateRipV2:x8}]");
+            }
+        }
         if (!string.IsNullOrEmpty(warning))
         {
             stdout.WriteLine($"  Warning:          {warning}");
@@ -1477,7 +1560,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
-        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--json]");
+        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--json]");
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
@@ -1497,7 +1580,7 @@ public static class CliCommandRunner
         if (string.Equals(subcommand, "rip-audio", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subcommand, "ripaudio", StringComparison.OrdinalIgnoreCase))
         {
-            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--json]");
+            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--json]");
             stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
             return;
         }
@@ -1530,6 +1613,14 @@ public static class CliCommandRunner
             }
             return val;
         }
+
+        /// <summary>
+        /// True if the argument is a value rather than another option. Negative numbers (e.g. a read offset of -6)
+        /// start with '-' but are values.
+        /// </summary>
+        private static bool IsOptionValue(string arg) =>
+            !arg.StartsWith('-') ||
+            double.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
 
         public static CommandLineArgs Parse(string[] args)
         {
@@ -1565,7 +1656,7 @@ public static class CliCommandRunner
                     {
                         parsed.Flags.Add(key);
                     }
-                    else if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                    else if (i + 1 < args.Length && IsOptionValue(args[i + 1]))
                     {
                         parsed.Options[key] = args[++i].Trim();
                     }

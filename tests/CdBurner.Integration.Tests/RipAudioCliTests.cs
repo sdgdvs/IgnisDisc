@@ -258,6 +258,51 @@ public sealed class RipAudioCliTests : IAsyncLifetime, IDisposable
         Assert.Equal(1, exitCode);
     }
 
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("20000")]
+    public async Task RipAudio_InvalidReadOffset_ReturnsError(string offset)
+    {
+        string outDir = Path.Combine(_tempDir, "InvalidOffsetOutput");
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "rip-audio", "--drive", "VDRV-01", "--output", outDir, "--read-offset", offset },
+            stdout,
+            stderr,
+            _deviceService,
+            _burnEngine);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("read offset", stderr.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RipAudio_Json_ReportsReadOffsetAndPerTrackChecksums()
+    {
+        string outDir = Path.Combine(_tempDir, "ChecksumOutput");
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "rip-audio", "--drive", "VDRV-01", "--output", outDir, "--read-offset", "-6", "--json" },
+            stdout,
+            stderr,
+            _deviceService,
+            _burnEngine);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.Equal(-6, doc.RootElement.GetProperty("readOffset").GetInt32());
+        var checksums = doc.RootElement.GetProperty("trackChecksums");
+        Assert.Equal(3, checksums.GetArrayLength());
+        foreach (var t in checksums.EnumerateArray())
+        {
+            Assert.Equal(8, t.GetProperty("crc32").GetString()!.Length);
+            Assert.Equal(8, t.GetProperty("accurateRipV1").GetString()!.Length);
+            Assert.Equal(8, t.GetProperty("accurateRipV2").GetString()!.Length);
+        }
+    }
+
     [Fact]
     public async Task RipAudio_Flac_EncodesAndRewritesCue()
     {
