@@ -10,6 +10,29 @@ public sealed class ArchivalTests : IDisposable
 {
     private readonly List<string> _tempDirs = new();
 
+    [Theory]
+    [InlineData("../outside.txt")]
+    [InlineData("sub/../../outside.txt")]
+    [InlineData("C:/Windows/win.ini")]
+    [InlineData("//server/share/file.txt")]
+    public async Task Manifest_Verify_RejectsPathsOutsideTheDisc(string maliciousPath)
+    {
+        // A manifest read from a disc is untrusted; it must not make the verifier open files elsewhere.
+        string parent = CreateTempDirectory();
+        string discRoot = Path.Combine(parent, "disc");
+        Directory.CreateDirectory(discRoot);
+        byte[] outside = Encoding.UTF8.GetBytes("not part of the archive");
+        File.WriteAllBytes(Path.Combine(parent, "outside.txt"), outside);
+        string hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(outside));
+        File.WriteAllText(Path.Combine(discRoot, ArchiveManifest.ManifestFileName), $"{hash}  {maliciousPath}\n");
+
+        var result = await ArchiveManifest.VerifyAsync(discRoot);
+
+        Assert.False(result.IsIntact);
+        Assert.Single(result.Corrupt);
+        Assert.Contains("outside the disc", result.Corrupt[0]);
+    }
+
     private string CreateTempDirectory()
     {
         string path = Path.Combine(Path.GetTempPath(), "cdburner-test-" + Guid.NewGuid().ToString("N"));
@@ -266,7 +289,7 @@ public sealed class ArchivalTests : IDisposable
             "-R",
             $"-B{baseDir}",
             outPar2,
-            $"{baseDir}{Path.DirectorySeparatorChar}*"
+            "*"
         };
 
         Assert.Equal(expected, args);

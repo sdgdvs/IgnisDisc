@@ -98,7 +98,9 @@ public static class Par2Runner
             "-R",
             $"-B{baseDirectory}",
             outputPar2Path,
-            $"{baseDirectory}{Path.DirectorySeparatorChar}*"
+            // Bare wildcard, expanded by par2 relative to the working directory (the disc root). A quoted
+            // "C:\path with spaces\*" would not be expanded by the Windows C runtime.
+            "*"
         };
     }
 
@@ -145,6 +147,7 @@ public static class Par2Runner
         var psi = new ProcessStartInfo
         {
             FileName = par2Path,
+            WorkingDirectory = discRoot,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

@@ -43,6 +43,7 @@ public sealed record ReadOffsetDetectionResult(
 public static class ReadOffsetDetector
 {
     public const int DefaultMaxOffsetSamples = 3000;
+    private const int MaxProbeTrackSectors = 45_000; // 10 minutes of audio
     private const int SamplesPerSector = OpticalConstants.RawSectorSize / 4;
 
     /// <summary>
@@ -147,10 +148,19 @@ public static class ReadOffsetDetector
         var candidates = new List<ReadOffsetCandidate>();
         var probed = new List<int>();
 
-        // Prefer the longest middle tracks: more samples make an accidental match less likely.
-        var middle = Enumerable.Range(1, ordered.Count - 2)
-            .OrderByDescending(i => ordered[i].SectorCount)
-            .Take(Math.Max(1, tracksToProbe));
+        // Prefer the longest middle tracks up to 10 minutes: more samples make an accidental match less likely, but each
+        // probed track is held in memory (10 minutes = ~106 MB) and very long tracks would overflow 32-bit offsets.
+        var interior = Enumerable.Range(1, ordered.Count - 2).ToList();
+        var middle = interior.Where(i => ordered[i].SectorCount <= MaxProbeTrackSectors).OrderByDescending(i => ordered[i].SectorCount)
+            .Concat(interior.Where(i => ordered[i].SectorCount > MaxProbeTrackSectors).OrderBy(i => ordered[i].SectorCount))
+            .Where(i => ordered[i].SectorCount <= MaxProbeTrackSectors * 3)
+            .Take(Math.Max(1, tracksToProbe))
+            .ToList();
+        if (middle.Count == 0)
+        {
+            return new ReadOffsetDetectionResult(Array.Empty<ReadOffsetCandidate>(), Array.Empty<int>(),
+                "All middle tracks are longer than 30 minutes; use a disc with shorter tracks for offset detection.");
+        }
 
         foreach (int index in middle)
         {

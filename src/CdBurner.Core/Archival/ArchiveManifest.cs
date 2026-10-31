@@ -24,6 +24,28 @@ public static class ArchiveManifest
     /// </summary>
     public const string RecoveryFolderName = "RECOVERY";
 
+    /// <summary>
+    /// Resolves a manifest-relative path ('/' separators) under <paramref name="root"/>, or returns null if it is
+    /// rooted, a UNC/device path, or escapes the root through "..".
+    /// </summary>
+    internal static string? ResolveInsideRoot(string root, string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath) ||
+            relativePath.StartsWith('\\') || relativePath.StartsWith('/') || relativePath.Contains(':'))
+        {
+            return null;
+        }
+
+        string fullRoot = Path.GetFullPath(root);
+        if (!fullRoot.EndsWith(Path.DirectorySeparatorChar))
+        {
+            fullRoot += Path.DirectorySeparatorChar;
+        }
+
+        string full = Path.GetFullPath(Path.Combine(fullRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        return full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) ? full : null;
+    }
+
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -194,7 +216,14 @@ public static class ArchiveManifest
             filesChecked++;
             progress?.Report($"Verifying {filesChecked}/{manifestLines.Count}: {relativePath}");
 
-            string diskFilePath = Path.Combine(discRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            // The manifest comes from the disc and is untrusted: never open anything outside the disc root.
+            string? diskFilePath = ResolveInsideRoot(discRoot, relativePath);
+            if (diskFilePath == null)
+            {
+                corrupt.Add($"{relativePath} (rejected: path points outside the disc)");
+                continue;
+            }
+
             if (!File.Exists(diskFilePath))
             {
                 missing.Add(relativePath);

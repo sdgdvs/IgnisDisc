@@ -579,6 +579,36 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
         {
         }
 
+        // Pressed audio CDs: READ CAPACITY needs a read/write handle (often refused without elevation) and the disk
+        // length IOCTL fails without a data track, but the TOC is readable through a read-only handle.
+        try
+        {
+            var toc = Scsi.PhysicalSectorReader.ReadTableOfContents(VolumePath);
+            if (toc.Count > 0)
+            {
+                int sectors = toc.Max(t => t.StartLba + t.SectorCount);
+                return new MediaStatusDto
+                {
+                    MediaType = DiscMediaType.CdRom,
+                    MediaPresent = true,
+                    IsBlank = false,
+                    IsRewritable = false,
+                    IsAppendable = false,
+                    TotalSectors = sectors,
+                    FreeSectors = 0,
+                    UsedSectors = sectors,
+                    TotalCapacityBytes = (long)sectors * OpticalConstants.DataSectorSize,
+                    FreeCapacityBytes = 0,
+                    SessionCount = 1,
+                    MediaManufacturerId = null,
+                    LastRecordedLba = sectors - 1
+                };
+            }
+        }
+        catch
+        {
+        }
+
         return EmptyMediaStatus();
     }
 

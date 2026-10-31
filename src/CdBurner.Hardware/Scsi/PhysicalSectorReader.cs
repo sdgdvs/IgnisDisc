@@ -24,6 +24,7 @@ public static partial class PhysicalSectorReader
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
 
     private const uint IOCTL_CDROM_READ_TOC = 0x00024000;
+    private const uint IOCTL_CDROM_GET_LAST_SESSION = 0x00024038; // CTL_CODE(FILE_DEVICE_CD_ROM, 0x0E, METHOD_BUFFERED, FILE_READ_ACCESS)
     private const uint IOCTL_CDROM_READ_TOC_EX = 0x00024054; // CTL_CODE(FILE_DEVICE_CD_ROM, 0x15, METHOD_BUFFERED, FILE_READ_ACCESS)
     private const byte TocFormatCdText = 0x05;
     private const int CdTextPackSize = 18;
@@ -189,6 +190,14 @@ public static partial class PhysicalSectorReader
             entries.Add((number, lba, (control & 0x04) != 0));
         }
 
+        // CDROM_TOC_SESSION_DATA: Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA (TrackNumber at byte 6).
+        int? firstTrackOfLastSession = null;
+        byte[] session = new byte[12];
+        if (DeviceIoControlBuffer(handle, IOCTL_CDROM_GET_LAST_SESSION, Array.Empty<byte>(), session, out _) && session[3] > 1)
+        {
+            firstTrackOfLastSession = session[6];
+        }
+
         var tracks = new List<DiscTocTrack>();
         for (int i = 0; i < entries.Count - 1; i++)
         {
@@ -196,8 +205,11 @@ public static partial class PhysicalSectorReader
             var next = entries[i + 1];
             int count = next.Lba - cur.Lba;
 
-            // Enhanced CD: the audio session ends 11,400 sectors (lead-out + lead-in + pre-gap) before the data track.
-            if (!cur.IsData && next.IsData && next.Number != 0xAA)
+            // Enhanced CD: the audio session ends 11,400 sectors (lead-out + lead-in + pre-gap) before the data track
+            // that opens the second session. A single-session audio-then-data disc has no such gap. If the session
+            // query is unavailable, assume Enhanced CD, which is by far the more common layout.
+            bool dataStartsLaterSession = firstTrackOfLastSession == null || next.Number == firstTrackOfLastSession;
+            if (!cur.IsData && next.IsData && next.Number != 0xAA && dataStartsLaterSession)
             {
                 count -= 11_400;
             }
@@ -232,20 +244,29 @@ public static partial class PhysicalSectorReader
             return false;
         }
 
-        return C2SupportCache.GetOrAdd(volumePath, path =>
+        // Only a positive answer is cached: a failed probe can be a scratch, a spin-up or a missing disc rather than
+        // a drive without C2 support, so it is retried next time.
+        if (C2SupportCache.TryGetValue(volumePath, out bool cached) && cached)
         {
-            using var rw = OpenDevice(path, FileAccess.ReadWrite, out _);
-            if (rw == null)
-            {
-                return false;
-            }
+            return true;
+        }
 
-            using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
-            byte[] buffer = new byte[AudioWithC2Size];
-            byte[] cdb = MmcCommandBuilder.BuildReadCdCdb(probeLba, 1, SectorTypeCdda, ReadCdUserDataWithC2);
-            var result = transport.ExecuteCommand(cdb, buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
-            return result.IsSuccess && result.DataTransferLength >= AudioWithC2Size;
-        });
+        using var rw = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+        if (rw == null)
+        {
+            return false;
+        }
+
+        using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
+        byte[] buffer = new byte[AudioWithC2Size];
+        byte[] cdb = MmcCommandBuilder.BuildReadCdCdb(probeLba, 1, SectorTypeCdda, ReadCdUserDataWithC2);
+        var result = transport.ExecuteCommand(cdb, buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
+        bool supported = result.IsSuccess && result.DataTransferLength >= AudioWithC2Size;
+        if (supported)
+        {
+            C2SupportCache[volumePath] = true;
+        }
+        return supported;
     }
 
     /// <summary>

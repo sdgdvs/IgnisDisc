@@ -1056,14 +1056,12 @@ public static class CliCommandRunner
                 string wavPath = info.FilePath;
                 int trackNumber = info.TrackNumber;
 
-                var trackCdText = result.CdText?.Tracks?.FirstOrDefault(t => t.TrackNumber == trackNumber);
-                string trackTitle = !string.IsNullOrWhiteSpace(trackCdText?.Title)
-                    ? trackCdText.Title
-                    : $"Track {trackNumber:D2}";
-                string trackArtist = !string.IsNullOrWhiteSpace(trackCdText?.Performer)
-                    ? trackCdText.Performer
+                // The ripper already merged CD-Text, the MusicBrainz override and generic fallbacks per track.
+                string trackTitle = !string.IsNullOrWhiteSpace(info.Title) ? info.Title : $"Track {trackNumber:D2}";
+                string trackArtist = !string.IsNullOrWhiteSpace(info.Performer) && info.Performer != "Unknown Artist"
+                    ? info.Performer
                     : albumPerformer;
-                string? isrc = trackCdText?.Isrc;
+                string? isrc = info.Isrc;
 
                 var tags = new AudioTrackTags(
                     Title: trackTitle,

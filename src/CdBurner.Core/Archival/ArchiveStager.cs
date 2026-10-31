@@ -57,7 +57,8 @@ public static class ArchiveStager
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var file = disc.Files[f];
-                string destFilePath = Path.Combine(discRoot, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                string destFilePath = ArchiveManifest.ResolveInsideRoot(discRoot, file.RelativePath)
+                    ?? throw new InvalidOperationException($"Refusing to stage '{file.RelativePath}': the path points outside the disc folder.");
 
                 string? destDir = Path.GetDirectoryName(destFilePath);
                 if (!string.IsNullOrEmpty(destDir))

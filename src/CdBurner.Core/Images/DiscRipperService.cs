@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Audio;
 using CdBurner.Core.Primitives;
 
 namespace CdBurner.Core.Images;
@@ -336,6 +337,28 @@ public class DiscRipperService
         {
             cueTracks.AddRange(customTracks);
         }
+        else if (recorder is IDiscTocProvider tocProvider && tocProvider.ReadTableOfContents() is { Count: > 0 } toc)
+        {
+            // Physical drives: real track boundaries and types from the TOC, names from CD-Text when present.
+            CdTextAlbumMetadata? cdText = null;
+            if (tocProvider.ReadCdTextPacks() is { Length: > 0 } packs)
+            {
+                try { cdText = CdTextPackParser.ParsePacks(packs); }
+                catch (Exception ex) when (ex is ArgumentException or InvalidDataException) { }
+            }
+
+            foreach (var t in toc.Where(t => t.StartLba >= startLba).OrderBy(t => t.TrackNumber))
+            {
+                var text = cdText?.Tracks?.FirstOrDefault(x => x.TrackNumber == t.TrackNumber);
+                cueTracks.Add(new CueTrack(
+                    TrackNumber: t.TrackNumber,
+                    DataType: t.IsAudio ? CueTrackDataType.Audio : CueTrackDataType.Mode1_2352,
+                    Title: string.IsNullOrEmpty(text?.Title) ? null : text.Title,
+                    Performer: string.IsNullOrEmpty(text?.Performer) ? null : text.Performer,
+                    Isrc: string.IsNullOrEmpty(text?.Isrc) ? null : text.Isrc,
+                    Indices: new[] { new CueIndex(1, MsfAddress.FromFrameCount(t.StartLba - startLba)) }));
+            }
+        }
         else
         {
             // Inspect recorder via reflection for VirtualDiscMedium session/track layout
@@ -379,7 +402,8 @@ public class DiscRipperService
                                     Songwriter: songwriter,
                                     Isrc: isrc,
                                     PreGap: preGap > 0 ? MsfAddress.FromFrameCount(preGap) : null,
-                                    Indices: new[] { new CueIndex(1, MsfAddress.FromLba(relLba)) }
+                                    // CUE INDEX positions are frame offsets within the FILE, without the 150-frame lead-in.
+                                    Indices: new[] { new CueIndex(1, MsfAddress.FromFrameCount(relLba)) }
                                 ));
                                 defaultTrackNum = trackNum + 1;
                             }

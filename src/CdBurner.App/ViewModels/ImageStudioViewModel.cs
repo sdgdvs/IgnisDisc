@@ -472,7 +472,8 @@ public class ImageStudioViewModel : ObservableObject
                         {
                             foreach (var idx in t.Indices)
                             {
-                                if (idx.Position.ToLba() > maxLba) maxLba = idx.Position.ToLba();
+                                // INDEX positions are frame offsets within the file (no 150-frame lead-in).
+                                if (idx.Position.ToFrameCount() > maxLba) maxLba = idx.Position.ToFrameCount();
                             }
                         }
                     }
@@ -814,7 +815,9 @@ public class ImageStudioViewModel : ObservableObject
             var session = new VirtualSession { SessionNumber = 1, StartLba = 0, SectorCount = lba };
             foreach (var trk in firstFile.Tracks)
             {
-                int trkStart = trk.Indices.Count > 0 ? trk.Indices[0].Position.ToLba() : 0;
+                // Track start = INDEX 01 (INDEX 00 is the pre-gap), as a frame offset within the file.
+                var startIndex = trk.Indices.FirstOrDefault(i => i.IndexNumber == 1) ?? trk.Indices.FirstOrDefault();
+                int trkStart = startIndex?.Position.ToFrameCount() ?? 0;
                 session.Tracks.Add(new VirtualTrack
                 {
                     TrackNumber = trk.TrackNumber,

@@ -553,7 +553,9 @@ public class Phase12_RipAndVerifyTests
             Assert.Equal(CueTrackDataType.Mode1_2352, t1.DataType);
             Assert.Equal("Game Data", t1.Title);
             Assert.Single(t1.Indices);
-            Assert.Equal(new MsfAddress(0, 2, 0), t1.Indices[0].Position); // LBA 0 = 00:02:00
+            // CUE INDEX positions are frame offsets within the BIN file: track 1 starts at 00:00:00, not at the
+            // absolute disc address 00:02:00 (which other tools would read as a 2-second shift).
+            Assert.Equal(new MsfAddress(0, 0, 0), t1.Indices[0].Position);
 
             // Verify Track 2
             var t2 = fileEntry.Tracks[1];
@@ -564,7 +566,7 @@ public class Phase12_RipAndVerifyTests
             Assert.NotNull(t2.PreGap);
             Assert.Equal(new MsfAddress(0, 2, 0), t2.PreGap.Value); // 150 frames = 00:02:00
             Assert.Single(t2.Indices);
-            Assert.Equal(MsfAddress.FromLba(track1Sectors), t2.Indices[0].Position);
+            Assert.Equal(MsfAddress.FromFrameCount(track1Sectors), t2.Indices[0].Position);
         }
         finally
         {

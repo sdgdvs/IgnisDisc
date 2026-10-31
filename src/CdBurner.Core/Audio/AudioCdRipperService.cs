@@ -76,7 +76,10 @@ public sealed record AudioTrackRipInfo(
     int AudioTrackIndex,
     int UnreadableSectors,
     int RecoveredSectors = 0,
-    int SuspectSectors = 0);
+    int SuspectSectors = 0,
+    string Title = "",
+    string Performer = "",
+    string? Isrc = null);
 
 /// <summary>
 /// Discovered audio track descriptor extracted from optical medium TOC or session metadata.
@@ -599,7 +602,10 @@ public class AudioCdRipperService
                 audioIndex,
                 trackBadSectors,
                 trackRecovered,
-                trackSuspect));
+                trackSuspect,
+                track.Title,
+                track.Performer,
+                track.Isrc));
             totalSectorsRead += track.SectorCount;
         }
 
