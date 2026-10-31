@@ -41,7 +41,33 @@ public class AudioRipOptions
     /// sheet and <see cref="AudioCdRipResult.CdText"/>. Tracks it does not cover keep their CD-Text or generic names.
     /// </summary>
     public CdTextAlbumMetadata? MetadataOverride { get; set; }
+
+    /// <summary>
+    /// Drive read offset correction in samples (one sample = 4 bytes of 16-bit stereo), as listed in the AccurateRip
+    /// drive offset table (e.g. +6). Audio is taken from that many samples later on the disc; samples before the start
+    /// or past the end of the audio area are filled with silence. Default 0 (no correction).
+    /// </summary>
+    public int ReadOffsetSamples { get; set; }
 }
+
+/// <summary>
+/// Per-track outcome of an audio rip, including the checksums needed for AccurateRip verification.
+/// </summary>
+/// <param name="TrackNumber">Disc track number.</param>
+/// <param name="FilePath">Full path of the written WAV file.</param>
+/// <param name="Crc32">CRC-32 of the track's PCM data (excluding the WAV header).</param>
+/// <param name="AccurateRipV1">AccurateRip v1 checksum.</param>
+/// <param name="AccurateRipV2">AccurateRip v2 checksum.</param>
+/// <param name="AudioTrackIndex">0-based position of the track among all audio tracks on the disc (AccurateRip entry index).</param>
+/// <param name="UnreadableSectors">Number of sectors that failed every retry and were replaced by silence.</param>
+public sealed record AudioTrackRipInfo(
+    int TrackNumber,
+    string FilePath,
+    uint Crc32,
+    uint AccurateRipV1,
+    uint AccurateRipV2,
+    int AudioTrackIndex,
+    int UnreadableSectors);
 
 /// <summary>
 /// Discovered audio track descriptor extracted from optical medium TOC or session metadata.
@@ -72,12 +98,20 @@ public class AudioCdRipResult
     public CdTextAlbumMetadata? CdText { get; init; }
     public Exception? Exception { get; init; }
 
+    /// <summary>Per-track checksums and defect counts, in rip order.</summary>
+    public IReadOnlyList<AudioTrackRipInfo> TrackInfos { get; init; } = Array.Empty<AudioTrackRipInfo>();
+
+    /// <summary>LBAs that failed every retry (zero-filled when continuing past unreadable sectors).</summary>
+    public IReadOnlyList<int> BadSectorLbas { get; init; } = Array.Empty<int>();
+
     public static AudioCdRipResult Succeeded(
         IReadOnlyList<string> filePaths,
         int totalSectors,
         TimeSpan duration,
         string? cueSheetPath = null,
-        CdTextAlbumMetadata? cdText = null) => new()
+        CdTextAlbumMetadata? cdText = null,
+        IReadOnlyList<AudioTrackRipInfo>? trackInfos = null,
+        IReadOnlyList<int>? badSectorLbas = null) => new()
     {
         Success = true,
         TracksRipped = filePaths.Count,
@@ -85,7 +119,9 @@ public class AudioCdRipResult
         TotalTime = duration,
         RippedFilePaths = filePaths,
         CueSheetPath = cueSheetPath,
-        CdText = cdText
+        CdText = cdText,
+        TrackInfos = trackInfos ?? Array.Empty<AudioTrackRipInfo>(),
+        BadSectorLbas = badSectorLbas ?? Array.Empty<int>()
     };
 
     public static AudioCdRipResult Failed(string error, Exception? ex = null) => new()
@@ -365,7 +401,15 @@ public class AudioCdRipperService
 
         var sw = Stopwatch.StartNew();
         var rippedFilePaths = new List<string>(tracksToRip.Count);
+        var trackInfos = new List<AudioTrackRipInfo>(tracksToRip.Count);
+        var badSectorLbas = new List<int>();
         int totalSectorsRead = 0;
+
+        // AccurateRip edge rules and offset correction are relative to the whole audio area, not the tracks selected.
+        var audioOrder = allTracks.OrderBy(t => t.StartLba).ToList();
+        int audioEndLba = audioOrder.Max(t => t.StartLba + t.SectorCount);
+        long totalSectorsToRip = tracksToRip.Sum(t => (long)t.SectorCount);
+        byte[] silence = new byte[OpticalConstants.RawSectorSize];
 
         foreach (var track in tracksToRip)
         {
@@ -380,34 +424,106 @@ public class AudioCdRipperService
             string fileName = $"{track.TrackNumber:D2} - {safePerformer} - {safeTitle}.wav";
             string targetWavPath = Path.Combine(outputDirectory, fileName);
 
-            int pcmByteLength = track.SectorCount * OpticalConstants.RawSectorSize;
+            int audioIndex = audioOrder.IndexOf(track);
+            var arChecksum = new AccurateRipChecksum(
+                (long)track.SectorCount * OpticalConstants.RawSectorSize / 4,
+                isFirstTrack: audioIndex == 0,
+                isLastTrack: audioIndex == audioOrder.Count - 1);
+            var crc32 = new Crc32Algorithm();
+
+            long trackBytes = (long)track.SectorCount * OpticalConstants.RawSectorSize;
             byte[] wavHeader = WavFileCodec.CreateWavHeader(
-                pcmByteLength,
+                (int)trackBytes,
                 OpticalConstants.CdAudioSampleRate,
                 OpticalConstants.CdAudioChannels,
                 OpticalConstants.CdAudioBitsPerSample);
 
-            RipOperationResult ripResult;
+            // Offset correction: the track's audio starts ReadOffsetSamples samples later on the disc than its LBA
+            // says, so read the covering sector range and drop the leading `skip` bytes.
+            long firstByte = (long)track.StartLba * OpticalConstants.RawSectorSize + (long)options.ReadOffsetSamples * 4;
+            int firstSector = (int)Math.Floor(firstByte / (double)OpticalConstants.RawSectorSize);
+            int endSector = (int)Math.Ceiling((firstByte + trackBytes) / (double)OpticalConstants.RawSectorSize);
+            int readStart = Math.Max(firstSector, 0);
+            int readEnd = Math.Min(endSector, audioEndLba);
+            int bytesToSkip = (int)(firstByte - (long)firstSector * OpticalConstants.RawSectorSize);
+            long bytesRemaining = trackBytes;
+            int trackBadSectors = 0;
+            long sectorsBeforeTrack = totalSectorsRead;
+            BatchedReadOutcome? outcome = null;
+
             await using (var fileStream = new FileStream(targetWavPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
             {
-                // Write standard 44-byte RIFF WAVE header
                 await fileStream.WriteAsync(wavHeader, cancellationToken).ConfigureAwait(false);
 
-                // Read raw 2352-byte audio sectors from disc directly into the file stream
-                ripResult = await engine.ReadSectorsAsync(
-                    recorder,
-                    track.StartLba,
-                    track.SectorCount,
-                    raw2352Mode: true,
-                    sectorConsumer: async (lba, memory) =>
+                async ValueTask EmitAsync(ReadOnlyMemory<byte> sector)
+                {
+                    if (bytesToSkip > 0)
                     {
-                        await fileStream.WriteAsync(memory, cancellationToken).ConfigureAwait(false);
-                    },
-                    progress: progress,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                        int skip = Math.Min(bytesToSkip, sector.Length);
+                        sector = sector[skip..];
+                        bytesToSkip -= skip;
+                    }
+                    if (bytesRemaining <= 0 || sector.IsEmpty)
+                    {
+                        return;
+                    }
+                    if (sector.Length > bytesRemaining)
+                    {
+                        sector = sector[..(int)bytesRemaining];
+                    }
+
+                    await fileStream.WriteAsync(sector, cancellationToken).ConfigureAwait(false);
+                    arChecksum.Append(sector.Span);
+                    crc32.Append(sector.Span);
+                    bytesRemaining -= sector.Length;
+                }
+
+                // Sectors before LBA 0 (negative offset on track 1) cannot be read: silence.
+                for (int s = firstSector; s < Math.Min(readStart, endSector); s++)
+                {
+                    await EmitAsync(silence).ConfigureAwait(false);
+                }
+
+                if (readEnd > readStart)
+                {
+                    outcome = await BatchedSectorReader.ReadRangeAsync(
+                        engine,
+                        recorder,
+                        readStart,
+                        readEnd - readStart,
+                        raw2352Mode: true,
+                        options.MaxRetriesPerSector,
+                        onSector: (_, data) => EmitAsync(data),
+                        onUnreadable: async lba =>
+                        {
+                            badSectorLbas.Add(lba);
+                            trackBadSectors++;
+                            if (!options.ContinueOnUnreadableSector)
+                            {
+                                return false;
+                            }
+                            await EmitAsync(silence).ConfigureAwait(false);
+                            return true;
+                        },
+                        onProgress: done => progress?.Report(new BurnProgressSnapshot
+                        {
+                            ElapsedTime = sw.Elapsed,
+                            CurrentLba = (int)Math.Min(int.MaxValue, sectorsBeforeTrack + done),
+                            TotalLba = (int)Math.Min(int.MaxValue, totalSectorsToRip),
+                            BufferLevelPercent = 100.0,
+                            CurrentActionDescription = $"RippingTrack{track.TrackNumber:D2}"
+                        }),
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+
+                // Sectors past the end of the audio area (positive offset on the last track): silence.
+                for (int s = Math.Max(readEnd, readStart); s < endSector; s++)
+                {
+                    await EmitAsync(silence).ConfigureAwait(false);
+                }
             }
 
-            if (!ripResult.Success && !options.ContinueOnUnreadableSector)
+            if (outcome is { Completed: false })
             {
                 try
                 {
@@ -422,11 +538,19 @@ public class AudioCdRipperService
                 }
 
                 return AudioCdRipResult.Failed(
-                    $"Failed to rip track {track.TrackNumber} ('{track.Title}'): {ripResult.ErrorMessage}",
-                    ripResult.Exception);
+                    $"Failed to rip track {track.TrackNumber} ('{track.Title}'): unrecovered read error at LBA {outcome.Value.StoppedAtLba} after {options.MaxRetriesPerSector} retries.",
+                    new IOException($"Unrecovered read error at LBA {outcome.Value.StoppedAtLba}."));
             }
 
             rippedFilePaths.Add(targetWavPath);
+            trackInfos.Add(new AudioTrackRipInfo(
+                track.TrackNumber,
+                targetWavPath,
+                crc32.GetCurrentHashAsUInt32(),
+                arChecksum.V1,
+                arChecksum.V2,
+                audioIndex,
+                trackBadSectors));
             totalSectorsRead += track.SectorCount;
         }
 
@@ -470,6 +594,6 @@ public class AudioCdRipperService
         }
 
         sw.Stop();
-        return AudioCdRipResult.Succeeded(rippedFilePaths, totalSectorsRead, sw.Elapsed, cueSheetPath, cdText);
+        return AudioCdRipResult.Succeeded(rippedFilePaths, totalSectorsRead, sw.Elapsed, cueSheetPath, cdText, trackInfos, badSectorLbas);
     }
 }
