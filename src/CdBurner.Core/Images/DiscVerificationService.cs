@@ -308,11 +308,10 @@ public class DiscVerificationService
         byte[] expectedBuffer = new byte[sectorSize];
         byte[] zeroBuffer = new byte[sectorSize];
 
-        for (int lba = 0; lba < totalSectors; lba++)
+        // Disc sectors arrive strictly in LBA order (a retried sector is always the next one), so the expected
+        // image is consumed in lockstep with them.
+        async ValueTask ReadNextExpectedSectorAsync()
         {
-            ct.ThrowIfCancellationRequested();
-
-            // 1. Read expected sector from expectedStream
             int bytesRead = 0;
             while (bytesRead < sectorSize)
             {
@@ -328,65 +327,51 @@ public class DiscVerificationService
             expectedCrc.Append(expectedBuffer);
             expectedMd5.AppendData(expectedBuffer);
             expectedSha.AppendData(expectedBuffer);
+        }
 
-            // 2. Read actual sector from optical disc
-            byte[]? actualBuffer = null;
-            bool readSuccess = false;
+        void AppendActual(ReadOnlySpan<byte> actual)
+        {
+            actualCrc.Append(actual);
+            actualMd5.AppendData(actual);
+            actualSha.AppendData(actual);
+        }
 
-            try
+        await BatchedSectorReader.ReadRangeAsync(
+            engine,
+            recorder,
+            startLba: 0,
+            totalSectors,
+            raw2352Mode,
+            maxRetriesPerSector: 1,
+            onSector: async (lba, data) =>
             {
-                var readResult = await engine.ReadSectorsAsync(
-                    recorder,
-                    startLba: lba,
-                    sectorCount: 1,
-                    raw2352Mode: raw2352Mode,
-                    sectorConsumer: (sectorLba, data) =>
-                    {
-                        actualBuffer = data.ToArray();
-                        return ValueTask.CompletedTask;
-                    },
-                    progress: null,
-                    cancellationToken: ct).ConfigureAwait(false);
-
-                if (readResult.Success && actualBuffer != null)
+                await ReadNextExpectedSectorAsync().ConfigureAwait(false);
+                if (!data.Span.SequenceEqual(expectedBuffer))
                 {
-                    readSuccess = true;
+                    mismatchedLbas.Add(lba);
+                    MapCorruptedLba(lba, fileMap, corruptedFiles);
                 }
-            }
-            catch (Exception)
+                AppendActual(data.Span);
+            },
+            onUnreadable: async lba =>
             {
-                readSuccess = false;
-            }
-
-            // 3. Compare sectors
-            if (!readSuccess || actualBuffer == null)
-            {
-                mismatchedLbas.Add(lba);
-                actualBuffer = zeroBuffer;
-                MapCorruptedLba(lba, fileMap, corruptedFiles);
-            }
-            else if (!actualBuffer.AsSpan().SequenceEqual(expectedBuffer))
-            {
+                await ReadNextExpectedSectorAsync().ConfigureAwait(false);
                 mismatchedLbas.Add(lba);
                 MapCorruptedLba(lba, fileMap, corruptedFiles);
-            }
-
-            actualCrc.Append(actualBuffer);
-            actualMd5.AppendData(actualBuffer);
-            actualSha.AppendData(actualBuffer);
-
-            // Progress reporting
-            progress?.Report(new BurnProgressSnapshot
+                AppendActual(zeroBuffer);
+                return true;
+            },
+            onProgress: done => progress?.Report(new BurnProgressSnapshot
             {
                 ElapsedTime = sw.Elapsed,
-                CurrentLba = lba + 1,
+                CurrentLba = done,
                 TotalLba = totalSectors,
                 CurrentActionDescription = "VerifyingSectors",
                 BufferLevelPercent = 100.0,
                 CurrentSpeedMultiplier = 24.0,
                 CurrentBytesPerSecond = 24 * (raw2352Mode ? OpticalConstants.CdAudio1XBytesPerSec : OpticalConstants.CdData1XBytesPerSec)
-            });
-        }
+            }),
+            cancellationToken: ct).ConfigureAwait(false);
 
         progress?.Report(new BurnProgressSnapshot
         {

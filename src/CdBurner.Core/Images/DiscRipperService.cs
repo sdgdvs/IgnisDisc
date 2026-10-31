@@ -265,109 +265,48 @@ public class DiscRipperService
 
         ReportProgress(0, "Initializing");
 
-        for (int i = 0; i < sectorCount; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-            int currentLba = startLba + i;
-
-            byte[]? sectorData = null;
-            bool readSuccess = false;
-
-            // 1. Initial read attempt
-            try
+        var outcome = await BatchedSectorReader.ReadRangeAsync(
+            engine,
+            recorder,
+            startLba,
+            sectorCount,
+            options.Raw2352Mode,
+            options.MaxRetriesPerSector,
+            onSector: async (lba, data) =>
             {
-                var initialResult = await engine.ReadSectorsAsync(
-                    recorder,
-                    startLba: currentLba,
-                    sectorCount: 1,
-                    raw2352Mode: options.Raw2352Mode,
-                    sectorConsumer: (lba, mem) =>
-                    {
-                        sectorData = mem.ToArray();
-                        return ValueTask.CompletedTask;
-                    },
-                    progress: null,
-                    cancellationToken: ct).ConfigureAwait(false);
-
-                if (initialResult.Success && sectorData != null)
-                {
-                    readSuccess = true;
-                }
-            }
-            catch (Exception)
-            {
-                readSuccess = false;
-            }
-
-            // 2. Retry loop if initial read failed
-            if (!readSuccess)
-            {
-                for (int retry = 0; retry < options.MaxRetriesPerSector; retry++)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    totalRetries++;
-
-                    try
-                    {
-                        sectorData = null;
-                        var retryResult = await engine.ReadSectorsAsync(
-                            recorder,
-                            startLba: currentLba,
-                            sectorCount: 1,
-                            raw2352Mode: options.Raw2352Mode,
-                            sectorConsumer: (lba, mem) =>
-                            {
-                                sectorData = mem.ToArray();
-                                return ValueTask.CompletedTask;
-                            },
-                            progress: null,
-                            cancellationToken: ct).ConfigureAwait(false);
-
-                        if (retryResult.Success && sectorData != null)
-                        {
-                            readSuccess = true;
-                            break;
-                        }
-                    }
-                    catch (Exception)
-                    {
-                        readSuccess = false;
-                    }
-                }
-            }
-
-            // 3. Process read outcome
-            if (readSuccess && sectorData != null)
-            {
-                await outputStream.WriteAsync(sectorData, ct).ConfigureAwait(false);
+                await outputStream.WriteAsync(data, ct).ConfigureAwait(false);
                 sectorsRead++;
-            }
-            else
+            },
+            onUnreadable: async lba =>
             {
-                badSectorLbas.Add(currentLba);
-
-                if (options.ContinueOnUnreadableSector)
+                badSectorLbas.Add(lba);
+                if (!options.ContinueOnUnreadableSector)
                 {
-                    // Zero-fill unreadable sector
-                    await outputStream.WriteAsync(zeroBuffer, ct).ConfigureAwait(false);
-                    sectorsRead++;
+                    return false;
                 }
-                else
-                {
-                    return new RipOperationResult
-                    {
-                        Success = false,
-                        ErrorMessage = $"Unrecovered read error at LBA {currentLba} after {options.MaxRetriesPerSector} retries.",
-                        SectorsRead = sectorsRead,
-                        BadSectorsCount = badSectorLbas.Count,
-                        BadSectorsList = badSectorLbas,
-                        TotalTime = sw.Elapsed,
-                        TotalRetriesPerformed = totalRetries
-                    };
-                }
-            }
 
-            ReportProgress(i + 1, "RippingSectors");
+                // Zero-fill unreadable sector
+                await outputStream.WriteAsync(zeroBuffer, ct).ConfigureAwait(false);
+                sectorsRead++;
+                return true;
+            },
+            onProgress: done => ReportProgress(done, "RippingSectors"),
+            cancellationToken: ct).ConfigureAwait(false);
+
+        totalRetries = outcome.TotalRetries;
+
+        if (!outcome.Completed)
+        {
+            return new RipOperationResult
+            {
+                Success = false,
+                ErrorMessage = $"Unrecovered read error at LBA {outcome.StoppedAtLba} after {options.MaxRetriesPerSector} retries.",
+                SectorsRead = sectorsRead,
+                BadSectorsCount = badSectorLbas.Count,
+                BadSectorsList = badSectorLbas,
+                TotalTime = sw.Elapsed,
+                TotalRetriesPerformed = totalRetries
+            };
         }
 
         await outputStream.FlushAsync(ct).ConfigureAwait(false);

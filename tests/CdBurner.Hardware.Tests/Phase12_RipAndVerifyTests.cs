@@ -53,14 +53,35 @@ public class Phase12_RipAndVerifyTests
         public Task<BurnOperationResult> EraseMediaAsync(IDiscRecorderBackend recorder, bool fullErase, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
             => _inner.EraseMediaAsync(recorder, fullErase, progress, cancellationToken);
 
-        public Task<RipOperationResult> ReadSectorsAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount, bool raw2352Mode, Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
+        public async Task<RipOperationResult> ReadSectorsAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount, bool raw2352Mode, Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
         {
-            for (int i = 0; i < sectorCount; i++)
+            // Count an attempt for every sector the engine actually reached: each delivered sector plus the one it
+            // stopped on. Counting the whole requested range would over-count sectors behind a bad LBA in a batch.
+            int delivered = 0;
+            void Count(int lba) => _readAttemptsByLba.AddOrUpdate(lba, 1, (_, current) => current + 1);
+
+            RipOperationResult result;
+            try
             {
-                _readAttemptsByLba.AddOrUpdate(startLba + i, 1, (_, current) => current + 1);
+                result = await _inner.ReadSectorsAsync(recorder, startLba, sectorCount, raw2352Mode, async (lba, data) =>
+                {
+                    Count(lba);
+                    delivered++;
+                    await sectorConsumer(lba, data);
+                }, progress, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Count(startLba + delivered);
+                throw;
             }
 
-            return _inner.ReadSectorsAsync(recorder, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken);
+            if (!result.Success && delivered < sectorCount)
+            {
+                Count(startLba + delivered);
+            }
+
+            return result;
         }
     }
 
