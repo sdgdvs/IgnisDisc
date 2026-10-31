@@ -59,6 +59,8 @@ public sealed class DvdLayerBreakCandidate
     /// 3. BreakLba <= 2,086,912 (Max Layer 0 capacity).
     /// </summary>
     public bool IsValid =>
+        BreakLba > 0 &&
+        Layer1Sectors > 0 &&
         IsEccAligned &&
         Layer0Sectors >= Layer1Sectors &&
         Layer0Sectors <= DvdLayerBreakCalculator.MaxLayer0Sectors;

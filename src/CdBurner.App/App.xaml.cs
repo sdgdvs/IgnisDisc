@@ -57,11 +57,26 @@ public partial class App : Application
 
         try
         {
-            var settings = new AppSettingsService().CurrentSettings;
-            ThemeManager.Initialize(settings.ThemeMode);
+            var settingsService = new AppSettingsService();
+            settingsService.Load();
+            ThemeManager.Initialize(settingsService.CurrentSettings.ThemeMode);
         }
-        catch
+        catch (Exception ex)
         {
+            LogStartupIssue("Theme/settings initialization failed", ex);
+        }
+
+        var mainVm = Services.GetRequiredService<MainViewModel>();
+        try
+        {
+            mainVm.Settings.SettingsService.Load();
+            mainVm.Settings.LoadSettings();
+            mainVm.ApplySettingsToWorkspaces();
+            mainVm.SelectDefaultWriteSpeed();
+        }
+        catch (Exception ex)
+        {
+            LogStartupIssue("Loading saved settings failed; defaults are in use", ex);
         }
 
         var mainWindow = Services.GetRequiredService<MainWindow>();
@@ -81,8 +96,9 @@ public partial class App : Application
                         ddm.EnablePhysicalDiscovery(true);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    LogStartupIssue("Physical drive discovery failed", ex);
                 }
             });
         }
@@ -97,12 +113,37 @@ public partial class App : Application
                 mainVm.CancelAllActiveOperations();
                 mainVm.Dispose();
             }
+
+            if (Services?.GetService<IDiscDeviceService>() is IDisposable deviceDisposable)
+            {
+                deviceDisposable.Dispose();
+            }
         }
         catch
         {
         }
 
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// Appends a non-fatal startup problem to %LOCALAPPDATA%\IgnisDisc\Logs\startup.log so failures are diagnosable.
+    /// </summary>
+    internal static void LogStartupIssue(string context, Exception ex)
+    {
+        try
+        {
+            string logDir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IgnisDisc", "Logs");
+            System.IO.Directory.CreateDirectory(logDir);
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(logDir, "startup.log"),
+                $"[{DateTime.Now:O}] {context}: {ex}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Logging must never take the app down.
+        }
     }
 
     private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
@@ -113,7 +154,23 @@ public partial class App : Application
                 System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "startup_error.log"),
                 e.Exception.ToString());
         }
-        catch { }
+        catch
+        {
+            try
+            {
+                string logDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "IgnisDisc",
+                    "Logs");
+                System.IO.Directory.CreateDirectory(logDir);
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(logDir, "startup_error.log"),
+                    e.Exception.ToString());
+            }
+            catch
+            {
+            }
+        }
 
         MessageBox.Show(
             $"An unexpected error occurred:\n\n{e.Exception.Message}",

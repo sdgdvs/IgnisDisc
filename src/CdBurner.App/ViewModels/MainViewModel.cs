@@ -35,6 +35,8 @@ public class MainViewModel : ObservableObject, IDisposable
     private NavigationTab _selectedNavigationTab = (NavigationTab)(-1);
     private object? _currentWorkspaceViewModel;
     private CapacityAssessment _currentCapacity;
+    private System.Windows.Threading.DispatcherTimer? _mediaPollTimer;
+    private bool _isPollingMedia;
     private bool _disposed;
 
     #region Properties
@@ -158,6 +160,8 @@ public class MainViewModel : ObservableObject, IDisposable
             {
                 if (_dataBurn != null) _dataBurn.SelectedWriteSpeed = value;
                 if (_audioBurn != null) _audioBurn.SelectedWriteSpeed = value;
+                if (_dvdVideo != null) _dvdVideo.SelectedWriteSpeed = value;
+                if (_imageStudio != null) _imageStudio.SelectedWriteSpeed = value;
             }
         }
     }
@@ -178,7 +182,9 @@ public class MainViewModel : ObservableObject, IDisposable
     public void CancelAllActiveOperations()
     {
         try { _dataBurn?.CancelActiveBurn(); } catch { }
+        try { _dvdVideo?.CancelActiveOperation(); } catch { }
         try { _audioBurn?.CancelActiveBurn(); } catch { }
+        try { _imageStudio?.CancelActiveOperation(); } catch { }
         try { _driveUtilities?.CancelActiveOperation(); } catch { }
 
         if (_selectedRecorder != null)
@@ -408,7 +414,7 @@ public class MainViewModel : ObservableObject, IDisposable
         _imageStudio = new ImageStudioViewModel(_deviceService, _burnEngine);
         _driveUtilities = new DriveUtilitiesViewModel(_deviceService, _burnEngine);
         _virtualDrive = new VirtualDriveViewModel(_deviceService);
-        _settings = new SettingsViewModel();
+        _settings = new SettingsViewModel(null, this);
 
         _dataBurn.PropertyChanged += (_, e) =>
         {
@@ -427,6 +433,10 @@ public class MainViewModel : ObservableObject, IDisposable
             if (e.PropertyName == nameof(DvdVideoViewModel.SelectedRecorder) && !_syncingRecorder && _dvdVideo.SelectedRecorder != null)
             {
                 SelectedRecorder = _dvdVideo.SelectedRecorder;
+            }
+            else if ((e.PropertyName == nameof(DvdVideoViewModel.TotalSectors) || e.PropertyName == nameof(DvdVideoViewModel.IsDualLayerRequired)) && _selectedNavigationTab == NavigationTab.DvdVideo)
+            {
+                UpdateCapacityForActiveWorkspace();
             }
         };
 
@@ -468,7 +478,13 @@ public class MainViewModel : ObservableObject, IDisposable
 
         _settings.SettingsSaved += (_, _) =>
         {
+            var preferredDrive = _settings.SelectedRecorder;
             ReloadRecordersList();
+            if (preferredDrive != null && AvailableRecorders.Contains(preferredDrive))
+            {
+                SelectedRecorder = preferredDrive;
+            }
+            ApplySettingsToWorkspaces();
             SelectDefaultWriteSpeed();
         };
 
@@ -489,9 +505,42 @@ public class MainViewModel : ObservableObject, IDisposable
 
         // Perform initial drive enumeration
         RefreshDrives();
+        ApplySettingsToWorkspaces();
 
         // Set default workspace
         SelectedNavigationTab = NavigationTab.DataDisc;
+    }
+
+    /// <summary>
+    /// Propagates user settings (default verification, eject, Burn-Free, and FFmpeg path) to child workspace view models.
+    /// </summary>
+    public void ApplySettingsToWorkspaces()
+    {
+        if (_settings == null) return;
+
+        if (_settings.SelectedRecorder != null && AvailableRecorders.Contains(_settings.SelectedRecorder))
+        {
+            SelectedRecorder = _settings.SelectedRecorder;
+        }
+
+        if (_dataBurn != null)
+        {
+            _dataBurn.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
+            _dataBurn.EjectAfterBurn = _settings.EjectAfterBurnByDefault;
+            _dataBurn.BufferUnderrunFreeEnabled = _settings.EnableBurnFreeByDefault;
+        }
+
+        if (_imageStudio != null)
+        {
+            _imageStudio.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
+        }
+
+        if (_dvdVideo != null)
+        {
+            _dvdVideo.CustomFfmpegPath = _settings.FfmpegExecutablePath;
+            _dvdVideo.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
+            _dvdVideo.EjectAfterBurn = _settings.EjectAfterBurnByDefault;
+        }
     }
 
     private void InitializeWorkspaces()
@@ -705,22 +754,7 @@ public class MainViewModel : ObservableObject, IDisposable
                 SelectedWriteSpeed = null;
             }
 
-            // Update Capacity Assessment
-            var mediaType = _currentMediaStatus.MediaType != DiscMediaType.NoMedia && _currentMediaStatus.MediaType != DiscMediaType.Unknown
-                ? _currentMediaStatus.MediaType
-                : DiscMediaType.CdR;
-
-            int maxSectors = _currentMediaStatus.TotalSectors > 0
-                ? _currentMediaStatus.TotalSectors
-                : mediaType.GetNominalCapacitySectors();
-
-            if (maxSectors <= 0)
-            {
-                maxSectors = OpticalConstants.Cd700MbSectors;
-            }
-
-            int usedSectors = _currentMediaStatus.UsedSectors;
-            CurrentCapacity = CompilationCapacityCalculator.AssessCapacity(usedSectors, mediaType, maxSectors);
+            UpdateCapacityForActiveWorkspace();
         }
         else
         {
@@ -734,6 +768,172 @@ public class MainViewModel : ObservableObject, IDisposable
             CurrentCapacity = CompilationCapacityCalculator.AssessCapacity(0, DiscMediaType.CdR);
         }
 
+        RefreshCommandStates();
+    }
+
+    private void UpdateCapacityForActiveWorkspace()
+    {
+        if (_selectedNavigationTab == NavigationTab.DvdVideo && _dvdVideo != null && _dvdVideo.TotalSectors > 0)
+        {
+            var dvdMediaType = _currentMediaStatus.MediaPresent && _currentMediaStatus.TotalSectors > OpticalConstants.Cd90MinSectors
+                ? _currentMediaStatus.MediaType
+                : (_dvdVideo.IsDualLayerRequired ? DiscMediaType.DvdPlusRDualLayer : DiscMediaType.DvdMinusR);
+
+            int dvdMaxSectors = _currentMediaStatus.MediaPresent && _currentMediaStatus.TotalSectors > OpticalConstants.Cd90MinSectors
+                ? _currentMediaStatus.TotalSectors
+                : dvdMediaType.GetNominalCapacitySectors();
+
+            if (dvdMaxSectors <= 0)
+            {
+                dvdMaxSectors = OpticalConstants.DvdMinusR5Sectors;
+            }
+
+            CurrentCapacity = CompilationCapacityCalculator.AssessCapacity(_dvdVideo.TotalSectors, dvdMediaType, dvdMaxSectors);
+            return;
+        }
+
+        if (_selectedNavigationTab == NavigationTab.DataDisc && _dataBurn != null && _dataBurn.TotalBytes > 0)
+        {
+            CurrentCapacity = _dataBurn.Capacity;
+            return;
+        }
+
+        var mediaType = _currentMediaStatus.MediaType != DiscMediaType.NoMedia && _currentMediaStatus.MediaType != DiscMediaType.Unknown
+            ? _currentMediaStatus.MediaType
+            : (_selectedNavigationTab == NavigationTab.DvdVideo ? DiscMediaType.DvdMinusR : DiscMediaType.CdR);
+
+        int maxSectors = _currentMediaStatus.TotalSectors > 0
+            ? _currentMediaStatus.TotalSectors
+            : mediaType.GetNominalCapacitySectors();
+
+        if (maxSectors <= 0)
+        {
+            maxSectors = _selectedNavigationTab == NavigationTab.DvdVideo
+                ? OpticalConstants.DvdMinusR5Sectors
+                : OpticalConstants.Cd700MbSectors;
+        }
+
+        int usedSectors = _currentMediaStatus.UsedSectors;
+        CurrentCapacity = CompilationCapacityCalculator.AssessCapacity(usedSectors, mediaType, maxSectors);
+    }
+
+    /// <summary>
+    /// Processes a Win32 window message (such as WM_DEVICECHANGE) from MainWindow.
+    /// </summary>
+    public void ProcessWindowMessage(int msg, nint wParam, nint lParam)
+    {
+        if (_deviceService is DiscDeviceManager ddm)
+        {
+            ddm.ChangeMonitor.ProcessMessage(msg, wParam, lParam);
+        }
+
+        if (msg == DeviceChangeMonitor.WM_DEVICECHANGE)
+        {
+            _ = PollHardwareMediaStatusOnceAsync();
+        }
+    }
+
+    /// <summary>
+    /// Starts a lightweight background timer that polls the selected physical optical drive for newly inserted
+    /// or ejected blank/recorded optical media (including USB drives that do not emit volume arrival messages for blank discs).
+    /// </summary>
+    public void StartHardwareMediaMonitor()
+    {
+        if (_mediaPollTimer != null)
+        {
+            return;
+        }
+
+        _mediaPollTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3.0)
+        };
+        _mediaPollTimer.Tick += async (_, _) => await PollHardwareMediaStatusOnceAsync();
+        _mediaPollTimer.Start();
+
+        _ = PollHardwareMediaStatusOnceAsync();
+    }
+
+    private async Task PollHardwareMediaStatusOnceAsync()
+    {
+        if (_disposed || _isPollingMedia || IsAnyBurnActive)
+        {
+            return;
+        }
+
+        var recorder = _selectedRecorder;
+        if (recorder == null || recorder.IsVirtual)
+        {
+            return;
+        }
+
+        _isPollingMedia = true;
+        try
+        {
+            var prevStatus = _currentMediaStatus;
+            var polled = await Task.Run(() =>
+            {
+                try
+                {
+                    var st = recorder.QueryMediaStatus();
+                    bool hasChanged =
+                        st.MediaPresent != prevStatus.MediaPresent ||
+                        st.MediaType != prevStatus.MediaType ||
+                        st.IsBlank != prevStatus.IsBlank ||
+                        st.TotalSectors != prevStatus.TotalSectors ||
+                        st.FreeSectors != prevStatus.FreeSectors;
+
+                    DriveCapabilitiesDto? caps = hasChanged ? recorder.GetCapabilities() : null;
+                    return (Status: (MediaStatusDto?)st, Caps: caps, Changed: hasChanged);
+                }
+                catch
+                {
+                    return (Status: (MediaStatusDto?)null, Caps: (DriveCapabilitiesDto?)null, Changed: false);
+                }
+            });
+
+            if (polled.Status == null || !polled.Changed || _disposed || _selectedRecorder != recorder || IsAnyBurnActive)
+            {
+                return;
+            }
+
+            ApplyPolledMediaStatus(polled.Status, polled.Caps);
+        }
+        finally
+        {
+            _isPollingMedia = false;
+        }
+    }
+
+    private void ApplyPolledMediaStatus(MediaStatusDto status, DriveCapabilitiesDto? caps)
+    {
+        CurrentMediaStatus = status;
+
+        if (caps != null)
+        {
+            AvailableWriteSpeeds.Clear();
+            if (caps.SupportedWriteSpeeds != null)
+            {
+                foreach (var speed in caps.SupportedWriteSpeeds)
+                {
+                    AvailableWriteSpeeds.Add(speed);
+                }
+            }
+
+            if (AvailableWriteSpeeds.Count > 0)
+            {
+                if (!_selectedWriteSpeed.HasValue || !AvailableWriteSpeeds.Contains(_selectedWriteSpeed.Value))
+                {
+                    SelectDefaultWriteSpeed();
+                }
+            }
+            else
+            {
+                SelectedWriteSpeed = null;
+            }
+        }
+
+        UpdateCapacityForActiveWorkspace();
         RefreshCommandStates();
     }
 
@@ -820,6 +1020,7 @@ public class MainViewModel : ObservableObject, IDisposable
         {
             CurrentWorkspaceViewModel = workspace;
         }
+        UpdateCapacityForActiveWorkspace();
     }
 
     private void RefreshCommandStates()
@@ -835,13 +1036,21 @@ public class MainViewModel : ObservableObject, IDisposable
     {
         void Action()
         {
-            if (_selectedRecorder != null && string.Equals(_selectedRecorder.UniqueId, e.UniqueId, StringComparison.OrdinalIgnoreCase))
+            if (e.ChangeType == DeviceChangeType.Added || e.ChangeType == DeviceChangeType.Removed)
+            {
+                ReloadRecordersList();
+                UpdateMediaStatus();
+            }
+            else if (_selectedRecorder != null &&
+                     (string.IsNullOrEmpty(e.UniqueId) ||
+                      string.Equals(_selectedRecorder.UniqueId, e.UniqueId, StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(_selectedRecorder.VolumePath, e.UniqueId, StringComparison.OrdinalIgnoreCase)))
             {
                 UpdateMediaStatus();
             }
-            else if (e.ChangeType == DeviceChangeType.Added || e.ChangeType == DeviceChangeType.Removed)
+            else if (e.ChangeType == DeviceChangeType.MediaInserted || e.ChangeType == DeviceChangeType.MediaEjected)
             {
-                ReloadRecordersList();
+                UpdateMediaStatus();
             }
         }
 
@@ -868,6 +1077,11 @@ public class MainViewModel : ObservableObject, IDisposable
         {
             if (disposing)
             {
+                if (_mediaPollTimer != null)
+                {
+                    _mediaPollTimer.Stop();
+                    _mediaPollTimer = null;
+                }
                 _deviceService.DeviceChanged -= OnDeviceChanged;
                 if (_ownsDeviceService && _deviceService is IDisposable d)
                 {

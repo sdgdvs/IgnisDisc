@@ -37,6 +37,19 @@ public class DvdVideoViewModel : ObservableObject
     private int _titleSetCount;
     private bool _hasAudioTs;
 
+    private DvdVideoStandard _selectedStandard = DvdVideoStandard.Ntsc;
+    private DvdAspectRatio _selectedAspectRatio = DvdAspectRatio.Widescreen16x9;
+    private bool _autoCreatePlayMenu = true;
+    private string _menuTitle = "DVD Video";
+    private bool _requiresAutoAuthoring;
+    private string? _lastAuthoredVideoTsPath;
+    private string? _tempAuthoredDirectory;
+    private WriteSpeedDescriptor? _selectedWriteSpeed;
+    private string? _customFfmpegPath;
+    private bool _verifyAfterBurn;
+    private bool _ejectAfterBurn;
+    private CancellationTokenSource? _activeCts;
+
     #region Properties
 
     /// <summary>
@@ -50,7 +63,12 @@ public class DvdVideoViewModel : ObservableObject
     public IBurnEngineBackend BurnEngine => _burnEngine;
 
     /// <summary>
-    /// Physical path to the VIDEO_TS directory or root folder containing VIDEO_TS.
+    /// Selected source video files when authoring from arbitrary movie media.
+    /// </summary>
+    public ObservableCollection<string> SourceMediaFiles { get; } = new();
+
+    /// <summary>
+    /// Physical path to the VIDEO_TS directory, root folder containing VIDEO_TS, or delimited movie file list.
     /// </summary>
     public string VideoTsFolderPath
     {
@@ -59,7 +77,9 @@ public class DvdVideoViewModel : ObservableObject
         {
             if (SetProperty(ref _videoTsFolderPath, value))
             {
-                if (!string.IsNullOrWhiteSpace(value) && Directory.Exists(value))
+                SourceMediaFiles.Clear();
+                LastAuthoredVideoTsPath = null;
+                if (!string.IsNullOrWhiteSpace(value))
                 {
                     ValidateAndPlanLayout();
                 }
@@ -79,6 +99,131 @@ public class DvdVideoViewModel : ObservableObject
         get => _volumeLabel;
         set => SetProperty(ref _volumeLabel, value);
     }
+
+    /// <summary>
+    /// Target television broadcast standard (NTSC or PAL).
+    /// </summary>
+    public DvdVideoStandard SelectedStandard
+    {
+        get => _selectedStandard;
+        set => SetProperty(ref _selectedStandard, value);
+    }
+
+    /// <summary>
+    /// Available TV broadcast standards.
+    /// </summary>
+    public IReadOnlyList<DvdVideoStandard> AvailableStandards { get; } = new[] { DvdVideoStandard.Ntsc, DvdVideoStandard.Pal };
+
+    /// <summary>
+    /// Target display aspect ratio (16:9 Widescreen or 4:3 Standard).
+    /// </summary>
+    public DvdAspectRatio SelectedAspectRatio
+    {
+        get => _selectedAspectRatio;
+        set => SetProperty(ref _selectedAspectRatio, value);
+    }
+
+    /// <summary>
+    /// Available display aspect ratios.
+    /// </summary>
+    public IReadOnlyList<DvdAspectRatio> AvailableAspectRatios { get; } = new[] { DvdAspectRatio.Widescreen16x9, DvdAspectRatio.Standard4x3 };
+
+    /// <summary>
+    /// Whether to automatically generate an interactive DVD Root Menu.
+    /// </summary>
+    public bool AutoCreatePlayMenu
+    {
+        get => _autoCreatePlayMenu;
+        set
+        {
+            if (SetProperty(ref _autoCreatePlayMenu, value))
+            {
+                if (RequiresAutoAuthoring)
+                {
+                    ValidateAndPlanLayout();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Title displayed on the interactive DVD Root Menu.
+    /// </summary>
+    public string MenuTitle
+    {
+        get => _menuTitle;
+        set => SetProperty(ref _menuTitle, value);
+    }
+
+    /// <summary>
+    /// Indicates whether the input media requires automated MPEG-2 transcoding or structure normalization.
+    /// </summary>
+    public bool RequiresAutoAuthoring
+    {
+        get => _requiresAutoAuthoring;
+        private set
+        {
+            if (SetProperty(ref _requiresAutoAuthoring, value))
+            {
+                OnPropertyChanged(nameof(ValidationStatusText));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Path to the most recently authored compliant VIDEO_TS folder in temporary storage.
+    /// </summary>
+    public string? LastAuthoredVideoTsPath
+    {
+        get => _lastAuthoredVideoTsPath;
+        private set => SetProperty(ref _lastAuthoredVideoTsPath, value);
+    }
+
+    /// <summary>
+    /// Whether to use FFmpeg when available on the host system to transcode arbitrary video streams.
+    /// </summary>
+    public bool UseFfmpegWhenAvailable { get; set; } = true;
+
+    /// <summary>
+    /// Optional custom path to the FFmpeg executable configured in application settings.
+    /// </summary>
+    public string? CustomFfmpegPath
+    {
+        get => _customFfmpegPath;
+        set => SetProperty(ref _customFfmpegPath, value);
+    }
+
+    /// <summary>
+    /// Currently selected write speed for burning operations.
+    /// </summary>
+    public WriteSpeedDescriptor? SelectedWriteSpeed
+    {
+        get => _selectedWriteSpeed;
+        set => SetProperty(ref _selectedWriteSpeed, value);
+    }
+
+    /// <summary>
+    /// Whether to perform post-burn sector read verification.
+    /// </summary>
+    public bool VerifyAfterBurn
+    {
+        get => _verifyAfterBurn;
+        set => SetProperty(ref _verifyAfterBurn, value);
+    }
+
+    /// <summary>
+    /// Whether to eject the optical drive tray after burning completes.
+    /// </summary>
+    public bool EjectAfterBurn
+    {
+        get => _ejectAfterBurn;
+        set => SetProperty(ref _ejectAfterBurn, value);
+    }
+
+    /// <summary>
+    /// Indicates whether an active operation can be cancelled.
+    /// </summary>
+    public bool CanCancel => _isBusy;
 
     /// <summary>
     /// Indicates whether the specified VIDEO_TS structure passes all DVD-Video standards.
@@ -201,7 +346,7 @@ public class DvdVideoViewModel : ObservableObject
     /// <summary>
     /// Display status of DVD-Video structure check.
     /// </summary>
-    public string ValidationStatusText => IsStructureValid ? "DVD-Video Compliant" : "Structure Invalid";
+    public string ValidationStatusText => !IsStructureValid ? "Structure Invalid" : (RequiresAutoAuthoring ? "Ready (Auto-Convert & Menu)" : "DVD-Video Compliant");
 
     /// <summary>
     /// Display text describing media type requirement.
@@ -214,7 +359,16 @@ public class DvdVideoViewModel : ObservableObject
     public bool IsBusy
     {
         get => _isBusy;
-        set => SetProperty(ref _isBusy, value);
+        set
+        {
+            if (SetProperty(ref _isBusy, value))
+            {
+                OnPropertyChanged(nameof(CanCancel));
+                CancelCommand?.RaiseCanExecuteChanged();
+                BuildDvdIsoCommand?.RaiseCanExecuteChanged();
+                StartDvdBurnCommand?.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>
@@ -248,10 +402,13 @@ public class DvdVideoViewModel : ObservableObject
 
     #region Commands
 
+    public RelayCommand AddMovieFilesCommand { get; }
+    public RelayCommand ClearSourceCommand { get; }
     public RelayCommand SelectVideoTsFolderCommand { get; }
     public RelayCommand ValidateAndPlanLayoutCommand { get; }
     public AsyncRelayCommand BuildDvdIsoCommand { get; }
     public AsyncRelayCommand StartDvdBurnCommand { get; }
+    public RelayCommand CancelCommand { get; }
 
     #endregion
 
@@ -262,8 +419,11 @@ public class DvdVideoViewModel : ObservableObject
         _deviceService = deviceService ?? new DiscDeviceManager(enablePhysicalEnumeration: false);
         _burnEngine = burnEngine ?? new VirtualBurnEngine();
 
+        AddMovieFilesCommand = new RelayCommand(ExecuteAddMovieFiles);
+        ClearSourceCommand = new RelayCommand(_ => ClearSource());
         SelectVideoTsFolderCommand = new RelayCommand(ExecuteSelectVideoTsFolder);
         ValidateAndPlanLayoutCommand = new RelayCommand(_ => ValidateAndPlanLayout());
+        CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => CanCancel);
         BuildDvdIsoCommand = new AsyncRelayCommand(async param =>
         {
             string? path = param as string;
@@ -291,7 +451,61 @@ public class DvdVideoViewModel : ObservableObject
     #region Operations
 
     /// <summary>
-    /// Validates the VIDEO_TS structure at <see cref="VideoTsFolderPath"/> and computes the
+    /// Adds one or more movie file paths to the authoring list, updates the path text,
+    /// and triggers layout planning.
+    /// </summary>
+    public void AddMovieFiles(IEnumerable<string> filePaths)
+    {
+        if (filePaths == null) return;
+
+        foreach (var path in filePaths)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                string full = Path.GetFullPath(path);
+                if (!SourceMediaFiles.Contains(full, StringComparer.OrdinalIgnoreCase))
+                {
+                    SourceMediaFiles.Add(full);
+                }
+            }
+        }
+
+        _videoTsFolderPath = string.Join("; ", SourceMediaFiles);
+        OnPropertyChanged(nameof(VideoTsFolderPath));
+        ValidateAndPlanLayout();
+    }
+
+    /// <summary>
+    /// Clears all source media files and resets state.
+    /// </summary>
+    public void ClearSource()
+    {
+        CleanupTempAuthoredDirectory();
+        SourceMediaFiles.Clear();
+        VideoTsFolderPath = string.Empty;
+    }
+
+    private void CleanupTempAuthoredDirectory()
+    {
+        if (!string.IsNullOrEmpty(_tempAuthoredDirectory))
+        {
+            try
+            {
+                if (Directory.Exists(_tempAuthoredDirectory))
+                {
+                    Directory.Delete(_tempAuthoredDirectory, recursive: true);
+                }
+            }
+            catch
+            {
+            }
+            _tempAuthoredDirectory = null;
+        }
+        LastAuthoredVideoTsPath = null;
+    }
+
+    /// <summary>
+    /// Validates the DVD-Video structure (or movie source files) and computes the
     /// 32 KB ECC aligned physical extent layout.
     /// </summary>
     public void ValidateAndPlanLayout()
@@ -305,55 +519,590 @@ public class DvdVideoViewModel : ObservableObject
         TotalSectors = 0;
         TitleSetCount = 0;
         HasAudioTs = false;
+        LastAuthoredVideoTsPath = null;
+        RequiresAutoAuthoring = false;
 
-        if (string.IsNullOrWhiteSpace(VideoTsFolderPath))
+        List<string> inputs;
+        if (SourceMediaFiles.Count > 0)
+        {
+            inputs = SourceMediaFiles.ToList();
+        }
+        else if (!string.IsNullOrWhiteSpace(VideoTsFolderPath))
+        {
+            inputs = VideoTsFolderPath
+                .Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+        }
+        else
         {
             IsStructureValid = false;
-            ValidationMessages.Add("Please specify a VIDEO_TS folder path.");
+            ValidationMessages.Add("Please specify a VIDEO_TS folder or movie files.");
             return;
         }
 
-        if (!Directory.Exists(VideoTsFolderPath))
+        if (inputs.Count == 0)
         {
             IsStructureValid = false;
-            ValidationMessages.Add($"Directory does not exist: {VideoTsFolderPath}");
+            ValidationMessages.Add("Please specify a VIDEO_TS folder or movie files.");
             return;
         }
 
-        string actualVideoTsPath = ResolveVideoTsPath(VideoTsFolderPath);
-
-        // 1. Structure validation
-        var validator = new DvdVideoValidator();
-        var valResult = validator.ValidateDirectory(actualVideoTsPath);
-        IsStructureValid = valResult.IsValid;
-        TotalSizeBytes = valResult.TotalSizeBytes;
-        TitleSetCount = valResult.TitleSetNumbers.Count;
-        HasAudioTs = valResult.HasAudioTs;
-
-        foreach (var err in valResult.Errors)
+        // 1. First check if a direct VIDEO_TS directory was provided that passes standard validation
+        bool isDirectFolder = SourceMediaFiles.Count == 0 && inputs.Count == 1 && Directory.Exists(inputs[0]);
+        if (isDirectFolder)
         {
-            ValidationMessages.Add($"[Error] {err}");
+            string actualVideoTsPath = ResolveVideoTsPath(inputs[0]);
+            if (Directory.Exists(actualVideoTsPath))
+            {
+                var validator = new DvdVideoValidator();
+                var valResult = validator.ValidateDirectory(actualVideoTsPath);
+
+                bool hasMovieFiles = false;
+                try
+                {
+                    var dirFiles = Directory.GetFiles(actualVideoTsPath, "*.*", SearchOption.TopDirectoryOnly);
+                    hasMovieFiles = dirFiles.Any(f => DvdInputNormalizer.IsSupportedVideoFile(f) && !f.EndsWith(".vob", StringComparison.OrdinalIgnoreCase));
+                }
+                catch { }
+
+                if (valResult.IsValid && !hasMovieFiles)
+                {
+                    RequiresAutoAuthoring = false;
+                    IsStructureValid = true;
+                    TotalSizeBytes = valResult.TotalSizeBytes;
+                    TitleSetCount = valResult.TitleSetNumbers.Count;
+                    HasAudioTs = valResult.HasAudioTs;
+
+                    foreach (var err in valResult.Errors)
+                    {
+                        ValidationMessages.Add($"[Error] {err}");
+                    }
+                    foreach (var warn in valResult.Warnings)
+                    {
+                        ValidationMessages.Add($"[Warning] {warn}");
+                    }
+
+                    ValidationMessages.Add($"VIDEO_TS structure verified: {valResult.TitleSetNumbers.Count} title set(s), {valResult.FileCount} file(s), {CompilationItemViewModel.FormatBytes(valResult.TotalSizeBytes)}.");
+
+                    var planner = new DvdVideoLayoutPlanner();
+                    var videoTsDirInfo = new DirectoryInfo(actualVideoTsPath);
+                    var fileEntries = videoTsDirInfo.GetFiles()
+                        .Where(f => !DvdInputNormalizer.IsIgnoredUselessFile(f.FullName))
+                        .Select(f => (IDvdVideoFileEntry)new FileSystemDvdVideoFileEntry(f))
+                        .ToList();
+
+                    var layout = planner.Plan(fileEntries, startLba: 0);
+                    PopulateLayoutAndDualLayer(layout);
+                    return;
+                }
+            }
         }
-        foreach (var warn in valResult.Warnings)
-        {
-            ValidationMessages.Add($"[Warning] {warn}");
-        }
 
-        if (!valResult.IsValid)
+        // 2. Otherwise analyze with DvdInputNormalizer
+        var analysis = DvdInputNormalizer.AnalyzeInputs(inputs);
+        if (!analysis.CanAuthorOrBurn)
         {
+            IsStructureValid = false;
+            if (analysis.NormalizationNotes.Count > 0)
+            {
+                foreach (var note in analysis.NormalizationNotes)
+                {
+                    ValidationMessages.Add($"[Error] {note}");
+                }
+            }
+            else
+            {
+                ValidationMessages.Add("Input does not contain valid DVD-Video structures or supported movie files.");
+            }
             return;
         }
 
-        ValidationMessages.Add($"VIDEO_TS structure verified: {valResult.TitleSetNumbers.Count} title set(s), {valResult.FileCount} file(s), {CompilationItemViewModel.FormatBytes(valResult.TotalSizeBytes)}.");
+        if (analysis.Kind == DvdInputKind.CompliantVideoTs && analysis.IgnoredFiles.Count == 0)
+        {
+            string actualVideoTsPath = analysis.ExistingVideoTsPath!;
+            var validator = new DvdVideoValidator();
+            var valResult = validator.ValidateDirectory(actualVideoTsPath);
+            RequiresAutoAuthoring = false;
+            IsStructureValid = valResult.IsValid;
+            TotalSizeBytes = valResult.TotalSizeBytes;
+            TitleSetCount = valResult.TitleSetNumbers.Count;
+            HasAudioTs = valResult.HasAudioTs;
 
-        // 2. Physical Layout Planning with 32 KB ECC gap alignment
-        var planner = new DvdVideoLayoutPlanner();
-        var videoTsDirInfo = new DirectoryInfo(actualVideoTsPath);
-        var fileEntries = videoTsDirInfo.GetFiles()
-            .Select(f => (IDvdVideoFileEntry)new FileSystemDvdVideoFileEntry(f))
-            .ToList();
+            foreach (var err in valResult.Errors)
+            {
+                ValidationMessages.Add($"[Error] {err}");
+            }
+            foreach (var warn in valResult.Warnings)
+            {
+                ValidationMessages.Add($"[Warning] {warn}");
+            }
 
-        var layout = planner.Plan(fileEntries, startLba: 0);
+            if (!valResult.IsValid) return;
+
+            ValidationMessages.Add($"VIDEO_TS structure verified: {valResult.TitleSetNumbers.Count} title set(s), {valResult.FileCount} file(s), {CompilationItemViewModel.FormatBytes(valResult.TotalSizeBytes)}.");
+
+            var planner = new DvdVideoLayoutPlanner();
+            var videoTsDirInfo = new DirectoryInfo(actualVideoTsPath);
+            var fileEntries = videoTsDirInfo.GetFiles()
+                .Select(f => (IDvdVideoFileEntry)new FileSystemDvdVideoFileEntry(f))
+                .ToList();
+
+            var layout = planner.Plan(fileEntries, startLba: 0);
+            PopulateLayoutAndDualLayer(layout);
+            return;
+        }
+
+        if (analysis.RequiresAuthoring || analysis.IgnoredFiles.Count > 0)
+        {
+            RequiresAutoAuthoring = true;
+            IsStructureValid = true;
+
+            if (string.IsNullOrWhiteSpace(VolumeLabel) || VolumeLabel == "DVD_VIDEO")
+            {
+                VolumeLabel = analysis.SuggestedVolumeLabel;
+            }
+            if (string.IsNullOrWhiteSpace(MenuTitle) || MenuTitle == "DVD Video")
+            {
+                MenuTitle = analysis.SuggestedMenuTitle;
+            }
+
+            foreach (var note in analysis.NormalizationNotes)
+            {
+                ValidationMessages.Add($"[Info] {note}");
+            }
+            if (analysis.IgnoredFiles.Count > 0)
+            {
+                ValidationMessages.Add($"[Info] Ignored useless file(s): {string.Join(", ", analysis.IgnoredFiles.Select(Path.GetFileName))}");
+            }
+
+            // Build preview layout in ExtentLayoutRows using DvdVideoLayoutPlanner
+            var previewEntries = new List<IDvdVideoFileEntry>();
+            const int ifoBytes = 12288; // 6 sectors = 12,288 bytes
+            previewEntries.Add(new DvdVideoMemoryFileEntry("VIDEO_TS.IFO", new byte[ifoBytes]));
+            if (AutoCreatePlayMenu)
+            {
+                previewEntries.Add(new DvdVideoMemoryFileEntry("VIDEO_TS.VOB", new byte[32768])); // 16 sectors
+            }
+            previewEntries.Add(new DvdVideoMemoryFileEntry("VIDEO_TS.BUP", new byte[ifoBytes]));
+
+            int count = Math.Max(1, analysis.MovieFilePaths.Count);
+            for (int i = 0; i < count; i++)
+            {
+                int setNum = i + 1;
+                long fileLength = 65536L;
+                if (i < analysis.MovieFilePaths.Count)
+                {
+                    try
+                    {
+                        var fi = new FileInfo(analysis.MovieFilePaths[i]);
+                        if (fi.Exists)
+                        {
+                            fileLength = fi.Length;
+                        }
+                    }
+                    catch { }
+                }
+                long vobSize = Math.Max(65536L, fileLength);
+
+                previewEntries.Add(new DvdVideoMemoryFileEntry($"VTS_{setNum:D2}_0.IFO", new byte[ifoBytes]));
+                if (vobSize <= 10_000_000)
+                {
+                    previewEntries.Add(new DvdVideoMemoryFileEntry($"VTS_{setNum:D2}_1.VOB", new byte[(int)vobSize]));
+                }
+                else
+                {
+                    previewEntries.Add(new PreviewDvdVideoFileEntry($"VTS_{setNum:D2}_1.VOB", vobSize));
+                }
+                previewEntries.Add(new DvdVideoMemoryFileEntry($"VTS_{setNum:D2}_0.BUP", new byte[ifoBytes]));
+            }
+
+            var planner = new DvdVideoLayoutPlanner();
+            var layout = planner.Plan(previewEntries, startLba: 0);
+
+            TotalSizeBytes = previewEntries.Sum(e => e.SizeBytes);
+            TitleSetCount = count;
+            HasAudioTs = true;
+            PopulateLayoutAndDualLayer(layout);
+        }
+    }
+
+    /// <summary>
+    /// Cancels any active DVD authoring, transcoding, ISO build, or burn operation.
+    /// </summary>
+    public void CancelActiveOperation()
+    {
+        if (_activeCts != null && !_activeCts.IsCancellationRequested)
+        {
+            StatusMessage = "Cancelling DVD-Video operation...";
+            try
+            {
+                _activeCts.Cancel();
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Executes automated DVD authoring (menu generation and MPEG-2 transcoding) if required,
+    /// populating temporary VIDEO_TS output.
+    /// </summary>
+    public async Task<DvdAuthoringResult> EnsureAuthoredAsync(CancellationToken cancellationToken = default)
+    {
+        List<string> inputs;
+        if (SourceMediaFiles.Count > 0)
+        {
+            inputs = SourceMediaFiles.ToList();
+        }
+        else if (!string.IsNullOrWhiteSpace(VideoTsFolderPath))
+        {
+            inputs = VideoTsFolderPath
+                .Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+        }
+        else
+        {
+            inputs = new List<string>();
+        }
+
+        if (inputs.Count == 0)
+        {
+            return new DvdAuthoringResult
+            {
+                Success = false,
+                ErrorMessage = "No input files specified for authoring."
+            };
+        }
+
+        CleanupTempAuthoredDirectory();
+        string tempAuthorDir = Path.Combine(Path.GetTempPath(), "IgnisDisc_DvdAuthor_" + Guid.NewGuid().ToString("N"));
+        _tempAuthoredDirectory = tempAuthorDir;
+
+        var options = new DvdAuthoringOptions
+        {
+            Standard = SelectedStandard,
+            AspectRatio = SelectedAspectRatio,
+            VolumeLabel = string.IsNullOrWhiteSpace(VolumeLabel) ? "DVD_VIDEO" : VolumeLabel,
+            MenuTitle = string.IsNullOrWhiteSpace(MenuTitle) ? "DVD Video" : MenuTitle,
+            AutoCreatePlayMenu = AutoCreatePlayMenu,
+            UseFfmpegWhenAvailable = UseFfmpegWhenAvailable,
+            CustomFfmpegPath = string.IsNullOrWhiteSpace(CustomFfmpegPath) ? null : CustomFfmpegPath
+        };
+
+        var authoringService = new DvdVideoAuthoringService();
+        var progressHandler = new Progress<(double Percent, string Status)>(snap =>
+        {
+            BurnProgress = Math.Clamp(snap.Percent, 0, 100);
+            StatusMessage = snap.Status;
+        });
+
+        bool manageBusy = !IsBusy;
+        if (manageBusy)
+        {
+            IsBusy = true;
+            BurnProgress = 1.0;
+            StatusMessage = "Preparing DVD-Video authoring pipeline...";
+        }
+
+        try
+        {
+            var result = await authoringService.AuthorAsync(inputs, tempAuthorDir, options, progressHandler, cancellationToken);
+
+            foreach (var note in result.LogNotes)
+            {
+                ValidationMessages.Add($"[Authoring] {note}");
+            }
+
+            if (result.Success)
+            {
+                LastAuthoredVideoTsPath = result.VideoTsDirectory;
+                TotalSizeBytes = result.TotalSizeBytes;
+                TotalSectors = result.TotalSectors;
+                TitleSetCount = result.TitleCount;
+                HasAudioTs = true;
+
+                if (Directory.Exists(result.VideoTsDirectory))
+                {
+                    var dirInfo = new DirectoryInfo(result.VideoTsDirectory);
+                    var fileEntries = dirInfo.GetFiles()
+                        .Select(f => (IDvdVideoFileEntry)new FileSystemDvdVideoFileEntry(f))
+                        .ToList();
+
+                    var planner = new DvdVideoLayoutPlanner();
+                    var layout = planner.Plan(fileEntries, startLba: 0);
+                    ExtentLayoutRows.Clear();
+                    CandidateLayerBreakLbas.Clear();
+                    PopulateLayoutAndDualLayer(layout);
+                }
+            }
+            else if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                ValidationMessages.Add($"[Error] {result.ErrorMessage}");
+            }
+
+            return result;
+        }
+        finally
+        {
+            if (manageBusy)
+            {
+                IsBusy = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds a DVD-Video compliant ISO image stream (UDF 1.02 + ISO 9660 Bridge) with
+    /// 32 KB IFO/BUP ECC gap alignment.
+    /// </summary>
+    public async Task<string> BuildDvdIsoAsync(string? outputPath = null, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(outputPath))
+        {
+            outputPath = Path.Combine(Path.GetTempPath(), $"{VolumeLabel}_{DateTime.Now:yyyyMMddHHmmss}.iso");
+        }
+
+        string? dir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        if (!IsStructureValid)
+        {
+            ValidateAndPlanLayout();
+            if (!IsStructureValid)
+            {
+                throw new InvalidOperationException($"Cannot build DVD ISO: structure is not valid. {string.Join("; ", ValidationMessages)}");
+            }
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _activeCts = cts;
+
+        IsBusy = true;
+        BurnProgress = 1.0;
+        try
+        {
+            if (RequiresAutoAuthoring && (string.IsNullOrEmpty(LastAuthoredVideoTsPath) || !Directory.Exists(LastAuthoredVideoTsPath)))
+            {
+                var authResult = await EnsureAuthoredAsync(cts.Token);
+                if (!authResult.Success)
+                {
+                    throw new InvalidOperationException(authResult.ErrorMessage ?? "DVD authoring failed.");
+                }
+            }
+
+            StatusMessage = "Authoring DVD-Video ISO image...";
+            string actualVideoTsPath = !string.IsNullOrEmpty(LastAuthoredVideoTsPath) && Directory.Exists(LastAuthoredVideoTsPath)
+                ? LastAuthoredVideoTsPath
+                : ResolveVideoTsPath(VideoTsFolderPath);
+
+            var (root, videoTsDir) = CreateDvdCompilationTree(actualVideoTsPath);
+
+            var planner = new DvdVideoLayoutPlanner();
+            planner.ApplyToCompilation(videoTsDir, startLba: 0);
+
+            var buildOptions = new IsoBuildOptions(
+                VolumeLabel: string.IsNullOrWhiteSpace(VolumeLabel) ? "DVD_VIDEO" : VolumeLabel,
+                IncludeIso9660: true,
+                IncludeUdf: true,
+                IncludeJoliet: false,
+                UdfRevision: 0x0102);
+
+            await IsoUdfImageBuilder.BuildToFileAsync(root, outputPath, buildOptions, null, cts.Token);
+            BurnProgress = 100.0;
+            LastBuiltIsoPath = outputPath;
+            StatusMessage = $"DVD-Video ISO built successfully: {Path.GetFileName(outputPath)}";
+            return outputPath;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "DVD-Video ISO build cancelled.";
+            return string.Empty;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error building DVD ISO: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"BuildDvdIsoAsync error: {ex}");
+            return string.Empty;
+        }
+        finally
+        {
+            _activeCts = null;
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Burns the DVD-Video authoring compilation to the target optical recorder drive.
+    /// </summary>
+    public async Task<DataBurnResult> StartDvdBurnAsync(object? parameter = null, CancellationToken cancellationToken = default)
+    {
+        if (!IsStructureValid)
+        {
+            ValidateAndPlanLayout();
+            if (!IsStructureValid)
+            {
+                return DataBurnResult.Failed($"Cannot burn DVD: VIDEO_TS structure is invalid. {string.Join("; ", ValidationMessages)}");
+            }
+        }
+
+        // Resolve and confirm the target optical recorder FIRST before running lengthy transcoding/authoring
+        IDiscRecorderBackend? targetRecorder = null;
+        if (parameter is IDiscRecorderBackend rec)
+        {
+            targetRecorder = rec;
+        }
+        else if (parameter is string driveId && !string.IsNullOrWhiteSpace(driveId))
+        {
+            targetRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase))
+                             ?? DeviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase));
+        }
+        else if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+        {
+            var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
+                _deviceService,
+                AvailableRecorders,
+                SelectedRecorder,
+                $"Burn DVD-Video Disc ({VolumeLabel})");
+
+            if (confirmed == null)
+            {
+                StatusMessage = "DVD-Video burn cancelled by user.";
+                return DataBurnResult.Failed(StatusMessage);
+            }
+
+            SelectedRecorder = confirmed;
+            targetRecorder = confirmed;
+        }
+
+        targetRecorder ??= SelectedRecorder;
+        if (targetRecorder == null)
+        {
+            RefreshDrives();
+            targetRecorder = SelectedRecorder;
+        }
+
+        if (targetRecorder == null)
+        {
+            return DataBurnResult.Failed("No optical recorder selected or available.");
+        }
+
+        // Auto-mount blank DVD media on virtual drive if needed
+        if (targetRecorder is VirtualDiscRecorder vRec)
+        {
+            var mediaStatus = vRec.QueryMediaStatus();
+            if (!mediaStatus.MediaPresent || (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable))
+            {
+                vRec.InsertMedia(VirtualDiscMedium.CreateBlankDvdR47());
+            }
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _activeCts = cts;
+
+        IsBusy = true;
+        BurnProgress = 1.0;
+
+        try
+        {
+            if (RequiresAutoAuthoring && (string.IsNullOrEmpty(LastAuthoredVideoTsPath) || !Directory.Exists(LastAuthoredVideoTsPath)))
+            {
+                StatusMessage = "Transcoding & authoring DVD-Video structure...";
+                var authResult = await EnsureAuthoredAsync(cts.Token);
+                if (!authResult.Success)
+                {
+                    StatusMessage = $"Authoring failed: {authResult.ErrorMessage}";
+                    return DataBurnResult.Failed(authResult.ErrorMessage ?? "DVD authoring failed.");
+                }
+            }
+
+            StatusMessage = $"Building ISO & burning DVD-Video disc to {targetRecorder.VolumePath} ({targetRecorder.ProductId})...";
+            BurnProgress = 0;
+
+            string actualVideoTsPath = !string.IsNullOrEmpty(LastAuthoredVideoTsPath) && Directory.Exists(LastAuthoredVideoTsPath)
+                ? LastAuthoredVideoTsPath
+                : ResolveVideoTsPath(VideoTsFolderPath);
+
+            var (root, videoTsDir) = CreateDvdCompilationTree(actualVideoTsPath);
+
+            var planner = new DvdVideoLayoutPlanner();
+            planner.ApplyToCompilation(videoTsDir, startLba: 0);
+
+            string effectiveLabel = !string.IsNullOrWhiteSpace(VolumeLabel) ? VolumeLabel : "DVD_VIDEO";
+            var buildOptions = new IsoBuildOptions(
+                VolumeLabel: effectiveLabel,
+                IncludeIso9660: true,
+                IncludeUdf: true,
+                IncludeJoliet: false,
+                UdfRevision: 0x0102);
+
+            var burnOptions = new DataBurnOptions
+            {
+                VolumeLabel = effectiveLabel,
+                CloseDisc = true,
+                VerifyAfterBurn = VerifyAfterBurn,
+                EjectAfterBurn = EjectAfterBurn,
+                Speed = SelectedWriteSpeed
+            };
+
+            var burnService = new DataBurnService(_burnEngine);
+            var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
+            {
+                if (snap.TotalLba > 0)
+                {
+                    BurnProgress = Math.Clamp((double)snap.CurrentLba / snap.TotalLba * 100.0, 0, 100);
+                }
+                else
+                {
+                    BurnProgress = Math.Clamp(snap.BufferLevelPercent, 0, 100);
+                }
+
+                if (!string.IsNullOrEmpty(snap.CurrentActionDescription))
+                {
+                    StatusMessage = $"{snap.CurrentActionDescription} ({BurnProgress:F0}%)";
+                }
+            });
+
+            var result = await burnService.BurnCompilationAsync(targetRecorder, root, burnOptions, buildOptions, progressHandler, cts.Token);
+            if (result.Success)
+            {
+                BurnProgress = 100.0;
+                StatusMessage = $"DVD-Video burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath}).";
+            }
+            else
+            {
+                StatusMessage = $"Burn failed: {result.ErrorMessage}";
+            }
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "DVD-Video burn cancelled.";
+            return DataBurnResult.Cancelled(StatusMessage);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"StartDvdBurnAsync error: {ex}");
+            return DataBurnResult.Failed(ex.Message, ex);
+        }
+        finally
+        {
+            CleanupTempAuthoredDirectory();
+            _activeCts = null;
+            IsBusy = false;
+        }
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private void PopulateLayoutAndDualLayer(DvdVideoLayout layout)
+    {
         TotalSectors = layout.TotalSectors;
 
         foreach (var placement in layout.Placements)
@@ -414,191 +1163,6 @@ public class DvdVideoViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// Builds a DVD-Video compliant ISO image stream (UDF 1.02 + ISO 9660 Bridge) with
-    /// 32 KB IFO/BUP ECC gap alignment.
-    /// </summary>
-    public async Task<string> BuildDvdIsoAsync(string? outputPath = null, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(outputPath))
-        {
-            outputPath = Path.Combine(Path.GetTempPath(), $"{VolumeLabel}_{DateTime.Now:yyyyMMddHHmmss}.iso");
-        }
-
-        string? dir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        if (!IsStructureValid)
-        {
-            ValidateAndPlanLayout();
-            if (!IsStructureValid)
-            {
-                throw new InvalidOperationException($"Cannot build DVD ISO: structure is not valid. {string.Join("; ", ValidationMessages)}");
-            }
-        }
-
-        IsBusy = true;
-        StatusMessage = "Authoring DVD-Video ISO image...";
-        try
-        {
-            string actualVideoTsPath = ResolveVideoTsPath(VideoTsFolderPath);
-            var (root, videoTsDir) = CreateDvdCompilationTree(actualVideoTsPath);
-
-            var planner = new DvdVideoLayoutPlanner();
-            planner.ApplyToCompilation(videoTsDir, startLba: 0);
-
-            var buildOptions = new IsoBuildOptions(
-                VolumeLabel: string.IsNullOrWhiteSpace(VolumeLabel) ? "DVD_VIDEO" : VolumeLabel,
-                IncludeIso9660: true,
-                IncludeUdf: true,
-                IncludeJoliet: false,
-                UdfRevision: 0x0102);
-
-            await IsoUdfImageBuilder.BuildToFileAsync(root, outputPath, buildOptions, null, cancellationToken);
-            LastBuiltIsoPath = outputPath;
-            StatusMessage = $"DVD-Video ISO built successfully: {Path.GetFileName(outputPath)}";
-            return outputPath;
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
-
-    /// <summary>
-    /// Burns the DVD-Video authoring compilation to the target optical recorder drive.
-    /// </summary>
-    public async Task<DataBurnResult> StartDvdBurnAsync(object? parameter = null, CancellationToken cancellationToken = default)
-    {
-        if (!IsStructureValid)
-        {
-            ValidateAndPlanLayout();
-            if (!IsStructureValid)
-            {
-                return DataBurnResult.Failed($"Cannot burn DVD: VIDEO_TS structure is invalid. {string.Join("; ", ValidationMessages)}");
-            }
-        }
-
-        IDiscRecorderBackend? targetRecorder = null;
-        if (parameter is IDiscRecorderBackend rec)
-        {
-            targetRecorder = rec;
-        }
-        else if (parameter is string driveId && !string.IsNullOrWhiteSpace(driveId))
-        {
-            targetRecorder = AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase))
-                             ?? DeviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, driveId, StringComparison.OrdinalIgnoreCase));
-        }
-        else if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
-        {
-            var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
-                _deviceService,
-                AvailableRecorders,
-                SelectedRecorder,
-                $"Burn DVD-Video Disc ({VolumeLabel})");
-
-            if (confirmed == null)
-            {
-                StatusMessage = "DVD-Video burn cancelled by user.";
-                return DataBurnResult.Failed(StatusMessage);
-            }
-
-            SelectedRecorder = confirmed;
-            targetRecorder = confirmed;
-        }
-
-        targetRecorder ??= SelectedRecorder;
-        if (targetRecorder == null)
-        {
-            RefreshDrives();
-            targetRecorder = SelectedRecorder;
-        }
-
-        if (targetRecorder == null)
-        {
-            return DataBurnResult.Failed("No optical recorder selected or available.");
-        }
-
-        // Auto-mount blank DVD media on virtual drive if needed
-        if (targetRecorder is VirtualDiscRecorder vRec)
-        {
-            var mediaStatus = vRec.QueryMediaStatus();
-            if (!mediaStatus.MediaPresent || (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable))
-            {
-                vRec.InsertMedia(VirtualDiscMedium.CreateBlankDvdR47());
-            }
-        }
-
-        IsBusy = true;
-        StatusMessage = $"Burning DVD-Video disc to {targetRecorder.VolumePath} ({targetRecorder.ProductId})...";
-        BurnProgress = 0;
-
-        try
-        {
-            string actualVideoTsPath = ResolveVideoTsPath(VideoTsFolderPath);
-            var (root, videoTsDir) = CreateDvdCompilationTree(actualVideoTsPath);
-
-            var planner = new DvdVideoLayoutPlanner();
-            planner.ApplyToCompilation(videoTsDir, startLba: 0);
-
-            string effectiveLabel = !string.IsNullOrWhiteSpace(VolumeLabel) ? VolumeLabel : "DVD_VIDEO";
-            var buildOptions = new IsoBuildOptions(
-                VolumeLabel: effectiveLabel,
-                IncludeIso9660: true,
-                IncludeUdf: true,
-                IncludeJoliet: false,
-                UdfRevision: 0x0102);
-
-            var burnOptions = new DataBurnOptions
-            {
-                VolumeLabel = effectiveLabel,
-                CloseDisc = true,
-                VerifyAfterBurn = false
-            };
-
-            var burnService = new DataBurnService(_burnEngine);
-            var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
-            {
-                if (snap.TotalLba > 0)
-                {
-                    BurnProgress = Math.Clamp((double)snap.CurrentLba / snap.TotalLba * 100.0, 0, 100);
-                }
-                else
-                {
-                    BurnProgress = Math.Clamp(snap.BufferLevelPercent, 0, 100);
-                }
-
-                if (!string.IsNullOrEmpty(snap.CurrentActionDescription))
-                {
-                    StatusMessage = $"{snap.CurrentActionDescription} ({BurnProgress:F0}%)";
-                }
-            });
-
-            var result = await burnService.BurnCompilationAsync(targetRecorder, root, burnOptions, buildOptions, progressHandler, cancellationToken);
-            if (result.Success)
-            {
-                BurnProgress = 100.0;
-                StatusMessage = $"DVD-Video burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath}).";
-            }
-            else
-            {
-                StatusMessage = $"Burn failed: {result.ErrorMessage}";
-            }
-            return result;
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
-
-    #endregion
-
-    #region Helpers
-
     private void RefreshDrives()
     {
         var recorders = _deviceService.GetRecorders();
@@ -615,7 +1179,10 @@ public class DvdVideoViewModel : ObservableObject
 
     private void ResetState()
     {
+        CleanupTempAuthoredDirectory();
         IsStructureValid = false;
+        RequiresAutoAuthoring = false;
+        LastAuthoredVideoTsPath = null;
         ValidationMessages.Clear();
         ExtentLayoutRows.Clear();
         CandidateLayerBreakLbas.Clear();
@@ -625,6 +1192,31 @@ public class DvdVideoViewModel : ObservableObject
         TotalSectors = 0;
         TitleSetCount = 0;
         HasAudioTs = false;
+    }
+
+    private void ExecuteAddMovieFiles(object? parameter)
+    {
+        if (parameter is IEnumerable<string> paths)
+        {
+            AddMovieFiles(paths);
+            return;
+        }
+        if (parameter is string single && !string.IsNullOrWhiteSpace(single))
+        {
+            AddMovieFiles([single]);
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select Movie Video Files",
+            Multiselect = true,
+            Filter = "Video Files (*.mkv;*.mp4;*.avi;*.mov;*.wmv;*.mpg;*.vob;*.ts)|*.mkv;*.mp4;*.avi;*.mov;*.wmv;*.mpg;*.vob;*.ts;*.m4v;*.webm;*.m2ts|All Files (*.*)|*.*"
+        };
+        if (dlg.ShowDialog() == true && dlg.FileNames != null && dlg.FileNames.Length > 0)
+        {
+            AddMovieFiles(dlg.FileNames);
+        }
     }
 
     private void ExecuteSelectVideoTsFolder(object? parameter)
@@ -671,7 +1263,8 @@ public class DvdVideoViewModel : ObservableObject
         var videoTsDir = root.AddDirectory("VIDEO_TS");
         PopulateDirectoryFromDisk(videoTsDir, actualVideoTsPath);
 
-        // Check for sibling or parent AUDIO_TS
+        // Check for sibling or parent AUDIO_TS; guarantee AUDIO_TS always exists
+        bool hasAudioTs = false;
         var dirInfo = new DirectoryInfo(actualVideoTsPath);
         string? parent = dirInfo.Parent?.FullName;
         if (!string.IsNullOrEmpty(parent))
@@ -681,7 +1274,13 @@ public class DvdVideoViewModel : ObservableObject
             {
                 var audioTsDir = root.AddDirectory("AUDIO_TS");
                 PopulateDirectoryFromDisk(audioTsDir, siblingAudioTs);
+                hasAudioTs = true;
             }
+        }
+
+        if (!hasAudioTs)
+        {
+            root.AddDirectory("AUDIO_TS");
         }
 
         return (root, videoTsDir);
@@ -694,6 +1293,10 @@ public class DvdVideoViewModel : ObservableObject
 
         foreach (var file in di.GetFiles())
         {
+            if (DvdInputNormalizer.IsIgnoredUselessFile(file.FullName))
+            {
+                continue;
+            }
             targetDir.AddFile(new CompilationFile(file.FullName, file.Length));
         }
 
@@ -702,6 +1305,20 @@ public class DvdVideoViewModel : ObservableObject
             var child = targetDir.AddDirectory(sub.Name);
             PopulateDirectoryFromDisk(child, sub.FullName);
         }
+    }
+
+    private sealed class PreviewDvdVideoFileEntry : IDvdVideoFileEntry
+    {
+        public string Name { get; }
+        public long SizeBytes { get; }
+
+        public PreviewDvdVideoFileEntry(string name, long sizeBytes)
+        {
+            Name = name ?? throw new ArgumentNullException(nameof(name));
+            SizeBytes = sizeBytes;
+        }
+
+        public Stream OpenRead() => Stream.Null;
     }
 
     #endregion

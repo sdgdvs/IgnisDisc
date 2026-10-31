@@ -61,7 +61,7 @@ public static class CueSheetWriter
             {
                 writer.WriteLine($"REM {kvp.Key}");
             }
-            else if (kvp.Value.Contains(' ') || kvp.Value.Contains('\t') || kvp.Value.Contains('"'))
+            else if (kvp.Value.Contains(' ') || kvp.Value.Contains('\t') || kvp.Value.Contains('"') || kvp.Value.Contains('\r') || kvp.Value.Contains('\n'))
             {
                 writer.WriteLine($"REM {kvp.Key} \"{EscapeString(kvp.Value)}\"");
             }
@@ -162,7 +162,7 @@ public static class CueSheetWriter
             {
                 await writer.WriteLineAsync($"REM {kvp.Key}");
             }
-            else if (kvp.Value.Contains(' ') || kvp.Value.Contains('\t') || kvp.Value.Contains('"'))
+            else if (kvp.Value.Contains(' ') || kvp.Value.Contains('\t') || kvp.Value.Contains('"') || kvp.Value.Contains('\r') || kvp.Value.Contains('\n'))
             {
                 await writer.WriteLineAsync($"REM {kvp.Key} \"{EscapeString(kvp.Value)}\"");
             }
@@ -258,5 +258,5 @@ public static class CueSheetWriter
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown track data type.")
     };
 
-    private static string EscapeString(string s) => s.Replace("\"", "\\\"");
+    private static string EscapeString(string s) => s.Replace("\r", " ").Replace("\n", " ").Replace("\"", "\\\"");
 }

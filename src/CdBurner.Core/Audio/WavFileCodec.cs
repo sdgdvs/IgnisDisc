@@ -261,6 +261,12 @@ public static class WavFileCodec
             return stereoBytes;
         }
 
+        long targetFramesLong = (long)Math.Round((double)inputFrames * OpticalConstants.CdAudioSampleRate / parsed.SampleRate);
+        if (targetFramesLong <= 0 || targetFramesLong > 200_000_000)
+        {
+            throw new InvalidDataException($"Decoded audio frame count ({targetFramesLong}) is invalid or exceeds maximum supported Red Book CD-DA length.");
+        }
+
         // General conversion: Extract normalized floating-point channels [-1.0f .. +1.0f]
         float[] leftChannel = new float[inputFrames];
         float[] rightChannel = new float[inputFrames];
@@ -287,7 +293,7 @@ public static class WavFileCodec
         }
         else
         {
-            outputFrames = (int)Math.Round((double)inputFrames * OpticalConstants.CdAudioSampleRate / parsed.SampleRate);
+            outputFrames = (int)targetFramesLong;
             outLeft = new float[outputFrames];
             outRight = new float[outputFrames];
 
@@ -489,6 +495,11 @@ public static class WavFileCodec
 
             if (chunkIdBytes.AsSpan().SequenceEqual(FmtHeader))
             {
+                if (chunkSize < 16)
+                {
+                    throw new InvalidDataException("Invalid WAVE file: 'fmt ' chunk size must be at least 16 bytes.");
+                }
+
                 fmtFound = true;
                 info.AudioFormat = reader.ReadUInt16();
                 info.Channels = reader.ReadUInt16();
@@ -496,6 +507,23 @@ public static class WavFileCodec
                 uint byteRate = reader.ReadUInt32();
                 ushort blockAlign = reader.ReadUInt16();
                 info.BitsPerSample = reader.ReadUInt16();
+
+                if (info.AudioFormat != WaveFormatPcm &&
+                    info.AudioFormat != WaveFormatIeeeFloat &&
+                    info.AudioFormat != WaveFormatExtensible)
+                {
+                    throw new NotSupportedException($"Unsupported WAVE audio format tag: 0x{info.AudioFormat:X4}.");
+                }
+
+                if (info.Channels is < 1 or > 32)
+                {
+                    throw new InvalidDataException($"Invalid WAVE channel count: {info.Channels}.");
+                }
+
+                if (info.SampleRate is < 1000 or > 384000)
+                {
+                    throw new InvalidDataException($"Invalid WAVE sample rate: {info.SampleRate} Hz.");
+                }
 
                 if (info.AudioFormat == WaveFormatIeeeFloat)
                 {
@@ -513,6 +541,10 @@ public static class WavFileCodec
                         if (subFormat == SubFormatIeeeFloat)
                         {
                             info.IsFloat = true;
+                        }
+                        else if (subFormat != SubFormatPcm)
+                        {
+                            throw new NotSupportedException($"Unsupported WAVE extensible sub-format: {subFormat}.");
                         }
                     }
                 }
@@ -532,7 +564,7 @@ public static class WavFileCodec
                 // If fmt was already found, we can proceed or keep scanning for LIST metadata
                 if (stream.CanSeek)
                 {
-                    stream.Position = chunkStart + chunkSize;
+                    stream.Position = Math.Min(stream.Length, chunkStart + chunkSize);
                     if ((chunkSize % 2) != 0 && stream.Position < stream.Length)
                     {
                         stream.Position++; // Pad byte
@@ -547,11 +579,16 @@ public static class WavFileCodec
                 if (listType.AsSpan().SequenceEqual("INFO"u8))
                 {
                     long listEnd = chunkStart + chunkSize;
+                    if (stream.CanSeek)
+                    {
+                        listEnd = Math.Min(listEnd, stream.Length);
+                    }
                     while (stream.Position + 8 <= listEnd)
                     {
                         byte[] tagBytes = reader.ReadBytes(4);
+                        if (tagBytes.Length < 4) break;
                         uint tagSize = reader.ReadUInt32();
-                        if (tagSize > 0 && stream.Position + tagSize <= listEnd)
+                        if (tagSize > 0 && tagSize <= 65536 && stream.Position + tagSize <= listEnd)
                         {
                             byte[] valBytes = reader.ReadBytes((int)tagSize);
                             string text = Encoding.ASCII.GetString(valBytes).TrimEnd('\0', ' ');
@@ -579,7 +616,7 @@ public static class WavFileCodec
             // Seek past current chunk
             if (stream.CanSeek)
             {
-                stream.Position = chunkStart + chunkSize;
+                stream.Position = Math.Min(stream.Length, chunkStart + chunkSize);
                 if ((chunkSize % 2) != 0 && stream.Position < stream.Length)
                 {
                     stream.Position++; // RIFF word alignment
@@ -587,8 +624,12 @@ public static class WavFileCodec
             }
             else
             {
-                int toSkip = (int)chunkSize + ((chunkSize % 2) != 0 ? 1 : 0);
-                reader.ReadBytes(toSkip);
+                long toSkip = (long)chunkSize + ((chunkSize % 2) != 0 ? 1L : 0L);
+                if (toSkip > 64 * 1024 * 1024)
+                {
+                    throw new InvalidDataException($"WAVE chunk size ({chunkSize}) is too large to skip on a non-seekable stream.");
+                }
+                reader.ReadBytes((int)toSkip);
             }
         }
 

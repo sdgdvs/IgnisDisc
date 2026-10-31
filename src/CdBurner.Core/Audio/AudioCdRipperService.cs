@@ -96,6 +96,13 @@ public class AudioCdRipResult
 /// </summary>
 public class AudioCdRipperService
 {
+    private static readonly HashSet<string> ReservedWindowsDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
+
     /// <summary>
     /// Sanitizes a string for use in Windows file paths, replacing illegal characters with underscores.
     /// </summary>
@@ -110,8 +117,24 @@ public class AudioCdRipperService
             sb.Append(invalidChars.Contains(c) ? '_' : c);
         }
 
-        string result = sb.ToString().Trim();
-        return string.IsNullOrEmpty(result) ? "Unknown" : result;
+        string result = sb.ToString().Trim().TrimEnd('.');
+        if (result.Length == 0 || result is "." or "..")
+        {
+            return "Track";
+        }
+
+        string baseName = Path.GetFileNameWithoutExtension(result);
+        if (ReservedWindowsDeviceNames.Contains(result) || ReservedWindowsDeviceNames.Contains(baseName))
+        {
+            result = "_" + result;
+        }
+
+        if (result.Length > 100)
+        {
+            result = result[..100].TrimEnd('.', ' ');
+        }
+
+        return string.IsNullOrEmpty(result) ? "Track" : result;
     }
 
     /// <summary>
@@ -124,6 +147,27 @@ public class AudioCdRipperService
 
         CdTextAlbumMetadata? cdText = null;
         var tracks = new List<AudioDiscoveredTrack>();
+
+        // Physical drives: read the real Table of Contents
+        if (recorder is IDiscTocProvider tocProvider)
+        {
+            var toc = tocProvider.ReadTableOfContents();
+            foreach (var t in toc.Where(t => t.IsAudio))
+            {
+                tracks.Add(new AudioDiscoveredTrack(
+                    t.TrackNumber,
+                    t.StartLba,
+                    t.SectorCount,
+                    t.TrackNumber == 1 ? OpticalConstants.CdLeadInFrames : 0,
+                    $"Track {t.TrackNumber:D2}",
+                    "Unknown Artist"));
+            }
+
+            if (tracks.Count > 0)
+            {
+                return (tracks, null);
+            }
+        }
 
         // Check if recorder exposes CurrentMedium (VirtualDiscRecorder or via reflection)
         object? mediumObj = null;
@@ -291,13 +335,14 @@ public class AudioCdRipperService
                 OpticalConstants.CdAudioChannels,
                 OpticalConstants.CdAudioBitsPerSample);
 
+            RipOperationResult ripResult;
             await using (var fileStream = new FileStream(targetWavPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
             {
                 // Write standard 44-byte RIFF WAVE header
                 await fileStream.WriteAsync(wavHeader, cancellationToken).ConfigureAwait(false);
 
                 // Read raw 2352-byte audio sectors from disc directly into the file stream
-                var ripResult = await engine.ReadSectorsAsync(
+                ripResult = await engine.ReadSectorsAsync(
                     recorder,
                     track.StartLba,
                     track.SectorCount,
@@ -308,13 +353,25 @@ public class AudioCdRipperService
                     },
                     progress: progress,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
 
-                if (!ripResult.Success && !options.ContinueOnUnreadableSector)
+            if (!ripResult.Success && !options.ContinueOnUnreadableSector)
+            {
+                try
                 {
-                    return AudioCdRipResult.Failed(
-                        $"Failed to rip track {track.TrackNumber} ('{track.Title}'): {ripResult.ErrorMessage}",
-                        ripResult.Exception);
+                    if (File.Exists(targetWavPath))
+                    {
+                        File.Delete(targetWavPath);
+                    }
                 }
+                catch
+                {
+                    // Best-effort cleanup of incomplete WAV file
+                }
+
+                return AudioCdRipResult.Failed(
+                    $"Failed to rip track {track.TrackNumber} ('{track.Title}'): {ripResult.ErrorMessage}",
+                    ripResult.Exception);
             }
 
             rippedFilePaths.Add(targetWavPath);
@@ -325,7 +382,10 @@ public class AudioCdRipperService
         string? cueSheetPath = null;
         if (options.GenerateCueSheet && rippedFilePaths.Count > 0)
         {
-            cueSheetPath = Path.Combine(outputDirectory, options.CueSheetFileName ?? "album.cue");
+            string cueBaseName = SanitizeFileName(Path.GetFileNameWithoutExtension(options.CueSheetFileName ?? "album"));
+            if (string.IsNullOrEmpty(cueBaseName)) cueBaseName = "album";
+            string safeCueName = cueBaseName + ".cue";
+            cueSheetPath = Path.Combine(outputDirectory, safeCueName);
             var cueFiles = new List<CueFileEntry>();
 
             for (int i = 0; i < tracksToRip.Count; i++)

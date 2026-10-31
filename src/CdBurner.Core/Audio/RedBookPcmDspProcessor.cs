@@ -178,6 +178,10 @@ public static class RedBookPcmDspProcessor
     public static Stream NormalizePcmStream(Stream pcmStream, double targetPeakRatio = DefaultTargetPeakRatio)
     {
         ArgumentNullException.ThrowIfNull(pcmStream);
+        if (!double.IsFinite(targetPeakRatio) || targetPeakRatio <= 0.0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetPeakRatio), "Target peak ratio must be a finite positive value.");
+        }
 
         long initialPos = pcmStream.CanSeek ? pcmStream.Position : 0;
         if (pcmStream.CanSeek)
@@ -211,6 +215,11 @@ public static class RedBookPcmDspProcessor
     /// </summary>
     public static byte[] NormalizePcm(ReadOnlySpan<byte> pcmData, double targetPeakRatio = DefaultTargetPeakRatio)
     {
+        if (!double.IsFinite(targetPeakRatio) || targetPeakRatio <= 0.0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetPeakRatio), "Target peak ratio must be a finite positive value.");
+        }
+
         int sampleCount = pcmData.Length / 2;
         if (sampleCount == 0)
         {

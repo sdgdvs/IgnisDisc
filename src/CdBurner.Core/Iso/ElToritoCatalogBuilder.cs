@@ -135,19 +135,15 @@ public static class ElToritoCatalogBuilder
         // 3. Additional Section Headers and Section Entries (bytes 64..)
         if (configuration.AdditionalSectionEntries != null && configuration.AdditionalSectionEntries.Count > 0)
         {
+            int maxSections = Math.Min(configuration.AdditionalSectionEntries.Count, (SectorSize - 64) / 64);
             int offset = 64;
-            for (int i = 0; i < configuration.AdditionalSectionEntries.Count; i++)
+            for (int i = 0; i < maxSections; i++)
             {
-                if (offset + 64 > SectorSize)
-                {
-                    break; // Catalog sector boundary limit
-                }
-
                 var sectionSpec = configuration.AdditionalSectionEntries[i];
                 uint sectionLoadRba = (additionalLoadRbas != null && i < additionalLoadRbas.Count)
                     ? additionalLoadRbas[i]
                     : 0;
-                bool isFinal = (i == configuration.AdditionalSectionEntries.Count - 1);
+                bool isFinal = (i == maxSections - 1);
 
                 // Section Header (32 bytes)
                 sector[offset] = isFinal ? (byte)0x91 : (byte)0x90;

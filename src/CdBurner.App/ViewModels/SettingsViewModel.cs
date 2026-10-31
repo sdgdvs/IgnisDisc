@@ -13,6 +13,7 @@ namespace CdBurner.App.ViewModels;
 public class SettingsViewModel : ObservableObject
 {
     private readonly AppSettingsService _settingsService;
+    private readonly MainViewModel? _mainViewModel;
 
     private int _defaultWriteSpeedMultiplier;
     private bool _verifyAfterBurnByDefault;
@@ -190,9 +191,10 @@ public class SettingsViewModel : ObservableObject
     /// <summary>
     /// Initializes a new instance of <see cref="SettingsViewModel"/>.
     /// </summary>
-    public SettingsViewModel(AppSettingsService? settingsService = null)
+    public SettingsViewModel(AppSettingsService? settingsService = null, MainViewModel? mainViewModel = null)
     {
         _settingsService = settingsService ?? new AppSettingsService();
+        _mainViewModel = mainViewModel;
 
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
@@ -240,6 +242,10 @@ public class SettingsViewModel : ObservableObject
         _settingsService.CurrentSettings = settings;
         _settingsService.Save();
         ThemeManager.ApplyTheme(ThemeMode);
+        if (_mainViewModel != null && SelectedRecorder != null)
+        {
+            _mainViewModel.SelectedRecorder = SelectedRecorder;
+        }
         StatusMessage = "Settings saved successfully.";
         SettingsSaved?.Invoke(this, EventArgs.Empty);
     }

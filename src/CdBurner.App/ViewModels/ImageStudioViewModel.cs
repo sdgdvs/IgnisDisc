@@ -43,6 +43,8 @@ public class ImageStudioViewModel : ObservableObject
     private bool _isChecksumMatch;
 
     private IDiscRecorderBackend? _selectedRecorder;
+    private WriteSpeedDescriptor? _selectedWriteSpeed;
+    private CancellationTokenSource? _activeCts;
     private bool _isBusy;
     private string _statusMessage = "Ready";
     private double _burnProgress;
@@ -211,6 +213,20 @@ public class ImageStudioViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Currently selected write speed for burning operations.
+    /// </summary>
+    public WriteSpeedDescriptor? SelectedWriteSpeed
+    {
+        get => _selectedWriteSpeed;
+        set => SetProperty(ref _selectedWriteSpeed, value);
+    }
+
+    /// <summary>
+    /// Indicates whether an active operation can be cancelled.
+    /// </summary>
+    public bool CanCancel => _isBusy;
+
+    /// <summary>
     /// Indicates whether an asynchronous operation is in progress.
     /// </summary>
     public bool IsBusy
@@ -220,9 +236,11 @@ public class ImageStudioViewModel : ObservableObject
         {
             if (SetProperty(ref _isBusy, value))
             {
+                OnPropertyChanged(nameof(CanCancel));
                 BurnImageToDiscCommand.RaiseCanExecuteChanged();
                 RipDiscToImageCommand.RaiseCanExecuteChanged();
                 VerifyDiscAgainstImageCommand.RaiseCanExecuteChanged();
+                CancelCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -323,6 +341,11 @@ public class ImageStudioViewModel : ObservableObject
     /// </summary>
     public RelayCommand BrowseRipTargetFileCommand { get; }
 
+    /// <summary>
+    /// Cancels any active image burn, rip, or verification operation.
+    /// </summary>
+    public RelayCommand CancelCommand { get; }
+
     #endregion
 
     /// <summary>
@@ -356,6 +379,7 @@ public class ImageStudioViewModel : ObservableObject
         RipDiscToImageCommand = new AsyncRelayCommand(async p => await RipDiscToImageAsync(p as string), _ => !IsBusy);
         VerifyDiscAgainstImageCommand = new AsyncRelayCommand(async p => await VerifyDiscAgainstImageAsync(p as string), _ => !IsBusy && !string.IsNullOrWhiteSpace(SourceImagePath));
         BrowseRipTargetFileCommand = new RelayCommand(BrowseRipTargetFile);
+        CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => IsBusy);
 
         foreach (var r in _deviceService.GetRecorders())
         {
@@ -517,6 +541,24 @@ public class ImageStudioViewModel : ObservableObject
     #region Burning Operations
 
     /// <summary>
+    /// Cancels any actively executing image burn, rip, or verification operation.
+    /// </summary>
+    public void CancelActiveOperation()
+    {
+        if (_activeCts != null && !_activeCts.IsCancellationRequested)
+        {
+            StatusMessage = "Cancelling operation...";
+            try
+            {
+                _activeCts.Cancel();
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    /// <summary>
     /// Burns the current source image to the target optical recorder drive.
     /// </summary>
     public async Task<BurnOperationResult> BurnImageToDiscAsync(string? driveId = null, CancellationToken ct = default)
@@ -574,6 +616,10 @@ public class ImageStudioViewModel : ObservableObject
             }
         }
 
+        _activeCts?.Dispose();
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var linkedToken = _activeCts.Token;
+
         IsBusy = true;
         BurnProgress = 0;
         StatusMessage = $"Burning image '{Path.GetFileName(SourceImagePath)}' to {recorder.VolumePath} ({recorder.ProductId})...";
@@ -582,6 +628,7 @@ public class ImageStudioViewModel : ObservableObject
         {
             var progress = new Progress<BurnProgressSnapshot>(p =>
             {
+                if (!_isBusy) return;
                 if (p.TotalLba > 0)
                 {
                     BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
@@ -597,9 +644,14 @@ public class ImageStudioViewModel : ObservableObject
                 var dataResult = await _dataBurnService.BurnIsoFileAsync(
                     recorder,
                     SourceImagePath,
-                    new DataBurnOptions { VolumeLabel = Path.GetFileNameWithoutExtension(SourceImagePath), CloseDisc = true },
+                    new DataBurnOptions
+                    {
+                        VolumeLabel = Path.GetFileNameWithoutExtension(SourceImagePath),
+                        CloseDisc = true,
+                        Speed = SelectedWriteSpeed
+                    },
                     progress,
-                    ct);
+                    linkedToken);
 
                 burnResult = dataResult.Success
                     ? BurnOperationResult.Succeeded(dataResult.SectorsWritten, dataResult.TotalTime, dataResult.AverageSpeedMultiplier)
@@ -607,7 +659,7 @@ public class ImageStudioViewModel : ObservableObject
             }
             else if (ext == ".cue")
             {
-                burnResult = await BurnCueSheetAsync(recorder, SourceImagePath, progress, ct);
+                burnResult = await BurnCueSheetAsync(recorder, SourceImagePath, progress, linkedToken);
             }
             else // .bin or raw stream
             {
@@ -615,9 +667,9 @@ public class ImageStudioViewModel : ObservableObject
                 burnResult = await _burnEngine.BurnDataStreamAsync(
                     recorder,
                     fs,
-                    new DataBurnOptions { CloseDisc = true },
+                    new DataBurnOptions { CloseDisc = true, Speed = SelectedWriteSpeed },
                     progress,
-                    ct);
+                    linkedToken);
             }
 
             LastBurnResult = burnResult;
@@ -631,7 +683,8 @@ public class ImageStudioViewModel : ObservableObject
                 if (VerifyAfterBurn)
                 {
                     StatusMessage = "Burn complete. Verifying disc bit-for-bit against image...";
-                    await VerifyDiscAgainstImageAsync(recorder.UniqueId, ct);
+                    await VerifyDiscAgainstImageAsync(recorder.UniqueId, linkedToken);
+                    StatusMessage = VerificationStatusText;
                 }
             }
             else
@@ -640,6 +693,13 @@ public class ImageStudioViewModel : ObservableObject
             }
 
             return burnResult;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Image burn cancelled by user.";
+            var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
+            LastBurnResult = cancelled;
+            return cancelled;
         }
         catch (Exception ex)
         {
@@ -650,6 +710,8 @@ public class ImageStudioViewModel : ObservableObject
         }
         finally
         {
+            _activeCts?.Dispose();
+            _activeCts = null;
             IsBusy = false;
         }
     }
@@ -700,7 +762,7 @@ public class ImageStudioViewModel : ObservableObject
             return await _audioBurnService.BurnAsync(
                 recorder,
                 compilation,
-                new AudioBurnOptions { UseDiscAtOnce = true, WriteCdText = compilation.IncludeCdText },
+                new AudioBurnOptions { UseDiscAtOnce = true, WriteCdText = compilation.IncludeCdText, Speed = SelectedWriteSpeed },
                 progress,
                 ct);
         }
@@ -771,12 +833,22 @@ public class ImageStudioViewModel : ObservableObject
 
         // Generic stream burn fallback
         await using var stream = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return await _burnEngine.BurnDataStreamAsync(recorder, stream, new DataBurnOptions { CloseDisc = true }, progress, ct);
+        return await _burnEngine.BurnDataStreamAsync(recorder, stream, new DataBurnOptions { CloseDisc = true, Speed = SelectedWriteSpeed }, progress, ct);
     }
 
     #endregion
 
     #region Ripping Operations
+
+    /// <summary>
+    /// Alias for <see cref="RipDiscToImageAsync"/>.
+    /// </summary>
+    public Task<RipOperationResult> RipDiscToIsoAsync(
+        string? driveId = null,
+        string? targetPath = null,
+        bool? rawMode = null,
+        CancellationToken ct = default)
+        => RipDiscToImageAsync(driveId, targetPath, rawMode, ct);
 
     /// <summary>
     /// Rips the inserted optical disc to an ISO or BIN/CUE disc image file.
@@ -802,6 +874,10 @@ public class ImageStudioViewModel : ObservableObject
 
         bool raw = rawMode ?? (RipRawBinCueMode || outputPath.EndsWith(".bin", StringComparison.OrdinalIgnoreCase));
 
+        _activeCts?.Dispose();
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var linkedToken = _activeCts.Token;
+
         IsBusy = true;
         BurnProgress = 0;
         StatusMessage = $"Ripping disc from {recorder.UniqueId} to '{Path.GetFileName(outputPath)}'...";
@@ -810,6 +886,7 @@ public class ImageStudioViewModel : ObservableObject
         {
             var progress = new Progress<BurnProgressSnapshot>(p =>
             {
+                if (!_isBusy) return;
                 if (p.TotalLba > 0)
                 {
                     BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
@@ -821,11 +898,11 @@ public class ImageStudioViewModel : ObservableObject
             if (raw)
             {
                 string companionCue = Path.ChangeExtension(outputPath, ".cue");
-                ripResult = await _ripperService.RipToBinCueAsync(recorder, _burnEngine, outputPath, companionCue, progress: progress, ct: ct);
+                ripResult = await _ripperService.RipToBinCueAsync(recorder, _burnEngine, outputPath, companionCue, progress: progress, ct: linkedToken);
             }
             else
             {
-                ripResult = await _ripperService.RipToIsoAsync(recorder, _burnEngine, outputPath, progress: progress, ct: ct);
+                ripResult = await _ripperService.RipToIsoAsync(recorder, _burnEngine, outputPath, progress: progress, ct: linkedToken);
             }
 
             LastRipResult = ripResult;
@@ -842,6 +919,13 @@ public class ImageStudioViewModel : ObservableObject
 
             return ripResult;
         }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Disc rip cancelled by user.";
+            var fail = RipOperationResult.Failed(StatusMessage);
+            LastRipResult = fail;
+            return fail;
+        }
         catch (Exception ex)
         {
             StatusMessage = $"Rip error: {ex.Message}";
@@ -851,6 +935,8 @@ public class ImageStudioViewModel : ObservableObject
         }
         finally
         {
+            _activeCts?.Dispose();
+            _activeCts = null;
             IsBusy = false;
         }
     }
@@ -881,7 +967,14 @@ public class ImageStudioViewModel : ObservableObject
             return fail;
         }
 
-        IsBusy = true;
+        bool ownsOperation = _activeCts == null;
+        if (ownsOperation)
+        {
+            _activeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            IsBusy = true;
+        }
+        var linkedToken = _activeCts!.Token;
+
         BurnProgress = 0;
         VerificationStatusText = $"Verifying {recorder.UniqueId} bit-for-bit against '{Path.GetFileName(SourceImagePath)}'...";
 
@@ -889,6 +982,7 @@ public class ImageStudioViewModel : ObservableObject
         {
             var progress = new Progress<BurnProgressSnapshot>(p =>
             {
+                if (!_isBusy) return;
                 if (p.TotalLba > 0)
                 {
                     BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
@@ -906,11 +1000,11 @@ public class ImageStudioViewModel : ObservableObject
                     _burnEngine,
                     SourceImagePath,
                     progress: progress,
-                    ct: ct);
+                    ct: linkedToken);
             }
             else if (ext == ".cue")
             {
-                result = await VerifyCueSheetAsync(recorder, SourceImagePath, progress, ct);
+                result = await VerifyCueSheetAsync(recorder, SourceImagePath, progress, linkedToken);
             }
             else // .bin or raw
             {
@@ -921,7 +1015,7 @@ public class ImageStudioViewModel : ObservableObject
                     fs,
                     raw2352Mode: true,
                     progress: progress,
-                    ct: ct);
+                    ct: linkedToken);
             }
 
             LastVerificationResult = result;
@@ -941,6 +1035,14 @@ public class ImageStudioViewModel : ObservableObject
 
             return result;
         }
+        catch (OperationCanceledException)
+        {
+            VerificationStatusText = "Verification cancelled by user.";
+            var fail = new VerificationResult { IsMatch = false, ErrorMessage = VerificationStatusText };
+            LastVerificationResult = fail;
+            IsChecksumMatch = false;
+            return fail;
+        }
         catch (Exception ex)
         {
             VerificationStatusText = $"Verification error: {ex.Message}";
@@ -951,7 +1053,12 @@ public class ImageStudioViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            if (ownsOperation)
+            {
+                _activeCts?.Dispose();
+                _activeCts = null;
+                IsBusy = false;
+            }
         }
     }
 

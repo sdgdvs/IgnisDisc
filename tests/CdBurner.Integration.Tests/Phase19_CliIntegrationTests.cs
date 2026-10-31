@@ -544,6 +544,32 @@ public sealed class Phase19_CliIntegrationTests : IDisposable
         Assert.True(root.GetProperty("sectorsWritten").GetInt32() > 0);
     }
 
+    [Fact]
+    public async Task BurnDvd_DirectMkvFile_AutoAuthorsMenuAndBurnsSuccessfully()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankDvdR47();
+        _recorder.InsertMedia(medium);
+
+        string mkvPath = Path.Combine(_tempDir, "SampleMovie.mkv");
+        File.WriteAllBytes(mkvPath, new byte[65536]);
+
+        var (stdout, stderr) = CreateStringWriters();
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-dvd", "--drive", "VDRV-01", "--video-ts", mkvPath, "--json" },
+            stdout,
+            stderr,
+            _deviceService,
+            _burnEngine);
+
+        Assert.Equal(0, exitCode);
+
+        using var doc = ParseJsonOutput(stdout);
+        var root = doc.RootElement;
+
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.True(root.GetProperty("sectorsWritten").GetInt32() > 256);
+    }
+
     #endregion
 
     #region 10. rip and verify command tests

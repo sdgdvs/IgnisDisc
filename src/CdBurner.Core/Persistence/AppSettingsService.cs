@@ -218,7 +218,9 @@ public class AppSettingsService
         try
         {
             string json = File.ReadAllText(filePath);
-            return JsonSerializer.Deserialize<AppSettings>(json, ProjectSerializer.JsonOptions) ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize<AppSettings>(json, ProjectSerializer.JsonOptions) ?? new AppSettings();
+            settings.LogRingBufferCapacity = Math.Clamp(settings.LogRingBufferCapacity, 10, 100_000);
+            return settings;
         }
         catch
         {
@@ -240,8 +242,9 @@ public class AppSettingsService
         try
         {
             await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
-            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, ProjectSerializer.JsonOptions, cancellationToken).ConfigureAwait(false);
-            return settings ?? new AppSettings();
+            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, ProjectSerializer.JsonOptions, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
+            settings.LogRingBufferCapacity = Math.Clamp(settings.LogRingBufferCapacity, 10, 100_000);
+            return settings;
         }
         catch
         {

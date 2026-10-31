@@ -172,6 +172,10 @@ public static class OpticalConstants
     /// </summary>
     public static int BytesToSectors(long bytes, int sectorSize = DataSectorSize)
     {
+        if (sectorSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sectorSize), "Sector size must be positive.");
+        }
         if (bytes <= 0) return 0;
         return (int)((bytes + sectorSize - 1) / sectorSize);
     }

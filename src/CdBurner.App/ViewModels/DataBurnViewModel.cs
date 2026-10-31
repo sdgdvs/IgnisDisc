@@ -25,6 +25,8 @@ public class DataBurnViewModel : ObservableObject
     private FileSystemPreset _selectedFileSystemPreset = FileSystemPreset.IsoJolietUdf;
     private bool _closeDisc = true;
     private bool _verifyAfterBurn = false;
+    private bool _ejectAfterBurn = false;
+    private bool _bufferUnderrunFreeEnabled = true;
     private bool _isBootableEnabled = false;
     private string? _biosBootImagePath;
     private string? _uefiBootImagePath;
@@ -101,6 +103,24 @@ public class DataBurnViewModel : ObservableObject
     {
         get => _verifyAfterBurn;
         set => SetProperty(ref _verifyAfterBurn, value);
+    }
+
+    /// <summary>
+    /// Whether to eject the optical drive tray after burning completes.
+    /// </summary>
+    public bool EjectAfterBurn
+    {
+        get => _ejectAfterBurn;
+        set => SetProperty(ref _ejectAfterBurn, value);
+    }
+
+    /// <summary>
+    /// Whether buffer underrun protection (Burn-Free) is enabled.
+    /// </summary>
+    public bool BufferUnderrunFreeEnabled
+    {
+        get => _bufferUnderrunFreeEnabled;
+        set => SetProperty(ref _bufferUnderrunFreeEnabled, value);
     }
 
     /// <summary>
@@ -273,7 +293,13 @@ public class DataBurnViewModel : ObservableObject
     public bool IsBusy
     {
         get => _isBusy;
-        set => SetProperty(ref _isBusy, value);
+        set
+        {
+            if (SetProperty(ref _isBusy, value))
+            {
+                CancelBurnCommand?.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>
@@ -641,19 +667,36 @@ public class DataBurnViewModel : ObservableObject
             Directory.CreateDirectory(dir);
         }
 
+        _activeBurnCts?.Dispose();
+        _activeBurnCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var linkedToken = _activeBurnCts.Token;
+
         IsBusy = true;
         StatusMessage = "Compiling optical disc image...";
         try
         {
             var buildOptions = CreateIsoBuildOptions();
-            await IsoUdfImageBuilder.BuildToFileAsync(Compilation.Root, outputPath, buildOptions, null, cancellationToken);
+            await IsoUdfImageBuilder.BuildToFileAsync(Compilation.Root, outputPath, buildOptions, null, linkedToken);
             LastExportedIsoPath = outputPath;
             StatusMessage = $"ISO image exported successfully: {Path.GetFileName(outputPath)}";
             return outputPath;
         }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "ISO export cancelled.";
+            return string.Empty;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error exporting ISO: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"ExportIsoAsync error: {ex}");
+            return string.Empty;
+        }
         finally
         {
             IsBusy = false;
+            _activeBurnCts?.Dispose();
+            _activeBurnCts = null;
         }
     }
 
@@ -739,6 +782,7 @@ public class DataBurnViewModel : ObservableObject
                 VolumeLabel = VolumeLabel,
                 CloseDisc = CloseDisc,
                 VerifyAfterBurn = VerifyAfterBurn,
+                EjectAfterBurn = EjectAfterBurn,
                 Speed = SelectedWriteSpeed
             };
 
@@ -772,6 +816,17 @@ public class DataBurnViewModel : ObservableObject
                 StatusMessage = $"Burn failed: {result.ErrorMessage}";
             }
             return result;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Data disc burn cancelled.";
+            return DataBurnResult.Cancelled(StatusMessage);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"StartDataBurnAsync error: {ex}");
+            return DataBurnResult.Failed(ex.Message, ex);
         }
         finally
         {
@@ -839,6 +894,17 @@ public class DataBurnViewModel : ObservableObject
                 StatusMessage = "Previous session imported successfully.";
                 return true;
             }
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Session import cancelled.";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error importing session: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"ImportPreviousSessionAsync error: {ex}");
             return false;
         }
         finally

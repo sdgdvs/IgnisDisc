@@ -79,7 +79,8 @@ public sealed record BurnLogEntry
 
         if (!string.IsNullOrEmpty(Category))
         {
-            sb.Append($" [{Category}]");
+            string safeCategory = Category.Replace("\r", " ").Replace("\n", " ");
+            sb.Append($" [{safeCategory}]");
         }
 
         if (Lba.HasValue)
@@ -87,7 +88,8 @@ public sealed record BurnLogEntry
             sb.Append($" [LBA: {Lba.Value}]");
         }
 
-        sb.Append(' ').Append(Message);
+        string safeMessage = (Message ?? string.Empty).Replace("\r", " ").Replace("\n", " ");
+        sb.Append(' ').Append(safeMessage);
 
         if (!string.IsNullOrEmpty(ExceptionDetail))
         {
@@ -181,7 +183,15 @@ public sealed class StructuredBurnLogger : IDisposable, IAsyncDisposable
             }
 
             var stream = new FileStream(jsonlFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            _jsonlWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+            try
+            {
+                _jsonlWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
         }
     }
 

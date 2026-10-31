@@ -210,14 +210,24 @@
                                 </ComboBox>
                             </StackPanel>
 
-                            <Button Grid.Column="2"
-                                    Content="🔥 Burn Image to Disc"
-                                    Command="{Binding BurnImageToDiscCommand}"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Padding="24,10"
-                                    FontSize="14"
-                                    FontWeight="SemiBold"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🛑 Cancel"
+                                        Command="{Binding CancelCommand}"
+                                        Background="#D83B01"
+                                        Foreground="White"
+                                        FontWeight="Bold"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                        Padding="18,10"
+                                        FontSize="14"
+                                        Margin="0,0,8,0" />
+                                <Button Content="🔥 Burn Image to Disc"
+                                        Command="{Binding BurnImageToDiscCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Padding="24,10"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>
@@ -363,14 +373,24 @@
                                              Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
 
-                            <Button Grid.Column="1"
-                                    Content="💿 Rip Disc to Image"
-                                    Command="{Binding RipDiscToImageCommand}"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Padding="24,10"
-                                    FontSize="14"
-                                    FontWeight="SemiBold"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🛑 Cancel"
+                                        Command="{Binding CancelCommand}"
+                                        Background="#D83B01"
+                                        Foreground="White"
+                                        FontWeight="Bold"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                        Padding="18,10"
+                                        FontSize="14"
+                                        Margin="0,0,8,0" />
+                                <Button Content="💿 Rip Disc to Image"
+                                        Command="{Binding RipDiscToImageCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Padding="24,10"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>
@@ -425,11 +445,19 @@
                                     Command="{Binding BrowseImageCommand}"
                                     VerticalAlignment="Center"
                                     Margin="0,0,8,0" />
-                            <Button Grid.Row="0" Grid.Column="3"
-                                    Content="🔍 Verify Disc"
-                                    Command="{Binding VerifyDiscAgainstImageCommand}"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Row="0" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🛑 Cancel"
+                                        Command="{Binding CancelCommand}"
+                                        Background="#D83B01"
+                                        Foreground="White"
+                                        FontWeight="Bold"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                        Margin="0,0,8,0" />
+                                <Button Content="🔍 Verify Disc"
+                                        Command="{Binding VerifyDiscAgainstImageCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
                                        Text="Compares every physical/virtual optical sector bit-for-bit against reference image calculating CRC32, MD5, and SHA-256."

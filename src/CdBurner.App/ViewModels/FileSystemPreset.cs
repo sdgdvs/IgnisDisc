@@ -17,7 +17,8 @@ public enum FileSystemPreset
     IsoOnlyLevel1,
 
     /// <summary>
-    /// Pure ECMA-167 UDF 2.01 filesystem for modern high-capacity data archives and Blu-ray/DVD data storage.
+    /// UDF-first profile for large data archives (files of 4 GB and larger). The builder writes UDF 1.02; an
+    /// ISO 9660 tree is always present for compatibility. (Enum name kept for saved-project compatibility.)
     /// </summary>
     UdfOnly201,
 

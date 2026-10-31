@@ -238,12 +238,21 @@
                                          GroupName="EraseTypeGroup" />
                         </StackPanel>
 
-                        <Button Content="Erase Rewritable Disc"
-                                Command="{Binding EraseDiscCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
-                                Padding="16,6"
-                                HorizontalAlignment="Left"
-                                Margin="0,0,0,16" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                            <Button Content="Erase Rewritable Disc"
+                                    Command="{Binding EraseDiscCommand}"
+                                    IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
+                                    Padding="16,6"
+                                    HorizontalAlignment="Left" />
+                            <Button Content="🛑 Cancel"
+                                    Command="{Binding CancelCommand}"
+                                    Background="#D83B01"
+                                    Foreground="White"
+                                    FontWeight="Bold"
+                                    Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                    Padding="14,6"
+                                    Margin="8,0,0,0" />
+                        </StackPanel>
 
                         <Separator Background="{DynamicResource CardBorderBrush}" Margin="0,0,0,12" />
 
@@ -334,14 +343,22 @@
                                   SelectedItem="{Binding ScanBlockSizeSectors}"
                                   VerticalAlignment="Center" />
 
-                        <Button Grid.Column="3"
-                                Content="Start Surface Scan"
-                                Command="{Binding StartSurfaceScanCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
-                                Margin="12,0,0,0"
-                                Padding="16,6"
-                                Background="{DynamicResource AccentBrush}"
-                                Foreground="{DynamicResource AccentForegroundBrush}" />
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                            <Button Content="Start Surface Scan"
+                                    Command="{Binding StartSurfaceScanCommand}"
+                                    IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
+                                    Padding="16,6"
+                                    Background="{DynamicResource AccentBrush}"
+                                    Foreground="{DynamicResource AccentForegroundBrush}" />
+                            <Button Content="🛑 Cancel Scan"
+                                    Command="{Binding CancelCommand}"
+                                    Background="#D83B01"
+                                    Foreground="White"
+                                    FontWeight="Bold"
+                                    Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                    Padding="14,6"
+                                    Margin="8,0,0,0" />
+                        </StackPanel>
                     </Grid>
 
                     <!-- Progress Bar -->

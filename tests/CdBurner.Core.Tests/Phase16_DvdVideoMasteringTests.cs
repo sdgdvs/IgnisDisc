@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.IO;
 using System.Text;
 using CdBurner.Core.Compilation;
 using CdBurner.Core.DvdVideo;
@@ -607,5 +609,234 @@ public class Phase16_DvdVideoMasteringTests
 
         Assert.Contains("-ac", args);
         Assert.Equal("6", args[args.IndexOf("-ac") + 1]);
+    }
+
+    // =========================================================================
+    // 5. Universal One-Click DVD-Video Authoring Tests
+    // =========================================================================
+
+    [Fact]
+    public void DvdInputNormalizer_CleanMovieTitle_And_SanitizeVolumeLabel()
+    {
+        string rawFilename = "The.Matrix.1999.1080p.BluRay.x264.mkv";
+        string cleanedTitle = DvdInputNormalizer.CleanMovieTitle(rawFilename);
+        Assert.Equal("The Matrix (1999)", cleanedTitle);
+
+        string volumeLabel = DvdInputNormalizer.SanitizeVolumeLabel(cleanedTitle);
+        Assert.Equal("THE_MATRIX_1999", volumeLabel);
+
+        // Verify IsIgnoredUselessFile returns true for useless/accessory files
+        Assert.True(DvdInputNormalizer.IsIgnoredUselessFile("Thumbs.db"));
+        Assert.True(DvdInputNormalizer.IsIgnoredUselessFile("movie.srt"));
+        Assert.True(DvdInputNormalizer.IsIgnoredUselessFile("info.nfo"));
+        Assert.True(DvdInputNormalizer.IsIgnoredUselessFile("poster.jpg"));
+        Assert.True(DvdInputNormalizer.IsIgnoredUselessFile("desktop.ini"));
+
+        // Verify IsIgnoredUselessFile returns false for video containers
+        Assert.False(DvdInputNormalizer.IsIgnoredUselessFile("feature.mkv"));
+        Assert.False(DvdInputNormalizer.IsIgnoredUselessFile("clip.mp4"));
+        Assert.False(DvdInputNormalizer.IsIgnoredUselessFile("sample.avi"));
+        Assert.False(DvdInputNormalizer.IsIgnoredUselessFile("trailer.mov"));
+    }
+
+    [Fact]
+    public void DvdInputNormalizer_AnalyzeDirectoryWithMoviesAndJunkFiles_FiltersUselessFilesAndDetectsMovies()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "DvdNormalizerTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(tempDir, "FeatureFilm.mkv"), new byte[1024]);
+            File.WriteAllBytes(Path.Combine(tempDir, "SecondClip.mp4"), new byte[1024]);
+            File.WriteAllText(Path.Combine(tempDir, "Thumbs.db"), "thumbnails cache data");
+            File.WriteAllText(Path.Combine(tempDir, "subtitles.srt"), "1\n00:00:01,000 --> 00:00:02,000\nSub");
+            File.WriteAllText(Path.Combine(tempDir, "readme.nfo"), "Movie release information");
+            File.WriteAllBytes(Path.Combine(tempDir, "cover.jpg"), new byte[256]);
+
+            var result = DvdInputNormalizer.AnalyzeInput(tempDir);
+
+            Assert.Equal(DvdInputKind.MovieFiles, result.Kind);
+            Assert.Equal(2, result.MovieFilePaths.Count);
+            Assert.Equal(4, result.IgnoredFiles.Count);
+            Assert.True(result.CanAuthorOrBurn);
+            Assert.True(result.RequiresAuthoring);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DvdInputNormalizer_RepairVideoTsDirectory_FixesLowercaseNamesMissingBupAndNonSequentialVts()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "DvdRepairTest_" + Guid.NewGuid().ToString("N"));
+        string srcDir = Path.Combine(tempDir, "Source_VIDEO_TS");
+        Directory.CreateDirectory(srcDir);
+
+        try
+        {
+            byte[] vmgBytes = DvdVideoValidator.CreateSyntheticVmgIfo();
+            byte[] vtsBytes = DvdVideoValidator.CreateSyntheticVtsIfo();
+
+            // Lowercase video_ts.ifo and missing video_ts.bup
+            File.WriteAllBytes(Path.Combine(srcDir, "video_ts.ifo"), vmgBytes);
+
+            // Gap in VTS numbering (vts_02 instead of vts_01) and missing vts_02_0.bup
+            File.WriteAllBytes(Path.Combine(srcDir, "vts_02_0.ifo"), vtsBytes);
+            File.WriteAllBytes(Path.Combine(srcDir, "vts_02_1.vob"), new byte[2048]);
+
+            // Useless accessory file
+            File.WriteAllText(Path.Combine(srcDir, "Thumbs.db"), "junk cache data");
+
+            string targetRoot = Path.Combine(tempDir, "RepairedRoot");
+            string targetVideoTs = Path.Combine(targetRoot, "VIDEO_TS");
+
+            var logNotes = new List<string>();
+            DvdInputNormalizer.RepairVideoTsDirectory(srcDir, targetVideoTs, logNotes);
+
+            var validator = new DvdVideoValidator();
+            var result = validator.ValidateDirectory(targetVideoTs);
+
+            Assert.True(result.IsValid, $"Repaired VIDEO_TS validation failed: {string.Join("; ", result.Errors)}");
+            Assert.True(result.HasAudioTs);
+            Assert.Single(result.TitleSetNumbers);
+            Assert.Equal(1, result.TitleSetNumbers[0]);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DvdMenuGenerator_GeneratesValidBmpAndMenuVobWithJumpTt1ButtonCommand()
+    {
+        var options = new DvdMenuOptions
+        {
+            MenuTitle = "THE MATRIX",
+            TitleNames = new[] { "The Matrix (1999)" },
+            Standard = DvdVideoStandard.Ntsc,
+            AspectRatio = DvdAspectRatio.Widescreen16x9
+        };
+
+        // 1. BMP Image Rendering verification
+        byte[] bmp = DvdMenuGenerator.RenderMenuBmpImage(options);
+        Assert.NotNull(bmp);
+        Assert.True(bmp.Length > 54);
+        Assert.Equal((byte)'B', bmp[0]);
+        Assert.Equal((byte)'M', bmp[1]);
+
+        int width = BinaryPrimitives.ReadInt32LittleEndian(bmp.AsSpan(18, 4));
+        int height = BinaryPrimitives.ReadInt32LittleEndian(bmp.AsSpan(22, 4));
+        Assert.Equal(720, width);
+        Assert.Equal(480, height);
+
+        // 2. Synthetic Menu VOB verification
+        byte[] menuVob = DvdMenuGenerator.GenerateSyntheticMenuVob(options, sectorCount: 16);
+        Assert.NotNull(menuVob);
+        Assert.True(menuVob.Length >= 16 * OpticalConstants.DataSectorSize);
+
+        // Starts with MPEG-2 Pack header 00 00 01 BA
+        Assert.Equal(0x00, menuVob[0]);
+        Assert.Equal(0x00, menuVob[1]);
+        Assert.Equal(0x01, menuVob[2]);
+        Assert.Equal(0xBA, menuVob[3]);
+
+        // Contains PCI/DSI NAV packets (00 00 01 BF)
+        bool containsNavPacket = false;
+        for (int i = 0; i <= menuVob.Length - 4; i++)
+        {
+            if (menuVob[i] == 0x00 && menuVob[i + 1] == 0x00 && menuVob[i + 2] == 0x01 && menuVob[i + 3] == 0xBF)
+            {
+                containsNavPacket = true;
+                break;
+            }
+        }
+        Assert.True(containsNavPacket, "Menu VOB must contain Private Stream 2 (NAV) packets (00 00 01 BF).");
+
+        // Contains 8-byte JumpTT 1 DVD VM button command (0x30, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00)
+        byte[] jumpTt1Command = [0x30, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00];
+        bool containsJumpTt1 = false;
+        for (int i = 0; i <= menuVob.Length - jumpTt1Command.Length; i++)
+        {
+            if (menuVob.AsSpan(i, jumpTt1Command.Length).SequenceEqual(jumpTt1Command))
+            {
+                containsJumpTt1 = true;
+                break;
+            }
+        }
+        Assert.True(containsJumpTt1, "Menu VOB must contain the JumpTT 1 DVD VM button command.");
+    }
+
+    [Fact]
+    public async Task DvdVideoAuthoringService_AuthorFromMkvAndMp4Files_CreatesCompliantVideoTsWithPlayMenuAndAudioTs()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "DvdAuthoringTest_" + Guid.NewGuid().ToString("N"));
+        string outDir = Path.Combine(tempDir, "AuthoredDvd");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string mkvPath = Path.Combine(tempDir, "The.Matrix.1999.1080p.mkv");
+            string mp4Path = Path.Combine(tempDir, "BonusFeature.mp4");
+            File.WriteAllBytes(mkvPath, new byte[65536]);
+            File.WriteAllBytes(mp4Path, new byte[65536]);
+            File.WriteAllText(Path.Combine(tempDir, "movie.srt"), "Subtitles text");
+            File.WriteAllText(Path.Combine(tempDir, "movie.nfo"), "NFO info");
+
+            var service = new DvdVideoAuthoringService();
+            var options = new DvdAuthoringOptions
+            {
+                UseFfmpegWhenAvailable = false, // deterministic unit test fallback
+                AutoCreatePlayMenu = true,
+                VolumeLabel = "MATRIX_COLLECTION"
+            };
+
+            var result = await service.AuthorAsync(new[] { mkvPath, mp4Path }, outDir, options);
+
+            Assert.True(result.Success, $"Authoring failed: {result.ErrorMessage}");
+            Assert.Equal(2, result.TitleCount);
+
+            string videoTs = result.VideoTsDirectory;
+            string audioTs = result.AudioTsDirectory;
+
+            Assert.True(Directory.Exists(videoTs), "VIDEO_TS directory must exist.");
+            Assert.True(Directory.Exists(audioTs), "AUDIO_TS directory must exist.");
+
+            // VIDEO_TS.VOB exists and play menu is present
+            string menuVobPath = Path.Combine(videoTs, "VIDEO_TS.VOB");
+            Assert.True(File.Exists(menuVobPath), "VIDEO_TS.VOB must exist.");
+            bool hasPlayMenu = File.Exists(menuVobPath);
+            Assert.True(hasPlayMenu);
+
+            // VIDEO_TS.IFO and VIDEO_TS.BUP exist
+            Assert.True(File.Exists(Path.Combine(videoTs, "VIDEO_TS.IFO")), "VIDEO_TS.IFO must exist.");
+            Assert.True(File.Exists(Path.Combine(videoTs, "VIDEO_TS.BUP")), "VIDEO_TS.BUP must exist.");
+
+            // VTS_01_0.IFO/BUP & VTS_01_1.VOB exist
+            Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_0.IFO")), "VTS_01_0.IFO must exist.");
+            Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_0.BUP")), "VTS_01_0.BUP must exist.");
+            Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_1.VOB")), "VTS_01_1.VOB must exist.");
+
+            // VTS_02_0.IFO/BUP & VTS_02_1.VOB exist
+            Assert.True(File.Exists(Path.Combine(videoTs, "VTS_02_0.IFO")), "VTS_02_0.IFO must exist.");
+            Assert.True(File.Exists(Path.Combine(videoTs, "VTS_02_0.BUP")), "VTS_02_0.BUP must exist.");
+            Assert.True(File.Exists(Path.Combine(videoTs, "VTS_02_1.VOB")), "VTS_02_1.VOB must exist.");
+
+            // Validation passes
+            Assert.NotNull(result.ValidationResult);
+            Assert.True(result.ValidationResult.IsValid, $"Validation failed: {string.Join("; ", result.ValidationResult.Errors)}");
+            Assert.True(result.ValidationResult.HasVmgMenuVob);
+            Assert.Equal(2, result.ValidationResult.TitleSetNumbers.Count);
+
+            // Layout 16-sector ECC separation
+            Assert.NotNull(result.PlannedLayout);
+            Assert.True(result.PlannedLayout.VerifyIfoBupSeparation(out var separationFailure), separationFailure);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 }

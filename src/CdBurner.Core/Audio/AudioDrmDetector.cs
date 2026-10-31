@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 
 namespace CdBurner.Core.Audio;
@@ -12,6 +13,8 @@ public static class AudioDrmDetector
     private static readonly byte[] DrmsAtom = Encoding.ASCII.GetBytes("drms");
     private static readonly byte[] DrmiAtom = Encoding.ASCII.GetBytes("drmi");
     private static readonly byte[] SinfAtom = Encoding.ASCII.GetBytes("sinf");
+    private static readonly byte[] EncaAtom = Encoding.ASCII.GetBytes("enca");
+    private static readonly byte[] EncvAtom = Encoding.ASCII.GetBytes("encv");
 
     // ASF Content Encryption Object GUID: 2211B3FB-BD23-11D2-B4B7-00A0C955FC6E
     private static readonly byte[] AsfContentEncryptionGuid = new byte[]
@@ -60,7 +63,11 @@ public static class AudioDrmDetector
                 int read = fs.Read(header, 0, header.Length);
                 var span = header.AsSpan(0, read);
 
-                if (span.IndexOf(DrmsAtom) >= 0 || span.IndexOf(DrmiAtom) >= 0 || span.IndexOf(SinfAtom) >= 0)
+                if (HasMp4DrmAtom(span, DrmsAtom, allowZeroSizeHeader: true) ||
+                    HasMp4DrmAtom(span, DrmiAtom, allowZeroSizeHeader: true) ||
+                    HasMp4DrmAtom(span, SinfAtom, allowZeroSizeHeader: false) ||
+                    HasMp4DrmAtom(span, EncaAtom, allowZeroSizeHeader: false) ||
+                    HasMp4DrmAtom(span, EncvAtom, allowZeroSizeHeader: false))
                 {
                     drmDescription = "Apple FairPlay DRM (encrypted AAC stream)";
                     return true;
@@ -90,6 +97,38 @@ public static class AudioDrmDetector
             catch
             {
             }
+        }
+
+        return false;
+    }
+
+    private static bool HasMp4DrmAtom(ReadOnlySpan<byte> data, ReadOnlySpan<byte> atomType, bool allowZeroSizeHeader)
+    {
+        int searchOffset = 0;
+        while (searchOffset <= data.Length - 4)
+        {
+            int relIdx = data.Slice(searchOffset).IndexOf(atomType);
+            if (relIdx < 0)
+            {
+                break;
+            }
+
+            int idx = searchOffset + relIdx;
+            if (idx >= 4)
+            {
+                uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(idx - 4, 4));
+                if (boxSize is >= 8 and <= 65536)
+                {
+                    return true;
+                }
+
+                if (allowZeroSizeHeader && boxSize == 0)
+                {
+                    return true;
+                }
+            }
+
+            searchOffset = idx + 1;
         }
 
         return false;

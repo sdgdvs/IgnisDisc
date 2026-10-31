@@ -329,6 +329,17 @@ public static class ProjectSerializer
     public static CompilationNode ToCompilationNode(SerializedCompilationNode serialized)
     {
         ArgumentNullException.ThrowIfNull(serialized);
+        return ToCompilationNodeCore(serialized, isRoot: serialized.IsDirectory && string.IsNullOrEmpty(serialized.Name));
+    }
+
+    private static CompilationNode ToCompilationNodeCore(SerializedCompilationNode serialized, bool isRoot)
+    {
+        ArgumentNullException.ThrowIfNull(serialized);
+
+        if (!isRoot || !string.IsNullOrEmpty(serialized.Name))
+        {
+            ValidateCompilationNodeName(serialized.Name);
+        }
 
         if (serialized.IsDirectory)
         {
@@ -342,7 +353,7 @@ public static class ProjectSerializer
             {
                 foreach (var child in serialized.Children)
                 {
-                    var childNode = ToCompilationNode(child);
+                    var childNode = ToCompilationNodeCore(child, isRoot: false);
                     if (childNode is CompilationDirectory childDir)
                     {
                         dir.AddDirectory(childDir);
@@ -367,6 +378,18 @@ public static class ProjectSerializer
                 parent: null,
                 lastWriteTimeUtc: serialized.LastWriteTimeUtc,
                 attributes: serialized.Attributes);
+        }
+    }
+
+    private static void ValidateCompilationNodeName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name) ||
+            name is "." or ".." ||
+            name.Contains('/') ||
+            name.Contains('\\') ||
+            name.Contains('\0'))
+        {
+            throw new InvalidDataException($"Invalid compilation node name: '{name}'.");
         }
     }
 
@@ -489,6 +512,22 @@ public static class ProjectSerializer
     {
         ArgumentNullException.ThrowIfNull(compilation);
 
+        var cdTextTracks = new List<SerializedCdTextTrack>(compilation.Tracks.Count);
+        foreach (var track in compilation.Tracks)
+        {
+            cdTextTracks.Add(new SerializedCdTextTrack
+            {
+                TrackNumber = track.TrackNumber,
+                Title = track.Title,
+                Performer = track.Performer,
+                Songwriter = track.Songwriter,
+                Composer = track.Composer,
+                Arranger = track.Arranger,
+                Message = track.Message,
+                Isrc = track.Isrc
+            });
+        }
+
         var doc = new CdBurnerProjectDocument
         {
             Kind = ProjectKind.AudioCd,
@@ -508,7 +547,8 @@ public static class ProjectSerializer
                 Arranger = compilation.Arranger,
                 Message = compilation.Message,
                 DiscId = compilation.DiscId,
-                UpcEan = compilation.UpcEan
+                UpcEan = compilation.UpcEan,
+                Tracks = cdTextTracks
             }
         };
 
@@ -561,25 +601,35 @@ public static class ProjectSerializer
             compilation.UpcEan = document.CdText.UpcEan;
         }
 
-        foreach (var track in document.AudioTracks.OrderBy(t => t.TrackNumber))
+        if (document.AudioTracks != null)
         {
-            var trackItem = new AudioCdTrackItem(
-                track.TrackNumber,
-                track.SourceFilePath,
-                track.Title,
-                track.Performer,
-                track.Isrc,
-                track.PreGapFrames,
-                track.NormalizeAudio)
-            {
-                DurationFrames = track.DurationFrames,
-                Songwriter = track.Songwriter,
-                Composer = track.Composer,
-                Arranger = track.Arranger,
-                Message = track.Message
-            };
+            var cdTextTracksByNum = document.CdText?.Tracks?
+                .GroupBy(t => t.TrackNumber)
+                .ToDictionary(g => g.Key, g => g.First());
 
-            compilation.AddTrack(trackItem);
+            foreach (var track in document.AudioTracks.OrderBy(t => t.TrackNumber))
+            {
+                SerializedCdTextTrack? cdt = null;
+                cdTextTracksByNum?.TryGetValue(track.TrackNumber, out cdt);
+
+                var trackItem = new AudioCdTrackItem(
+                    track.TrackNumber,
+                    track.SourceFilePath,
+                    !string.IsNullOrEmpty(track.Title) ? track.Title : (cdt?.Title ?? string.Empty),
+                    !string.IsNullOrEmpty(track.Performer) ? track.Performer : (cdt?.Performer ?? string.Empty),
+                    track.Isrc ?? cdt?.Isrc,
+                    track.PreGapFrames,
+                    track.NormalizeAudio)
+                {
+                    DurationFrames = track.DurationFrames,
+                    Songwriter = track.Songwriter ?? cdt?.Songwriter,
+                    Composer = track.Composer ?? cdt?.Composer,
+                    Arranger = track.Arranger ?? cdt?.Arranger,
+                    Message = track.Message ?? cdt?.Message
+                };
+
+                compilation.AddTrack(trackItem);
+            }
         }
 
         return compilation;

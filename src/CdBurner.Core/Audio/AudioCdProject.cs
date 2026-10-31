@@ -68,7 +68,8 @@ public record AudioCdTrackItem(
                     using var s = CustomPcmStreamFactory();
                     if (s != null && s.CanSeek && s.Length > 0)
                     {
-                        return (int)((s.Length + OpticalConstants.RawSectorSize - 1) / OpticalConstants.RawSectorSize);
+                        _durationFrames = (int)((s.Length + OpticalConstants.RawSectorSize - 1) / OpticalConstants.RawSectorSize);
+                        return _durationFrames;
                     }
                 }
                 catch

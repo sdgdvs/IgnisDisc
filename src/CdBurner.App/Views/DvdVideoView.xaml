@@ -8,7 +8,10 @@
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:DvdVideoViewModel}"
              Background="{DynamicResource SurfaceBackgroundBrush}"
-             Foreground="{DynamicResource TextPrimaryBrush}">
+             Foreground="{DynamicResource TextPrimaryBrush}"
+             AllowDrop="True"
+             Drop="OnFileDrop"
+             PreviewDragOver="OnPreviewDragOver">
 
     <UserControl.Resources>
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
@@ -17,7 +20,7 @@
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
-            <!-- Row 0: Top VIDEO_TS Selection Card -->
+            <!-- Row 0: Top VIDEO_TS / Source Media Selection Card -->
             <RowDefinition Height="Auto" />
             <!-- Row 1: Validation Summary & Dual-Layer Card -->
             <RowDefinition Height="Auto" />
@@ -28,7 +31,7 @@
         </Grid.RowDefinitions>
 
         <!-- ========================================================================= -->
-        <!-- ROW 0: VIDEO_TS FOLDER SELECTION & VALIDATION TRIGGER                     -->
+        <!-- ROW 0: SOURCE SELECTION, AUTHORING OPTIONS & VALIDATION TRIGGER           -->
         <!-- ========================================================================= -->
         <Border Grid.Row="0"
                 Background="{DynamicResource CardBackgroundBrush}"
@@ -47,11 +50,12 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <!-- VIDEO_TS Path Row -->
+                <!-- Source Path Row -->
                 <TextBlock Grid.Row="0" Grid.Column="0"
-                           Text="VIDEO_TS Folder:"
+                           Text="Source Movie(s) / Folder:"
                            FontWeight="SemiBold"
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -65,35 +69,80 @@
                          BorderBrush="{DynamicResource ControlBorderBrush}"
                          Margin="0,0,8,0" />
                 <Button Grid.Row="0" Grid.Column="2"
-                        Content="📂 Browse..."
-                        Command="{Binding SelectVideoTsFolderCommand}"
+                        Content="🎬 Add Movie(s)..."
+                        Command="{Binding AddMovieFilesCommand}"
                         VerticalAlignment="Center"
                         Margin="0,0,8,0" />
                 <Button Grid.Row="0" Grid.Column="3"
+                        Content="📂 Browse Folder..."
+                        Command="{Binding SelectVideoTsFolderCommand}"
+                        VerticalAlignment="Center"
+                        Margin="0,0,8,0" />
+                <Button Grid.Row="0" Grid.Column="4"
                         Content="🔍 Validate &amp; Plan Layout"
                         Command="{Binding ValidateAndPlanLayoutCommand}"
                         Style="{StaticResource AccentButtonStyle}"
                         VerticalAlignment="Center" />
 
-                <!-- Volume Label Sub-row -->
-                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
-                            Orientation="Horizontal"
-                            Margin="0,10,0,0"
-                            VerticalAlignment="Center">
+                <!-- Options Sub-row -->
+                <WrapPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="5"
+                           Orientation="Horizontal"
+                           Margin="0,10,0,0"
+                           VerticalAlignment="Center">
                     <TextBlock Text="Volume Label:"
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource TextSecondaryBrush}"
-                               Margin="0,0,10,0" />
-                    <TextBox Width="200"
+                               Margin="0,0,8,0" />
+                    <TextBox Width="130"
                              Text="{Binding VolumeLabel, UpdateSourceTrigger=PropertyChanged}"
                              MaxLength="32"
                              Padding="6,4"
                              Background="{DynamicResource ControlBackgroundBrush}"
                              Foreground="{DynamicResource TextPrimaryBrush}"
-                             BorderBrush="{DynamicResource ControlBorderBrush}" />
+                             BorderBrush="{DynamicResource ControlBorderBrush}"
+                             Margin="0,0,14,0" />
 
-                    <Separator Style="{x:Null}" Width="1" Height="18" Background="{DynamicResource CardBorderBrush}" Margin="16,0" />
+                    <TextBlock Text="Menu Title:"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,8,0" />
+                    <TextBox Width="160"
+                             Text="{Binding MenuTitle, UpdateSourceTrigger=PropertyChanged}"
+                             Padding="6,4"
+                             Background="{DynamicResource ControlBackgroundBrush}"
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+                             BorderBrush="{DynamicResource ControlBorderBrush}"
+                             Margin="0,0,14,0" />
+
+                    <TextBlock Text="Standard:"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,8,0" />
+                    <ComboBox Width="80"
+                              ItemsSource="{Binding AvailableStandards}"
+                              SelectedItem="{Binding SelectedStandard}"
+                              Margin="0,0,14,0" />
+
+                    <TextBlock Text="Aspect:"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,8,0" />
+                    <ComboBox Width="110"
+                              ItemsSource="{Binding AvailableAspectRatios}"
+                              SelectedItem="{Binding SelectedAspectRatio}"
+                              Margin="0,0,14,0" />
+
+                    <CheckBox Content="Auto Play Menu"
+                              IsChecked="{Binding AutoCreatePlayMenu}"
+                              VerticalAlignment="Center"
+                              Foreground="{DynamicResource TextPrimaryBrush}"
+                              Margin="0,0,14,0" />
+
+                    <Separator Style="{x:Null}" Width="1" Height="18" Background="{DynamicResource CardBorderBrush}" Margin="4,0,14,0" VerticalAlignment="Center" />
 
                     <TextBlock Text="Target Media:"
                                VerticalAlignment="Center"
@@ -103,7 +152,7 @@
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource AccentBrush}" />
-                </StackPanel>
+                </WrapPanel>
             </Grid>
         </Border>
 
@@ -259,7 +308,7 @@
                                         <TextBlock Text="{Binding IconGlyph}" FontSize="13" Margin="0,0,8,0" VerticalAlignment="Center" />
                                         <TextBlock Text="{Binding FileName}"
                                                    FontWeight="SemiBold"
-                                                   Foreground="{Binding IsPadding, Converter={StaticResource BoolToBrush}}"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
                                 </DataTemplate>
@@ -305,31 +354,47 @@
                 CornerRadius="0,0,6,6"
                 Padding="16,10">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <!-- Status Line -->
-                <TextBlock Grid.Column="0"
-                           Text="{Binding StatusMessage}"
-                           FontStyle="Italic"
-                           Foreground="{DynamicResource TextMutedBrush}"
-                           VerticalAlignment="Center" />
+                <!-- Left: Status Line & Progress Bar -->
+                <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,20,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding StatusMessage}"
+                                   FontStyle="Italic"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding StatusMessage}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding BurnProgress, StringFormat='{}{0:F1}%'}"
+                                   FontWeight="Bold"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   Margin="12,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                    <ProgressBar Height="8"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding BurnProgress}"
+                                 Margin="0,6,0,0"
+                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
 
-                <!-- Progress Bar -->
-                <ProgressBar Grid.Column="1"
-                             Height="6"
-                             Minimum="0"
-                             Maximum="100"
-                             Value="{Binding BurnProgress}"
-                             Margin="24,0"
-                             VerticalAlignment="Center"
-                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
-
-                <!-- Action Buttons -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Right: Action Buttons -->
+                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="Burn To:"
                                FontWeight="SemiBold"
                                VerticalAlignment="Center"
@@ -351,6 +416,14 @@
                         </ComboBox.ItemTemplate>
                     </ComboBox>
 
+                    <Button Content="🛑 Cancel"
+                            Command="{Binding CancelCommand}"
+                            Background="#D83B01"
+                            Foreground="White"
+                            FontWeight="Bold"
+                            ToolTip="Cancel ongoing DVD authoring or burn"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                            Margin="0,0,10,0" />
                     <Button Content="💾 Build DVD ISO..."
                             Command="{Binding BuildDvdIsoCommand}"
                             ToolTip="Build compliant DVD-Video ISO image with 32 KB ECC gap alignment"

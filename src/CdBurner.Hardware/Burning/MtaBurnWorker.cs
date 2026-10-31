@@ -46,7 +46,10 @@ public static class MtaBurnWorker
             }
             catch (OperationCanceledException oce)
             {
-                tcs.TrySetCanceled(oce.CancellationToken);
+                var token = oce.CancellationToken.IsCancellationRequested
+                    ? oce.CancellationToken
+                    : (cancellationToken.IsCancellationRequested ? cancellationToken : new CancellationToken(canceled: true));
+                tcs.TrySetCanceled(token);
             }
             catch (Exception ex)
             {
@@ -113,7 +116,10 @@ public static class MtaBurnWorker
             }
             catch (OperationCanceledException oce)
             {
-                tcs.TrySetCanceled(oce.CancellationToken);
+                var token = oce.CancellationToken.IsCancellationRequested
+                    ? oce.CancellationToken
+                    : (cancellationToken.IsCancellationRequested ? cancellationToken : new CancellationToken(canceled: true));
+                tcs.TrySetCanceled(token);
             }
             catch (Exception ex)
             {

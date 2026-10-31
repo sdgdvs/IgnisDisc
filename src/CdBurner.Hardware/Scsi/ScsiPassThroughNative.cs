@@ -149,7 +149,7 @@ public sealed class ScsiExecutionResult
         Win32Error = win32Error,
         ErrorMessage = errorMessage,
         SenseData = senseData ?? Array.Empty<byte>(),
-        SenseInfo = senseData is { Length: > 0 } ? ScsiSenseDecoder.Decode(senseData) : null
+        SenseInfo = senseData is { Length: > 0 } && senseData.Any(b => b != 0) ? ScsiSenseDecoder.Decode(senseData) : null
     };
 }
 
@@ -203,11 +203,19 @@ public sealed partial class Win32ScsiTransport : IScsiTransport
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(devicePath);
 
-        string normalizedPath = devicePath.Trim();
-        if (!normalizedPath.StartsWith(@"\\.\", StringComparison.OrdinalIgnoreCase))
+        string normalizedPath = devicePath.Trim().TrimEnd('\\');
+        if (normalizedPath.Length == 1 && char.IsLetter(normalizedPath[0]))
         {
-            normalizedPath = @"\\.\" + normalizedPath.TrimEnd('\\');
+            normalizedPath = $"{char.ToUpperInvariant(normalizedPath[0])}:";
         }
+
+        if (!normalizedPath.StartsWith(@"\\.\", StringComparison.OrdinalIgnoreCase) &&
+            !normalizedPath.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase))
+        {
+            normalizedPath = @"\\.\" + normalizedPath;
+        }
+
+        normalizedPath = normalizedPath.TrimEnd('\\');
 
         uint desiredAccess = 0;
         if (access.HasFlag(FileAccess.Read))
@@ -233,6 +241,7 @@ public sealed partial class Win32ScsiTransport : IScsiTransport
             // If read/write failed, attempt read-only access fallback
             if (desiredAccess != ScsiPassThroughNative.GENERIC_READ)
             {
+                handle.Dispose();
                 handle = CreateFileNative(
                     normalizedPath,
                     ScsiPassThroughNative.GENERIC_READ,
@@ -246,6 +255,7 @@ public sealed partial class Win32ScsiTransport : IScsiTransport
             if (handle.IsInvalid)
             {
                 int error = Marshal.GetLastWin32Error();
+                handle.Dispose();
                 throw new Win32Exception(error, $"Failed to open device handle for '{normalizedPath}' (Win32 error: {error}).");
             }
         }
@@ -267,12 +277,14 @@ public sealed partial class Win32ScsiTransport : IScsiTransport
             throw new ArgumentException("CDB length must be between 1 and 16 bytes.", nameof(cdb));
         }
 
+        bool hasData = dataDirection != ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED && !dataBuffer.IsEmpty;
+
         ScsiPassThroughDirectWithSense packet = default;
         packet.Sptd.Length = (ushort)sizeof(ScsiPassThroughDirect);
         packet.Sptd.CdbLength = (byte)cdb.Length;
         packet.Sptd.SenseInfoLength = 32;
-        packet.Sptd.DataIn = dataDirection;
-        packet.Sptd.DataTransferLength = (uint)dataBuffer.Length;
+        packet.Sptd.DataIn = hasData ? dataDirection : ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED;
+        packet.Sptd.DataTransferLength = hasData ? (uint)dataBuffer.Length : 0;
         packet.Sptd.TimeOutValue = timeout <= TimeSpan.Zero ? 10 : (uint)Math.Max(1, Math.Ceiling(timeout.TotalSeconds));
         packet.Sptd.SenseInfoOffset = (uint)sizeof(ScsiPassThroughDirect);
 
@@ -287,7 +299,7 @@ public sealed partial class Win32ScsiTransport : IScsiTransport
 
         fixed (byte* pData = dataBuffer)
         {
-            packet.Sptd.DataBuffer = (nint)pData;
+            packet.Sptd.DataBuffer = hasData ? (nint)pData : nint.Zero;
 
             success = DeviceIoControl(
                 _handle,
@@ -313,7 +325,8 @@ public sealed partial class Win32ScsiTransport : IScsiTransport
 
         if (!success)
         {
-            ScsiSenseInfo? sense = ScsiSenseDecoder.Decode(senseBytes);
+            bool hasSense = (senseBytes[0] & 0x7F) is 0x70 or 0x71 or 0x72 or 0x73 || senseBytes.Any(b => b != 0);
+            ScsiSenseInfo? sense = hasSense ? ScsiSenseDecoder.Decode(senseBytes) : null;
             return new ScsiExecutionResult
             {
                 IsSuccess = false,

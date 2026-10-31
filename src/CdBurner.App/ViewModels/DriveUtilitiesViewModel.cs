@@ -177,6 +177,7 @@ public class DriveUtilitiesViewModel : ObservableObject
                 EraseDiscCommand.RaiseCanExecuteChanged();
                 ApplyBookTypeCommand.RaiseCanExecuteChanged();
                 StartSurfaceScanCommand.RaiseCanExecuteChanged();
+                CancelCommand?.RaiseCanExecuteChanged();
             }
         }
     }

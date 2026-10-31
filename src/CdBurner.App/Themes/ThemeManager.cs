@@ -118,16 +118,8 @@ public static class ThemeManager
                 Application.Current.Resources[key] = newDict[key];
             }
 
-            // Update any merged dictionary instances matching DarkColors / LightColors
-            var appResources = Application.Current.Resources;
-            for (int i = 0; i < appResources.MergedDictionaries.Count; i++)
-            {
-                var md = appResources.MergedDictionaries[i];
-                if (md.Source != null && (md.Source.OriginalString.Contains("DarkColors") || md.Source.OriginalString.Contains("LightColors")))
-                {
-                    appResources.MergedDictionaries[i] = newDict;
-                }
-            }
+            // Update any merged dictionary instances matching DarkColors / LightColors (including nested dictionaries)
+            ReplaceThemeMergedDictionaries(Application.Current.Resources, newDict);
 
             // Update title bars of all open application windows
             try
@@ -144,6 +136,31 @@ public static class ThemeManager
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to apply visual theme: {ex.Message}");
+        }
+    }
+
+    private static void ReplaceThemeMergedDictionaries(ResourceDictionary parentDict, ResourceDictionary newThemeDict)
+    {
+        for (int i = 0; i < parentDict.MergedDictionaries.Count; i++)
+        {
+            var md = parentDict.MergedDictionaries[i];
+            if (md.Source != null &&
+                (md.Source.OriginalString.Contains("DarkColors", StringComparison.OrdinalIgnoreCase) ||
+                 md.Source.OriginalString.Contains("LightColors", StringComparison.OrdinalIgnoreCase)))
+            {
+                parentDict.MergedDictionaries[i] = newThemeDict;
+            }
+            else if (md.MergedDictionaries.Count > 0)
+            {
+                ReplaceThemeMergedDictionaries(md, newThemeDict);
+                foreach (var key in newThemeDict.Keys)
+                {
+                    if (md.Contains(key))
+                    {
+                        md[key] = newThemeDict[key];
+                    }
+                }
+            }
         }
     }
 

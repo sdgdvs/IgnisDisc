@@ -6,10 +6,10 @@
         xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
         xmlns:converters="clr-namespace:CdBurner.App.Converters"
         mc:Ignorable="d"
-        Title="IgnisDisc Optical Studio v1.04"
+        Title="IgnisDisc Optical Studio v1.07"
         Icon="Assets/IgnisDisc.png"
         Height="760"
-        Width="1160"
+        Width="1280"
         MinHeight="620"
         MinWidth="960"
         WindowStartupLocation="CenterScreen"
@@ -102,15 +102,11 @@
                 BorderBrush="{DynamicResource CardBorderBrush}"
                 BorderThickness="0,0,0,1"
                 Padding="16,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+            <!-- WrapPanel: groups flow onto a second row instead of being clipped on narrow windows / high DPI -->
+            <WrapPanel Orientation="Horizontal">
 
                 <!-- Left: Drive Selector & Refresh -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,2,24,2">
                     <TextBlock Text="Burn To Drive:"
                                VerticalAlignment="Center"
                                FontSize="13"
@@ -183,7 +179,7 @@
                 </StackPanel>
 
                 <!-- Right: Write Speed & Virtual Media Quick-Mount -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,2,0,2">
                     <TextBlock Text="Speed:"
                                VerticalAlignment="Center"
                                FontSize="13"
@@ -201,9 +197,12 @@
                         </ComboBox.ItemTemplate>
                     </ComboBox>
 
+                    <!-- Virtual Media Quick-Mount (only when the virtual drive is enabled in Settings) -->
+                    <StackPanel Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Visibility="{Binding Settings.EnableVirtualDrive, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <Separator Style="{x:Null}" Width="1" Height="24" Background="{DynamicResource CardBorderBrush}" Margin="12,0" />
 
-                    <!-- Virtual Media Quick-Mount Menu / Buttons -->
                     <TextBlock Text="Mount Virtual:"
                                VerticalAlignment="Center"
                                FontSize="12"
@@ -224,8 +223,9 @@
                             ToolTip="Mount blank 4.7 GB DVD-R into virtual drive"
                             Padding="8,4"
                             Margin="2,0" />
+                    </StackPanel>
                 </StackPanel>
-            </Grid>
+            </WrapPanel>
         </Border>
 
         <!-- ========================================================================= -->

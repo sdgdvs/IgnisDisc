@@ -55,7 +55,7 @@ public static class CdTextCrc16
     /// </summary>
     public static ushort ComputeInvertedCrc16(ReadOnlySpan<byte> data)
     {
-        ReadOnlySpan<byte> target = data.Length >= 18 ? data.Slice(0, 16) : (data.Length >= 16 ? data.Slice(0, 16) : data);
+        ReadOnlySpan<byte> target = data.Length >= 16 ? data.Slice(0, 16) : data;
         return (ushort)(ComputeCrc16(target) ^ 0xFFFF);
     }
 

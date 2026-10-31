@@ -75,8 +75,24 @@ public class DiscRipperService
             Directory.CreateDirectory(dir);
         }
 
-        await using var fs = new FileStream(outputIsoPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
-        var result = await RipToIsoAsync(recorder, engine, fs, options, progress, ct).ConfigureAwait(false);
+        options ??= new RipOptions();
+        RipOperationResult result;
+        try
+        {
+            await using var fs = new FileStream(outputIsoPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
+            result = await RipToIsoAsync(recorder, engine, fs, options, progress, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            TryDeleteIncompleteFile(outputIsoPath);
+            throw;
+        }
+
+        if (!result.Success && !options.ContinueOnUnreadableSector)
+        {
+            TryDeleteIncompleteFile(outputIsoPath);
+        }
+
         return result;
     }
 
@@ -127,11 +143,21 @@ public class DiscRipperService
         options ??= new RipOptions();
         options.Raw2352Mode = true;
 
-        await using var binStream = new FileStream(outputBinPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
-        var ripResult = await RipCoreAsync(recorder, engine, binStream, options, progress, ct).ConfigureAwait(false);
+        RipOperationResult ripResult;
+        try
+        {
+            await using var binStream = new FileStream(outputBinPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
+            ripResult = await RipCoreAsync(recorder, engine, binStream, options, progress, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            TryDeleteIncompleteFile(outputBinPath);
+            throw;
+        }
 
         if (!ripResult.Success && !options.ContinueOnUnreadableSector)
         {
+            TryDeleteIncompleteFile(outputBinPath);
             return ripResult;
         }
 
@@ -140,6 +166,21 @@ public class DiscRipperService
         await CueSheetWriter.WriteToFileAsync(cueSheet, outputCuePath, ct).ConfigureAwait(false);
 
         return ripResult;
+    }
+
+    private static void TryDeleteIncompleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Ignore cleanup errors
+        }
     }
 
     private async Task<RipOperationResult> RipCoreAsync(

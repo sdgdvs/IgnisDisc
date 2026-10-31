@@ -683,6 +683,11 @@ public class AudioBurnViewModel : ObservableObject
             Tracks[i].TrackNumber = i + 1;
         }
 
+        if (Tracks.Count > 0 && Tracks[0].PreGapFrames == 0)
+        {
+            Tracks[0].PreGapFrames = DefaultPreGapFrames;
+        }
+
         RecalculateTotals();
         MoveTrackUpCommand.RaiseCanExecuteChanged();
         MoveTrackDownCommand.RaiseCanExecuteChanged();
@@ -865,6 +870,13 @@ public class AudioBurnViewModel : ObservableObject
             if (burnResult.Success)
             {
                 StatusMessage = $"Audio CD burned successfully ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
+                bool hasDiscMetadata = (compilation.AlbumTitle is { Length: > 0 } title && title != "Untitled Album")
+                    || compilation.Tracks.Any(t => !string.IsNullOrWhiteSpace(t.Isrc));
+                if (!recorder.IsVirtual && IncludeCdText && hasDiscMetadata)
+                {
+                    // Windows' burning API (IMAPIv2) cannot write lead-in CD-Text or ISRC codes; be explicit about it.
+                    StatusMessage += " Note: CD-Text and ISRC metadata are not written to physical discs in this version (they are kept in the project and .cue files).";
+                }
                 BurnProgress = 100.0;
             }
             else
@@ -949,7 +961,12 @@ public class AudioBurnViewModel : ObservableObject
             ? outputFolder
             : (!string.IsNullOrWhiteSpace(RipOutputFolder) ? RipOutputFolder : Path.Combine(Path.GetTempPath(), "CdBurner_RippedAudio"));
 
+        _activeBurnCts?.Dispose();
+        _activeBurnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var activeToken = _activeBurnCts.Token;
+
         IsBusy = true;
+        CancelBurnCommand.RaiseCanExecuteChanged();
         BurnProgress = 0;
         StatusMessage = $"Ripping Audio CD tracks from {recorder.UniqueId}...";
 
@@ -957,6 +974,7 @@ public class AudioBurnViewModel : ObservableObject
         {
             var progress = new Progress<BurnProgressSnapshot>(p =>
             {
+                if (!_isBusy) return;
                 if (p.TotalLba > 0)
                 {
                     BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
@@ -970,7 +988,7 @@ public class AudioBurnViewModel : ObservableObject
                 CueSheetFileName = "album.cue"
             };
 
-            var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, ct);
+            var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, activeToken);
             LastRipResult = ripResult;
 
             if (ripResult.Success)
@@ -985,6 +1003,13 @@ public class AudioBurnViewModel : ObservableObject
 
             return ripResult;
         }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Audio CD rip cancelled by user.";
+            var cancelled = AudioCdRipResult.Failed(StatusMessage);
+            LastRipResult = cancelled;
+            return cancelled;
+        }
         catch (Exception ex)
         {
             StatusMessage = $"Rip error: {ex.Message}";
@@ -994,7 +1019,10 @@ public class AudioBurnViewModel : ObservableObject
         }
         finally
         {
+            _activeBurnCts?.Dispose();
+            _activeBurnCts = null;
             IsBusy = false;
+            CancelBurnCommand.RaiseCanExecuteChanged();
         }
     }
 

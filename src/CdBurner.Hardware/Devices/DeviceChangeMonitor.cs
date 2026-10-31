@@ -144,8 +144,19 @@ public class DeviceChangeMonitor
             return false;
         }
 
+        if (lParam <= 0xFFFF)
+        {
+            return false;
+        }
+
         try
         {
+            int dbchSize = Marshal.ReadInt32(lParam, 0);
+            if (dbchSize < 18)
+            {
+                return false;
+            }
+
             uint devType = (uint)Marshal.ReadInt32(lParam, 4);
             if (devType != DBT_DEVTYP_VOLUME)
             {

@@ -197,13 +197,13 @@ public class SurfaceScanService
         {
             totalSectors = options.SectorCount.Value;
         }
-        else if (mediaStatus.TotalSectors > 0)
-        {
-            totalSectors = Math.Max(0, mediaStatus.TotalSectors - startLba);
-        }
         else if (mediaStatus.UsedSectors > 0)
         {
             totalSectors = Math.Max(0, mediaStatus.UsedSectors - startLba);
+        }
+        else if (mediaStatus.TotalSectors > 0)
+        {
+            totalSectors = Math.Max(0, mediaStatus.TotalSectors - startLba);
         }
         else if (mediaStatus.LastRecordedLba >= 0)
         {
@@ -213,6 +213,8 @@ public class SurfaceScanService
         {
             totalSectors = 0;
         }
+
+        totalSectors = Math.Min(totalSectors, int.MaxValue - startLba);
 
         if (totalSectors <= 0)
         {

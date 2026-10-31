@@ -304,7 +304,10 @@ public class VirtualBurnEngine : IBurnEngineBackend
         ReportSnapshot(0, totalAudioSectors, "WritingLeadIn");
         cancellationToken.ThrowIfCancellationRequested();
 
-        medium.Raw2352Mode = true;
+        if (!options.Simulate)
+        {
+            medium.Raw2352Mode = true;
+        }
         int sessionStartLba = medium.IsBlank ? 0 : medium.UsedSectors;
         int currentLba = sessionStartLba;
         int sectorsWritten = 0;
@@ -532,10 +535,10 @@ public class VirtualBurnEngine : IBurnEngineBackend
             return RipOperationResult.Failed("No media present in recorder.");
         }
 
-        if (startLba < 0 || sectorCount < 0 || startLba + sectorCount > medium.TotalCapacitySectors)
+        if (startLba < 0 || sectorCount < 0 || (long)startLba + sectorCount > medium.TotalCapacitySectors)
         {
             return RipOperationResult.Failed(
-                $"Sector range [{startLba}..{startLba + sectorCount - 1}] is out of bounds for medium capacity ({medium.TotalCapacitySectors}).");
+                $"Sector range [{startLba}..{(long)startLba + sectorCount - 1}] is out of bounds for medium capacity ({medium.TotalCapacitySectors}).");
         }
 
         int sz = raw2352Mode ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;

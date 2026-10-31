@@ -128,7 +128,7 @@
                                            Margin="0,0,8,0" />
                                 <RadioButton Content="Gapless DAO"
                                              IsChecked="{Binding RecordingMode, Converter={StaticResource RecordingModeConverter}, ConverterParameter=DiscAtOnceGapless}"
-                                             ToolTip="Disc-at-Once: seamless continuous gapless audio and Lead-In CD-Text"
+                                             ToolTip="Disc-at-Once: seamless continuous gapless audio"
                                              VerticalAlignment="Center"
                                              Margin="0,0,10,0" />
                                 <RadioButton Content="TAO"
@@ -417,7 +417,7 @@
                                        FontSize="12"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,2" />
-                            <TextBlock Text="• Generates companion CDRWIN / Red Book CUE sheet ('album.cue') preserving track sequence, pre-gaps, and Lead-In CD-Text."
+                            <TextBlock Text="• Generates companion CDRWIN / Red Book CUE sheet ('album.cue') preserving track sequence, pre-gaps, and CD-Text metadata."
                                        FontSize="12"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,2" />
@@ -498,14 +498,26 @@
                                 </ComboBox>
                             </StackPanel>
 
-                            <Button Grid.Column="2"
-                                    Content="💿 Rip Audio CD"
-                                    Command="{Binding RipAudioCdCommand}"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Padding="24,10"
-                                    FontSize="14"
-                                    FontWeight="SemiBold"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🛑 Cancel Rip"
+                                        Command="{Binding CancelBurnCommand}"
+                                        Background="#D83B01"
+                                        Foreground="White"
+                                        FontWeight="Bold"
+                                        ToolTip="Cancel ongoing audio extraction"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                        Padding="18,10"
+                                        FontSize="14"
+                                        Margin="0,0,8,0" />
+                                <Button Content="💿 Rip Audio CD"
+                                        Command="{Binding RipAudioCdCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"
+                                        Padding="24,10"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>

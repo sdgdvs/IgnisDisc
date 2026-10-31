@@ -66,6 +66,12 @@ public sealed class FfmpegDvdTranscodeBuilder
     public bool OverwriteOutput { get; set; } = true;
 
     /// <summary>
+    /// Whether to apply an aspect-ratio-preserving scale and pad video filter (-vf)
+    /// to normalize arbitrary input resolutions to 720x480 (NTSC) or 720x576 (PAL). Default: false.
+    /// </summary>
+    public bool EnableScaleAndPadFilter { get; set; } = false;
+
+    /// <summary>
     /// Optional target video bitrate in kilobits per second (e.g. 6000 for 6 Mbps).
     /// </summary>
     public int? VideoBitrateKbps { get; set; }
@@ -141,6 +147,12 @@ public sealed class FfmpegDvdTranscodeBuilder
         return this;
     }
 
+    public FfmpegDvdTranscodeBuilder WithScaleAndPadFilter(bool enabled = true)
+    {
+        EnableScaleAndPadFilter = enabled;
+        return this;
+    }
+
     /// <summary>
     /// Builds a deterministic, ordered list of CLI arguments suitable for <see cref="System.Diagnostics.ProcessStartInfo.ArgumentList"/>.
     /// </summary>
@@ -185,6 +197,13 @@ public sealed class FfmpegDvdTranscodeBuilder
         };
         args.Add("-aspect");
         args.Add(aspect);
+
+        if (EnableScaleAndPadFilter)
+        {
+            string resolution = Standard == DvdVideoStandard.Ntsc ? "720:480" : "720:576";
+            args.Add("-vf");
+            args.Add($"scale={resolution}:force_original_aspect_ratio=decrease,pad={resolution}:(ow-iw)/2:(oh-ih)/2,format=yuv420p");
+        }
 
         // Optional custom video bitrates
         if (VideoBitrateKbps.HasValue)

@@ -32,6 +32,10 @@ public readonly record struct LbaAddress(int Value) : IComparable<LbaAddress>
         {
             throw new ArgumentOutOfRangeException(nameof(byteOffset), "Byte offset cannot be negative.");
         }
+        if (sectorSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sectorSize), "Sector size must be positive.");
+        }
         return new LbaAddress((int)(byteOffset / sectorSize));
     }
 

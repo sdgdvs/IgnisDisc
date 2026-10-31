@@ -85,7 +85,6 @@ public class AudioCdBurnService
 
         // 3. Process, decode, normalize, and pad tracks
         var audioTrackSources = new List<AudioTrackSource>(compilation.TrackCount);
-        var intermediateStreams = new List<Stream>();
 
         try
         {
@@ -132,45 +131,56 @@ public class AudioCdBurnService
                         $"Failed to decode track {trackItem.TrackNumber} ('{trackItem.Title}'): {ex.Message}");
                 }
 
-                intermediateStreams.Add(pcmStream);
-
-                // Normalization
-                bool shouldNormalize = compilation.NormalizeAllTracks || trackItem.NormalizeAudio || options.PerformNormalization;
-                if (shouldNormalize)
-                {
-                    try
-                    {
-                        var normalized = RedBookPcmDspProcessor.NormalizePcmStream(pcmStream);
-                        intermediateStreams.Add(normalized);
-                        pcmStream = normalized;
-                    }
-                    catch (Exception ex)
-                    {
-                        return BurnOperationResult.Failed(
-                            $"DSP normalization failed for track {trackItem.TrackNumber} ('{trackItem.Title}'): {ex.Message}");
-                    }
-                }
-
-                // Padding to 2352-byte boundary
-                var padded = RedBookPcmDspProcessor.PadToRedBookSectorBoundary(pcmStream);
-                intermediateStreams.Add(padded);
-                pcmStream = padded;
-
+                var trackStreams = new List<Stream>(3) { pcmStream };
                 byte[] pcmBytes;
-                if (pcmStream is MemoryStream ms && ms.TryGetBuffer(out var segment) && segment.Offset == 0 && segment.Count == segment.Array?.Length)
+
+                try
                 {
-                    pcmBytes = segment.Array;
+                    // Normalization
+                    bool shouldNormalize = compilation.NormalizeAllTracks || trackItem.NormalizeAudio || options.PerformNormalization;
+                    if (shouldNormalize)
+                    {
+                        try
+                        {
+                            var normalized = RedBookPcmDspProcessor.NormalizePcmStream(pcmStream);
+                            trackStreams.Add(normalized);
+                            pcmStream = normalized;
+                        }
+                        catch (Exception ex)
+                        {
+                            return BurnOperationResult.Failed(
+                                $"DSP normalization failed for track {trackItem.TrackNumber} ('{trackItem.Title}'): {ex.Message}");
+                        }
+                    }
+
+                    // Padding to 2352-byte boundary
+                    var padded = RedBookPcmDspProcessor.PadToRedBookSectorBoundary(pcmStream);
+                    trackStreams.Add(padded);
+                    pcmStream = padded;
+
+                    if (pcmStream is MemoryStream ms && ms.TryGetBuffer(out var segment) && segment.Offset == 0 && segment.Count == segment.Array?.Length)
+                    {
+                        pcmBytes = segment.Array;
+                    }
+                    else
+                    {
+                        using var mem = new MemoryStream();
+                        await pcmStream.CopyToAsync(mem, cancellationToken).ConfigureAwait(false);
+                        pcmBytes = mem.ToArray();
+                    }
                 }
-                else
+                finally
                 {
-                    using var mem = new MemoryStream();
-                    await pcmStream.CopyToAsync(mem, cancellationToken).ConfigureAwait(false);
-                    pcmBytes = mem.ToArray();
+                    foreach (var s in trackStreams)
+                    {
+                        try { s.Dispose(); } catch { }
+                    }
                 }
 
                 int frames = pcmBytes.Length / OpticalConstants.RawSectorSize;
                 trackItem.DurationFrames = frames;
-                totalRequiredFrames += frames;
+                int preGap = i > 0 ? Math.Max(0, trackItem.PreGapFrames) : Math.Max(0, trackItem.PreGapFrames - OpticalConstants.CdLeadInFrames);
+                totalRequiredFrames += frames + preGap;
 
                 var source = new AudioTrackSource
                 {
@@ -224,11 +234,6 @@ public class AudioCdBurnService
         }
         finally
         {
-            foreach (var stream in intermediateStreams)
-            {
-                try { stream.Dispose(); } catch { }
-            }
-
             foreach (var trk in audioTrackSources)
             {
                 try { trk.PcmStream?.Dispose(); } catch { }

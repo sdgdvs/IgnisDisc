@@ -4,6 +4,7 @@ using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Interop;
+using CdBurner.Hardware.Scsi;
 
 namespace CdBurner.Hardware.Burning;
 
@@ -36,6 +37,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend
         if (!OperatingSystem.IsWindows())
         {
             return BurnOperationResult.Failed("Physical burning via IMAPIv2 is only supported on Windows.");
+        }
+
+        if (options.Simulate)
+        {
+            return BurnOperationResult.Failed("Test-write (simulation) is not supported on physical drives by Windows' burning API. Nothing was written.");
         }
 
         return await MtaBurnWorker.RunBurnAsync((mtaProgress, token) =>
@@ -153,7 +159,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             comStream = new ManagedComStream(imageStream, leaveOpen: true, onBytesRead: delta =>
             {
                 long current = Interlocked.Add(ref readStreamBytes, delta);
-                if (totalStreamBytes > 0 && progress != null)
+                if (!eventSink.IsConnected && totalStreamBytes > 0 && progress != null)
                 {
                     int totalSecs = OpticalConstants.BytesToSectors(totalStreamBytes, OpticalConstants.DataSectorSize);
                     int currentSec = Math.Clamp(OpticalConstants.BytesToSectors(current, OpticalConstants.DataSectorSize), 0, totalSecs);
@@ -274,6 +280,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             return BurnOperationResult.Failed("Physical audio burning via IMAPIv2 is only supported on Windows.");
         }
 
+        if (options.Simulate)
+        {
+            return BurnOperationResult.Failed("Test-write (simulation) is not supported on physical drives by Windows' burning API. Nothing was written.");
+        }
+
         return await MtaBurnWorker.RunBurnAsync((mtaProgress, token) =>
         {
             return ExecutePhysicalAudioBurn(recorder, tracks, options, mtaProgress, token);
@@ -378,10 +389,19 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             var trk = tracks[i];
-                            Stream? rawStream = OpenAudioTrackStream(trk);
+                            var (rawStream, ownsStream) = OpenAudioTrackStream(trk);
                             if (rawStream == null) continue;
 
-                            var paddedStream = new RedBookPaddedStream(rawStream, leaveOpen: false);
+                            RedBookPaddedStream paddedStream;
+                            try
+                            {
+                                paddedStream = new RedBookPaddedStream(rawStream, leaveOpen: !ownsStream);
+                            }
+                            catch
+                            {
+                                if (ownsStream) rawStream.Dispose();
+                                throw;
+                            }
                             disposables.Add(paddedStream);
 
                             int trackNum = i + 1;
@@ -402,7 +422,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend
 
                         try { rawCd.put_RequestedSectorType(resultingSectorType); } catch { }
 
-                        if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
+                        if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0 && options.Speed.Value.BytesPerSecond != int.MaxValue)
                         {
                             int sectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
                             try { rawCd.SetWriteSpeed(sectorsPerSec, false); } catch { }
@@ -440,10 +460,12 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                             try { rawCd.ReleaseMedia(); } catch { }
                         }
                     }
-                    catch when (!completedViaDao && !cancellationToken.IsCancellationRequested)
+                    catch (Exception daoEx) when (!completedViaDao && !cancellationToken.IsCancellationRequested)
                     {
                         // If DAO preparation failed before writing started (e.g. drive only supports TAO), fall back to TAO below.
                         Interlocked.Exchange(ref bytesWritten, 0);
+                        System.Diagnostics.Trace.TraceWarning($"IgnisDisc: Disc-at-Once setup failed, falling back to Track-at-Once: {daoEx}");
+                        ReportAudioProgress(0, $"Disc-at-Once is not available on this drive/media ({daoEx.Message}). Falling back to Track-at-Once (2-second gaps between tracks)...");
                     }
                     finally
                     {
@@ -477,7 +499,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend
 
                 try
                 {
-                    if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0)
+                    if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0 && options.Speed.Value.BytesPerSecond != int.MaxValue)
                     {
                         int sectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
                         try { tao.SetWriteSpeed(sectorsPerSec, false); } catch { }
@@ -498,19 +520,31 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             var trk = tracks[i];
-                            Stream? rawStream = OpenAudioTrackStream(trk);
+                            var (rawStream, ownsStream) = OpenAudioTrackStream(trk);
                             if (rawStream == null) continue;
 
                             int trackNum = i + 1;
                             ReportAudioProgress(0, $"Writing Audio Track {trackNum}/{tracks.Count}: {trk.Title}...");
 
-                            using var paddedStream = new RedBookPaddedStream(rawStream, leaveOpen: false);
-                            using var comStream = new ManagedComStream(
+                            RedBookPaddedStream paddedStream;
+                            try
+                            {
+                                paddedStream = new RedBookPaddedStream(rawStream, leaveOpen: !ownsStream);
+                            }
+                            catch
+                            {
+                                if (ownsStream) rawStream.Dispose();
+                                throw;
+                            }
+
+                            using (paddedStream)
+                            using (var comStream = new ManagedComStream(
                                 paddedStream,
                                 leaveOpen: true,
-                                bytesRead => ReportAudioProgress(bytesRead, $"Writing Audio Track {trackNum}/{tracks.Count}: {trk.Title}..."));
-
-                            tao.AddAudioTrack(comStream);
+                                bytesRead => ReportAudioProgress(bytesRead, $"Writing Audio Track {trackNum}/{tracks.Count}: {trk.Title}...")))
+                            {
+                                tao.AddAudioTrack(comStream);
+                            }
                         }
                     }
                     finally
@@ -580,7 +614,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend
         }
     }
 
-    private static Stream? OpenAudioTrackStream(AudioTrackSource trk)
+    private static (Stream? Stream, bool OwnsStream) OpenAudioTrackStream(AudioTrackSource trk)
     {
         if (trk.PcmStream != null)
         {
@@ -588,20 +622,20 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             {
                 trk.PcmStream.Position = 0;
             }
-            return trk.PcmStream;
+            return (trk.PcmStream, false);
         }
 
         if (trk.PcmStreamFactory != null)
         {
-            return trk.PcmStreamFactory();
+            return (trk.PcmStreamFactory(), true);
         }
 
         if (!string.IsNullOrEmpty(trk.FilePath) && File.Exists(trk.FilePath))
         {
-            return File.OpenRead(trk.FilePath);
+            return (File.OpenRead(trk.FilePath), true);
         }
 
-        return null;
+        return (null, false);
     }
 
     /// <inheritdoc/>
@@ -624,6 +658,8 @@ public class Imapi2BurnEngine : IBurnEngineBackend
             var sw = Stopwatch.StartNew();
 
             IDiscFormat2Erase? erase = null;
+            IDiscRecorder2? comRecorder = null;
+            bool createdComRecorder = false;
             try
             {
                 erase = Imapi2ComFactory.CreateDiscFormat2Erase();
@@ -632,11 +668,15 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                     return BurnOperationResult.Failed("Failed to create MsftDiscFormat2Erase COM object.");
                 }
 
-                IDiscRecorder2? comRecorder = (recorder as ImapiDiscRecorder)?.Recorder;
+                comRecorder = (recorder as ImapiDiscRecorder)?.Recorder;
                 if (comRecorder == null)
                 {
                     comRecorder = Imapi2ComFactory.CreateDiscRecorder2();
-                    comRecorder?.InitializeDiscRecorder(recorder.UniqueId);
+                    if (comRecorder != null)
+                    {
+                        createdComRecorder = true;
+                        comRecorder.InitializeDiscRecorder(recorder.UniqueId);
+                    }
                 }
 
                 if (comRecorder == null)
@@ -649,12 +689,42 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                 erase.put_FullErase(fullErase);
 
                 token.ThrowIfCancellationRequested();
+
+                mtaProgress?.Report(new BurnProgressSnapshot
+                {
+                    ElapsedTime = sw.Elapsed,
+                    RemainingTime = TimeSpan.Zero,
+                    CurrentLba = 0,
+                    TotalLba = 100,
+                    BufferLevelPercent = 100.0,
+                    CurrentActionDescription = fullErase ? "FullErasing" : "QuickErasing"
+                });
+
                 erase.EraseMedia();
+                sw.Stop();
+
+                mtaProgress?.Report(new BurnProgressSnapshot
+                {
+                    ElapsedTime = sw.Elapsed,
+                    RemainingTime = TimeSpan.Zero,
+                    CurrentLba = 100,
+                    TotalLba = 100,
+                    BufferLevelPercent = 0.0,
+                    CurrentActionDescription = "Completed"
+                });
 
                 return BurnOperationResult.Succeeded(0, sw.Elapsed);
             }
+            catch (OperationCanceledException oce)
+            {
+                return BurnOperationResult.CancelledResult(oce.Message);
+            }
             catch (Exception ex)
             {
+                if (token.IsCancellationRequested)
+                {
+                    return BurnOperationResult.CancelledResult("Erase operation was cancelled.");
+                }
                 return BurnOperationResult.Failed($"Erase failed: {ex.Message}", ex);
             }
             finally
@@ -662,6 +732,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend
                 if (erase != null)
                 {
                     Imapi2ComFactory.FinalRelease(ref erase);
+                }
+
+                if (createdComRecorder && comRecorder != null)
+                {
+                    Imapi2ComFactory.FinalRelease(ref comRecorder);
                 }
             }
         }, progress, cancellationToken);
@@ -680,7 +755,14 @@ public class Imapi2BurnEngine : IBurnEngineBackend
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(sectorConsumer);
 
-        return await Task.FromResult(RipOperationResult.Failed("Direct sector reading on physical recorder is supported via SCSI pass-through."));
+        return await PhysicalSectorReader.ReadAsync(
+            recorder.VolumePath,
+            startLba,
+            sectorCount,
+            raw2352Mode,
+            sectorConsumer,
+            progress,
+            cancellationToken).ConfigureAwait(false);
     }
 }
 

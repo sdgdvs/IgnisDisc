@@ -80,6 +80,12 @@ public class CompilationFile : CompilationNode
     public int? ImportedStartLba { get; set; }
 
     /// <summary>
+    /// Indicates that <see cref="ImportedStartLba"/> was assigned by the DVD-Video layout planner
+    /// for the current compilation rather than imported from a previous optical disc session.
+    /// </summary>
+    internal bool IsPlannedLayoutLba { get; set; }
+
+    /// <summary>
     /// Optional stream factory delegate for testing or in-memory content generation without temporary files.
     /// </summary>
     public Func<Stream>? StreamFactory { get; set; }
@@ -175,8 +181,13 @@ public class CompilationFile : CompilationNode
             return StreamFactory();
         }
 
-        if (!string.IsNullOrEmpty(SourceFilePath) && File.Exists(SourceFilePath))
+        if (!string.IsNullOrEmpty(SourceFilePath))
         {
+            if (!File.Exists(SourceFilePath))
+            {
+                throw new FileNotFoundException($"Compilation source file not found: '{SourceFilePath}'", SourceFilePath);
+            }
+
             return new FileStream(SourceFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         }
 
@@ -245,6 +256,10 @@ public class CompilationDirectory : CompilationNode
             switch (policy)
             {
                 case DuplicateFilePolicy.Overwrite:
+                    if (existing is CompilationDirectory)
+                    {
+                        throw new InvalidOperationException($"Cannot overwrite existing directory '{file.Name}' with a file in '{VirtualPath}'.");
+                    }
                     _children.Remove(existing);
                     existing.Parent = null;
                     break;
@@ -264,6 +279,7 @@ public class CompilationDirectory : CompilationNode
             }
         }
 
+        file.Parent?.RemoveChild(file);
         file.Parent = this;
         _children.Add(file);
         return file;
@@ -352,6 +368,14 @@ public class CompilationDirectory : CompilationNode
     {
         ArgumentNullException.ThrowIfNull(directory);
 
+        for (CompilationDirectory? anc = this; anc != null; anc = anc.Parent)
+        {
+            if (ReferenceEquals(anc, directory))
+            {
+                throw new InvalidOperationException("Cannot add a directory to itself or one of its own descendants.");
+            }
+        }
+
         var existing = _children.FirstOrDefault(c => string.Equals(c.Name, directory.Name, StringComparison.OrdinalIgnoreCase));
         if (existing != null)
         {
@@ -363,6 +387,7 @@ public class CompilationDirectory : CompilationNode
             existing.Parent = null;
         }
 
+        directory.Parent?.RemoveChild(directory);
         directory.Parent = this;
         _children.Add(directory);
         return directory;

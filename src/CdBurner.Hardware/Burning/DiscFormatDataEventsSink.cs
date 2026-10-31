@@ -61,9 +61,20 @@ public class DiscFormatDataEventsSink : DDiscFormat2DataEvents, IDisposable
             cpc.FindConnectionPoint(ref iid, out var cp);
             if (cp != null)
             {
-                cp.Advise(this, out int cookie);
-                _connectionPoint = cp;
-                _cookie = cookie;
+                try
+                {
+                    cp.Advise(this, out int cookie);
+                    _connectionPoint = cp;
+                    _cookie = cookie;
+                }
+                catch
+                {
+                    if (Marshal.IsComObject(cp))
+                    {
+                        try { Marshal.ReleaseComObject(cp); } catch { }
+                    }
+                    throw;
+                }
             }
         }
     }
@@ -85,6 +96,10 @@ public class DiscFormatDataEventsSink : DDiscFormat2DataEvents, IDisposable
             }
             finally
             {
+                if (_connectionPoint != null && Marshal.IsComObject(_connectionPoint))
+                {
+                    try { Marshal.ReleaseComObject(_connectionPoint); } catch { }
+                }
                 _cookie = 0;
                 _connectionPoint = null;
             }
@@ -101,12 +116,22 @@ public class DiscFormatDataEventsSink : DDiscFormat2DataEvents, IDisposable
         [In, MarshalAs(UnmanagedType.IDispatch)] object sender,
         [In, MarshalAs(UnmanagedType.IDispatch)] object progress)
     {
-        var snapshot = ExtractSnapshot(sender, progress);
-        if (snapshot != null)
+        try
         {
-            _progress?.Report(snapshot);
-            _onSnapshot?.Invoke(snapshot);
-            ProgressReported?.Invoke(this, snapshot);
+            var snapshot = ExtractSnapshot(sender, progress);
+            if (snapshot != null)
+            {
+                _progress?.Report(snapshot);
+                _onSnapshot?.Invoke(snapshot);
+                ProgressReported?.Invoke(this, snapshot);
+            }
+        }
+        finally
+        {
+            if (progress != null && !ReferenceEquals(progress, sender) && Marshal.IsComObject(progress))
+            {
+                try { Marshal.ReleaseComObject(progress); } catch { }
+            }
         }
     }
 

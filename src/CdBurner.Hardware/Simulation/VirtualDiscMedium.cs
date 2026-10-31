@@ -119,9 +119,18 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
     /// <summary>
     /// LBA address of the last recorded sector, or -1 if the medium is blank.
     /// </summary>
-    public int LastRecordedLba => UsedSectors > 0
-        ? (Sessions.Count > 0 ? Sessions[^1].EndLba : UsedSectors - 1)
-        : -1;
+    public int LastRecordedLba
+    {
+        get
+        {
+            lock (_syncRoot)
+            {
+                return UsedSectors > 0
+                    ? (Sessions.Count > 0 ? Sessions[^1].EndLba : UsedSectors - 1)
+                    : -1;
+            }
+        }
+    }
 
     private int _nextWritableLba = -1;
 
@@ -132,11 +141,20 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
     {
         get
         {
-            if (_nextWritableLba >= 0) return _nextWritableLba;
-            if (Sessions.Count > 0) return Sessions[^1].EndLba + 1;
-            return UsedSectors;
+            lock (_syncRoot)
+            {
+                if (_nextWritableLba >= 0) return _nextWritableLba;
+                if (Sessions.Count > 0) return Sessions[^1].EndLba + 1;
+                return UsedSectors;
+            }
         }
-        set => _nextWritableLba = value;
+        set
+        {
+            lock (_syncRoot)
+            {
+                _nextWritableLba = value;
+            }
+        }
     }
 
     /// <summary>
@@ -271,24 +289,23 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (SimulatedBadLbas.Contains(lba))
-        {
-            throw new OpticalReadException(lba, $"Unrecovered read error at LBA {lba} (Sense: 03/11/00)");
-        }
-
-        if (lba < 0 || lba >= TotalCapacitySectors)
-        {
-            throw new ArgumentOutOfRangeException(nameof(lba), $"LBA {lba} is out of media capacity bounds [0..{TotalCapacitySectors - 1}].");
-        }
-
-        int sz = sectorSize ?? SectorSize;
-        if (destination.Length < sz)
-        {
-            throw new ArgumentException($"Destination buffer length ({destination.Length}) is less than sector size ({sz}).", nameof(destination));
-        }
-
         lock (_syncRoot)
         {
+            if (SimulatedBadLbas.Contains(lba))
+            {
+                throw new OpticalReadException(lba, $"Unrecovered read error at LBA {lba} (Sense: 03/11/00)");
+            }
+
+            if (lba < 0 || lba >= TotalCapacitySectors)
+            {
+                throw new ArgumentOutOfRangeException(nameof(lba), $"LBA {lba} is out of media capacity bounds [0..{TotalCapacitySectors - 1}].");
+            }
+
+            int sz = sectorSize ?? SectorSize;
+            if (destination.Length < sz)
+            {
+                throw new ArgumentException($"Destination buffer length ({destination.Length}) is less than sector size ({sz}).", nameof(destination));
+            }
             if (_fileStream != null)
             {
                 long offset = (long)lba * sz;
@@ -347,9 +364,9 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
         }
 
         int sz = sectorSize ?? SectorSize;
-        if (destination.Length < sectorCount * sz)
+        if ((long)sectorCount * sz > destination.Length)
         {
-            throw new ArgumentException($"Destination buffer length ({destination.Length}) is less than required ({sectorCount * sz}).", nameof(destination));
+            throw new ArgumentException($"Destination buffer length ({destination.Length}) is less than required ({(long)sectorCount * sz}).", nameof(destination));
         }
 
         for (int i = 0; i < sectorCount; i++)

@@ -147,6 +147,11 @@ public class BookTypeService
     /// <returns>Byte array containing 4-byte header and data payload.</returns>
     public static byte[] BuildBookTypePayload(DvdBookType bookType = DvdBookType.DvdRom, ushort dataLength = 16)
     {
+        if (dataLength < 1 || dataLength > ushort.MaxValue - 4)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dataLength), "Structure data length must be between 1 and 65531 bytes.");
+        }
+
         byte[] payload = new byte[4 + dataLength];
         payload[0] = (byte)(dataLength >> 8);
         payload[1] = (byte)(dataLength & 0xFF);
@@ -169,6 +174,11 @@ public class BookTypeService
         byte formatCode = FormatCodePhysicalFormatInformation,
         ushort dataLength = 16)
     {
+        if (dataLength < 1 || dataLength > ushort.MaxValue - 4)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dataLength), "Structure data length must be between 1 and 65531 bytes.");
+        }
+
         byte[] cdb = BuildSendDiscStructureCdb(formatCode, (ushort)(4 + dataLength));
         byte[] header = BuildStructureHeader(dataLength);
         return (cdb, header);
@@ -182,6 +192,11 @@ public class BookTypeService
         byte formatCode = FormatCodePhysicalFormatInformation,
         ushort dataLength = 16)
     {
+        if (dataLength < 1 || dataLength > ushort.MaxValue - 4)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dataLength), "Structure data length must be between 1 and 65531 bytes.");
+        }
+
         byte[] payload = BuildBookTypePayload(bookType, dataLength);
         byte[] cdb = BuildSendDiscStructureCdb(formatCode, (ushort)payload.Length);
         return (cdb, payload);
@@ -279,7 +294,14 @@ public class BookTypeService
                 $"Bitsetting is not supported on media type '{status.MediaType.GetDisplayName()}'. Only DVD+R, DVD+RW, and DVD+R DL media support book type modification.");
         }
 
-        if (recorder.IsVirtual)
+        if (!recorder.IsVirtual)
+        {
+            // Book type changes use drive-vendor-specific commands (they differ between LG, Pioneer, Lite-On, ASUS...).
+            // Until those are implemented and tested, report honestly instead of claiming success.
+            return BurnOperationResult.Failed(
+                "Book type (bitsetting) is not yet supported on physical drives. No change was made to the disc.");
+        }
+
         {
             var bookTypeProp = recorder.GetType().GetProperty("BookType");
             if (bookTypeProp != null && bookTypeProp.CanWrite)

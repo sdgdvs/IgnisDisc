@@ -71,20 +71,39 @@ public class DataBurnService
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        using var imageStream = new MemoryStream();
-        await IsoUdfImageBuilder.BuildAsync(rootDirectory, imageStream, buildOptions, null, cancellationToken);
-        imageStream.Position = 0;
+        long estimatedPayloadBytes = rootDirectory.GetAllFilesRecursive().Sum(f => f.SizeBytes);
+        Stream imageStream = estimatedPayloadBytes > 128L * 1024 * 1024
+            ? new FileStream(
+                Path.Combine(Path.GetTempPath(), $"cdburner_iso_{Guid.NewGuid():N}.tmp"),
+                FileMode.Create,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 65536,
+                options: FileOptions.DeleteOnClose | FileOptions.SequentialScan | FileOptions.Asynchronous)
+            : new MemoryStream();
 
-        // 3. Verify media capacity
-        int requiredSectors = OpticalConstants.BytesToSectors(imageStream.Length, OpticalConstants.DataSectorSize);
-        if (mediaStatus.FreeSectors > 0 && requiredSectors > mediaStatus.FreeSectors)
+        // When appending a session, the file system must be laid out relative to the drive's next writable address,
+        // otherwise every directory and file pointer in the new session is off by the size of the earlier sessions.
+        int sessionStartLba = (!mediaStatus.IsBlank && mediaStatus.IsAppendable && mediaStatus.NextWritableLba > 0)
+            ? mediaStatus.NextWritableLba
+            : 0;
+
+        using (imageStream)
         {
-            return DataBurnResult.Failed(
-                $"Compilation size ({requiredSectors} sectors) exceeds available media capacity ({mediaStatus.FreeSectors} sectors).");
-        }
+            await IsoUdfImageBuilder.BuildAsync(rootDirectory, imageStream, buildOptions, null, cancellationToken, sessionStartLba);
+            imageStream.Position = 0;
 
-        // 4. Burn stream
-        return await ExecuteBurnPipelineAsync(recorder, imageStream, burnOptions, requiredSectors, progress, cancellationToken);
+            // 3. Verify media capacity
+            int requiredSectors = OpticalConstants.BytesToSectors(imageStream.Length, OpticalConstants.DataSectorSize);
+            if (mediaStatus.FreeSectors > 0 && requiredSectors > mediaStatus.FreeSectors)
+            {
+                return DataBurnResult.Failed(
+                    $"Compilation size ({requiredSectors} sectors) exceeds available media capacity ({mediaStatus.FreeSectors} sectors).");
+            }
+
+            // 4. Burn stream
+            return await ExecuteBurnPipelineAsync(recorder, imageStream, burnOptions, requiredSectors, progress, cancellationToken);
+        }
     }
 
     /// <summary>
@@ -191,6 +210,11 @@ public class DataBurnService
     {
         bool ejectRequested = burnOptions.EjectWhenDone || burnOptions.EjectAfterBurn;
         bool verifyRequested = burnOptions.VerifyAfterBurn;
+        long initialStreamPosition = imageStream.CanSeek ? imageStream.Position : 0;
+        var preBurnStatus = recorder.QueryMediaStatus();
+        int burnStartLba = (!preBurnStatus.IsBlank && preBurnStatus.IsAppendable && preBurnStatus.NextWritableLba > 0)
+            ? preBurnStatus.NextWritableLba
+            : 0;
 
         // When verification is requested, defer media ejection until verification finishes
         var engineOptions = new DataBurnOptions
@@ -227,7 +251,14 @@ public class DataBurnService
         if (verifyRequested && !burnOptions.Simulate)
         {
             int sectorsWritten = burnResult.SectorsWritten > 0 ? burnResult.SectorsWritten : estimatedSectors;
-            var verifyResult = await VerifyBurnedDiscAsync(recorder, imageStream, sectorsWritten, progress, cancellationToken);
+            var verifyResult = await VerifyBurnedDiscAsync(
+                recorder,
+                imageStream,
+                sectorsWritten,
+                initialStreamPosition,
+                burnStartLba,
+                progress,
+                cancellationToken);
             if (!verifyResult.Success)
             {
                 if (ejectRequested)
@@ -261,12 +292,14 @@ public class DataBurnService
         IDiscRecorderBackend recorder,
         Stream sourceStream,
         int sectorCount,
+        long initialStreamPosition,
+        int startLba,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken)
     {
         if (sourceStream.CanSeek)
         {
-            sourceStream.Position = 0;
+            sourceStream.Position = initialStreamPosition;
         }
 
         using var sourceSha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -292,7 +325,7 @@ public class DataBurnService
         // Read disc sectors and hash
         var ripResult = await _burnEngine.ReadSectorsAsync(
             recorder,
-            startLba: 0,
+            startLba: startLba,
             sectorCount: sectorCount,
             raw2352Mode: false,
             sectorConsumer: (lba, sectorData) =>

@@ -273,7 +273,7 @@ public class FileSystemPresetToStringConverter : IValueConverter
             {
                 FileSystemPreset.IsoJolietUdf => "ISO 9660 + Joliet + UDF 1.02 (Universal)",
                 FileSystemPreset.IsoOnlyLevel1 => "ISO 9660 Level 1 (Legacy DOS)",
-                FileSystemPreset.UdfOnly201 => "UDF 2.01 (Modern Data)",
+                FileSystemPreset.UdfOnly201 => "UDF 1.02 + ISO (large files over 4 GB)",
                 FileSystemPreset.DvdVideoBridge => "DVD-Video Bridge (UDF 1.02 + ISO 9660)",
                 _ => preset.ToString()
             };

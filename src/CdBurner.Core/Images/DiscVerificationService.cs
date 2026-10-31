@@ -462,10 +462,26 @@ public class DiscVerificationService
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(rootDirectory);
-        using var isoStream = IsoUdfImageBuilder.BuildToMemoryStream(rootDirectory, buildOptions);
-        var fileMap = LbaFileExtentMap.FromIsoStream(isoStream);
-        isoStream.Position = 0;
-        return await VerifyDiscAgainstStreamAsync(recorder, engine, isoStream, raw2352Mode: false, fileMap, progress, ct).ConfigureAwait(false);
+
+        long estimatedPayloadBytes = rootDirectory.GetAllFilesRecursive().Sum(f => f.SizeBytes);
+        Stream isoStream = estimatedPayloadBytes > 128L * 1024 * 1024
+            ? new FileStream(
+                Path.Combine(Path.GetTempPath(), $"cdburner_verify_{Guid.NewGuid():N}.tmp"),
+                FileMode.Create,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 65536,
+                options: FileOptions.DeleteOnClose | FileOptions.SequentialScan | FileOptions.Asynchronous)
+            : new MemoryStream();
+
+        await using (isoStream.ConfigureAwait(false))
+        {
+            await IsoUdfImageBuilder.BuildAsync(rootDirectory, isoStream, buildOptions, null, ct).ConfigureAwait(false);
+            isoStream.Position = 0;
+            var fileMap = LbaFileExtentMap.FromIsoStream(isoStream);
+            isoStream.Position = 0;
+            return await VerifyDiscAgainstStreamAsync(recorder, engine, isoStream, raw2352Mode: false, fileMap, progress, ct).ConfigureAwait(false);
+        }
     }
 
     private static void MapCorruptedLba(int lba, IReadOnlyList<LbaFileExtentMap>? fileMap, List<string> corruptedFiles)

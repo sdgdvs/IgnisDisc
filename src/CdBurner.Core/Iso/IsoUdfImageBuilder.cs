@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.RegularExpressions;
 using CdBurner.Core.Compilation;
 using CdBurner.Core.Primitives;
 
@@ -133,6 +134,13 @@ public static class IsoUdfImageBuilder
         public int Tea01Lba { get; set; } = -1;
         public int AvdpLba { get; set; } = -1;
 
+        public bool UdfEnabled { get; set; }
+        public int UdfVdsLba { get; set; } = -1;
+        public int UdfPartitionStartLba { get; set; } = -1;
+        public int UdfFsdLba { get; set; } = -1;
+        public int UdfFsdTerminatorLba { get; set; } = -1;
+        public int UdfClosingAvdpLba { get; set; } = -1;
+
         public int BootCatalogLba { get; set; } = -1;
         public byte[]? DefaultBootImageData { get; set; }
         public int DefaultBootImageLba { get; set; } = -1;
@@ -186,13 +194,33 @@ public static class IsoUdfImageBuilder
                     queue.Enqueue(sub);
                 }
 
-                // Sort files deterministically by name
-                dirNode.Files.Sort((a, b) => string.Compare(a.SourceFile.Name, b.SourceFile.Name, StringComparison.OrdinalIgnoreCase));
+                // Sort files: use canonical DVD-Video ordering for VIDEO_TS directories, alphabetical otherwise
+                if (string.Equals(dirNode.SourceDir.Name, "VIDEO_TS", StringComparison.OrdinalIgnoreCase))
+                {
+                    dirNode.Files.Sort((a, b) => GetDvdVideoSortKey(a.SourceFile.Name).CompareTo(GetDvdVideoSortKey(b.SourceFile.Name)));
+                }
+                else
+                {
+                    dirNode.Files.Sort((a, b) => string.Compare(a.SourceFile.Name, b.SourceFile.Name, StringComparison.OrdinalIgnoreCase));
+                }
+
+                var usedIsoNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var f in dirNode.Files)
                 {
+                    int collisionIndex = 0;
+                    string candidate = IsoNameSanitizer.ToIso9660Level1Name(f.SourceFile.Name, collisionIndex);
+                    while (!usedIsoNames.Add(candidate))
+                    {
+                        collisionIndex = collisionIndex == 0 ? 2 : collisionIndex + 1;
+                        candidate = IsoNameSanitizer.ToIso9660Level1Name(f.SourceFile.Name, collisionIndex);
+                    }
+                    f.Iso9660Name = candidate;
                     ctx.AllFiles.Add(f);
                 }
             }
+
+            // 2b. Resolve unique ISO 9660 / Joliet / UDF identifiers per directory (handles truncation collisions)
+            AssignUniqueNames(ctx);
 
             // 3. Pre-calculate extent sector requirements for each directory
             foreach (var dir in ctx.BfsDirectories)
@@ -239,6 +267,25 @@ public static class IsoUdfImageBuilder
                 }
             }
 
+            // 4c. Validate file sizes. ISO 9660 / Joliet directory records store a 32-bit size; larger files are
+            //     only representable through UDF (which this builder writes using multiple extents).
+            const long MaxIso9660FileSize = uint.MaxValue;
+            var oversized = ctx.AllFiles.FirstOrDefault(f => f.SourceFile.SizeBytes > MaxIso9660FileSize);
+
+            // UDF partition can only reference data recorded inside the current session. Appended sessions that
+            // reference files from earlier sessions therefore fall back to ISO 9660 / Joliet only.
+            bool referencesPriorSession = sessionStartLba > 0 && ctx.AllFiles.Any(f =>
+                f.SourceFile.ImportedStartLba.HasValue &&
+                !f.SourceFile.IsPlannedLayoutLba &&
+                f.SourceFile.ImportedStartLba.Value < sessionStartLba);
+            ctx.UdfEnabled = options.IncludeUdf && !referencesPriorSession;
+
+            if (oversized != null && !ctx.UdfEnabled)
+            {
+                throw new NotSupportedException(
+                    $"File '{oversized.SourceFile.Name}' is {oversized.SourceFile.SizeBytes:N0} bytes. Files of 4 GiB or larger require the UDF file system; enable UDF for this compilation.");
+            }
+
             // 5. Assign LBA sectors sequentially
             int currentLba = sessionStartLba + 16;
             ctx.PvdLba = currentLba++; // sessionStartLba + 16
@@ -255,11 +302,28 @@ public static class IsoUdfImageBuilder
 
             ctx.TerminatorLba = currentLba++;
 
-            if (options.IncludeUdf)
+            if (ctx.UdfEnabled)
             {
                 ctx.Bea01Lba = currentLba++;
                 ctx.NsrLba = currentLba++;
                 ctx.Tea01Lba = currentLba++;
+
+                // The UDF Anchor Volume Descriptor Pointer must sit exactly at session start + 256, followed by
+                // the 16-sector Volume Descriptor Sequence. If the ISO 9660 metadata would run into that region,
+                // place it after the VDS instead of overlapping it.
+                int isoMetadataSectors = 2 * ctx.IsoPathTableSectors
+                    + ctx.BfsDirectories.Sum(d => d.IsoSectorCount)
+                    + (options.IncludeJoliet ? 2 * ctx.JolietPathTableSectors + ctx.BfsDirectories.Sum(d => d.JolietSectorCount) : 0)
+                    + (options.BootConfiguration != null ? 1 + ctx.DefaultBootImageSectorCount + ctx.AdditionalBootImages.Sum(b => b.SectorCount) : 0);
+
+                ctx.AvdpLba = sessionStartLba + 256;
+                ctx.UdfVdsLba = ctx.AvdpLba + 1;
+                ctx.UdfPartitionStartLba = ctx.UdfVdsLba + UdfVdsSectorCount;
+
+                if (currentLba + isoMetadataSectors > ctx.AvdpLba)
+                {
+                    currentLba = ctx.UdfPartitionStartLba;
+                }
             }
 
             // Assign Path Table LBAs
@@ -308,48 +372,187 @@ public static class IsoUdfImageBuilder
                 }
             }
 
-            // Reserve LBA 256 for UDF AVDP
-            if (options.IncludeUdf)
+            // Reserve the UDF AVDP + VDS region and allocate UDF file-set metadata at the start of the partition
+            if (ctx.UdfEnabled)
             {
-                int targetAvdpLba = sessionStartLba > 0 ? (sessionStartLba + 256) : 256;
-                ctx.AvdpLba = targetAvdpLba;
-                if (currentLba <= targetAvdpLba)
+                currentLba = Math.Max(currentLba, ctx.UdfPartitionStartLba);
+
+                ctx.UdfFsdLba = currentLba++;
+                ctx.UdfFsdTerminatorLba = currentLba++;
+
+                foreach (var dir in ctx.BfsDirectories)
                 {
-                    currentLba = targetAvdpLba + 1; // File data starts after AVDP
+                    dir.UdfFeLba = currentLba++;
+                    dir.UdfFidBytes = CalculateUdfFidStreamLength(dir);
+                    dir.UdfFidLba = currentLba;
+                    currentLba += (dir.UdfFidBytes + SectorSize - 1) / SectorSize;
                 }
-                else
+
+                foreach (var file in ctx.AllFiles)
                 {
-                    currentLba = Math.Max(currentLba, targetAvdpLba + 1);
+                    file.UdfFeLba = currentLba++;
                 }
             }
 
             // Assign file extents
             foreach (var file in ctx.AllFiles)
             {
-                if (file.SourceFile.ImportedStartLba.HasValue)
+                bool isImportedFromPriorSession = sessionStartLba > 0
+                    && file.SourceFile.ImportedStartLba.HasValue
+                    && !file.SourceFile.IsPlannedLayoutLba
+                    && file.SourceFile.ImportedStartLba.Value < sessionStartLba;
+
+                file.IsImportedFromPreviousSession = isImportedFromPriorSession;
+
+                if (isImportedFromPriorSession)
                 {
-                    file.StartLba = file.SourceFile.ImportedStartLba.Value;
+                    file.StartLba = file.SourceFile.ImportedStartLba!.Value;
                 }
                 else
                 {
+                    // Check for DVD-Video 16-sector (32 KB) ECC gap separation between IFO and BUP
+                    bool isInsideVideoTs = file.ParentDirectory != null
+                        && string.Equals(file.ParentDirectory.SourceDir.Name, "VIDEO_TS", StringComparison.OrdinalIgnoreCase);
+
+                    if (isInsideVideoTs)
+                    {
+                        string upperName = file.SourceFile.Name.ToUpperInvariant();
+                        string? ifoName = upperName == "VIDEO_TS.BUP"
+                            ? "VIDEO_TS.IFO"
+                            : (upperName.EndsWith("_0.BUP", StringComparison.OrdinalIgnoreCase)
+                                ? upperName[..^4] + ".IFO"
+                                : null);
+
+                        if (ifoName != null)
+                        {
+                            var ifoNode = ctx.AllFiles.FirstOrDefault(f =>
+                                f.ParentDirectory == file.ParentDirectory &&
+                                string.Equals(f.SourceFile.Name, ifoName, StringComparison.OrdinalIgnoreCase));
+
+                            if (ifoNode != null)
+                            {
+                                int ifoEndLba = ifoNode.StartLba + ifoNode.SectorCount;
+                                if (currentLba - ifoEndLba < OpticalConstants.DvdEccBlockSectors)
+                                {
+                                    currentLba = ifoEndLba + OpticalConstants.DvdEccBlockSectors;
+                                }
+                            }
+                        }
+                    }
+
                     file.StartLba = currentLba;
+                    if (file.SourceFile.ImportedStartLba.HasValue)
+                    {
+                        file.SourceFile.ImportedStartLba = file.StartLba;
+                    }
                     currentLba += file.SectorCount;
                 }
             }
 
             int total = currentLba;
-            if (options.IncludeUdf)
+            if (ctx.UdfEnabled)
             {
-                int minTotal = sessionStartLba > 0 ? (sessionStartLba + 257) : 257;
-                if (total < minTotal)
-                {
-                    total = minTotal;
-                }
+                // Second AVDP at the last sector of the volume (UDF 1.02 §2.2.3 requires at least two anchors).
+                ctx.UdfClosingAvdpLba = total;
+                total++;
             }
 
             ctx.TotalSectors = total;
             return ctx;
         }
+
+        private static void AssignUniqueNames(LayoutContext ctx)
+        {
+            foreach (var dir in ctx.BfsDirectories)
+            {
+                var isoNames = new HashSet<string>(dir.Files.Select(f => f.Iso9660Name), StringComparer.OrdinalIgnoreCase);
+                var jolietNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var udfNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var sub in dir.SubDirectories)
+                {
+                    sub.IsoName = MakeUnique(IsoNameSanitizer.ToIso9660DirectoryName(sub.SourceDir.Name), isoNames, 31, keepExtension: false);
+                    sub.JolietName = MakeUnique(IsoNameSanitizer.ToJolietName(sub.SourceDir.Name), jolietNames, 64, keepExtension: false);
+                    sub.UdfName = MakeUnique(TruncateForUdf(sub.SourceDir.Name), udfNames, MaxUdfNameChars(sub.SourceDir.Name), keepExtension: false);
+                }
+
+                foreach (var file in dir.Files)
+                {
+                    file.JolietName = MakeUnique(IsoNameSanitizer.ToJolietName(file.SourceFile.Name), jolietNames, 64, keepExtension: true);
+                    file.UdfName = MakeUnique(TruncateForUdf(file.SourceFile.Name), udfNames, MaxUdfNameChars(file.SourceFile.Name), keepExtension: true);
+                }
+            }
+        }
+
+        private static int MaxUdfNameChars(string name) => name.Any(c => c > 0xFF) ? 127 : 254;
+
+        private static string TruncateForUdf(string name)
+        {
+            int max = MaxUdfNameChars(name);
+            if (name.Length <= max)
+            {
+                return name;
+            }
+
+            string ext = Path.GetExtension(name);
+            if (ext.Length >= max)
+            {
+                ext = string.Empty;
+            }
+            return name[..(max - ext.Length)] + ext;
+        }
+
+        /// <summary>
+        /// Returns <paramref name="candidate"/> or a "~N" disambiguated variant that is not yet in <paramref name="used"/>,
+        /// keeping the result within <paramref name="maxLength"/> characters, and records it as used.
+        /// </summary>
+        private static string MakeUnique(string candidate, HashSet<string> used, int maxLength, bool keepExtension)
+        {
+            if (used.Add(candidate))
+            {
+                return candidate;
+            }
+
+            // ISO 9660 identifiers may carry a ";1" version suffix; keep it outside the disambiguation.
+            string version = string.Empty;
+            int semi = candidate.LastIndexOf(';');
+            if (semi > 0)
+            {
+                version = candidate[semi..];
+                candidate = candidate[..semi];
+            }
+
+            string ext = keepExtension ? Path.GetExtension(candidate) : string.Empty;
+            string stem = candidate[..(candidate.Length - ext.Length)];
+
+            for (int n = 1; n < 100000; n++)
+            {
+                string suffix = "~" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                int room = Math.Max(1, maxLength - version.Length - ext.Length - suffix.Length);
+                string attempt = (stem.Length > room ? stem[..room] : stem) + suffix + ext + version;
+                if (used.Add(attempt))
+                {
+                    return attempt;
+                }
+            }
+
+            throw new InvalidOperationException($"Unable to generate a unique name for '{candidate}'.");
+        }
+
+        private static int CalculateUdfFidStreamLength(DirectoryLayoutNode dir)
+        {
+            int total = UdfFidLength(0); // parent entry
+            foreach (var sub in dir.SubDirectories)
+            {
+                total += UdfFidLength(EncodeOstaCompressedUnicode(sub.UdfName, 255).Length);
+            }
+            foreach (var file in dir.Files)
+            {
+                total += UdfFidLength(EncodeOstaCompressedUnicode(file.UdfName, 255).Length);
+            }
+            return total;
+        }
+
 
         private static DirectoryLayoutNode BuildNodeHierarchy(CompilationDirectory dir, DirectoryLayoutNode? parent = null)
         {
@@ -364,7 +567,7 @@ public static class IsoUdfImageBuilder
                 }
                 else if (child is CompilationFile file)
                 {
-                    dirNode.Files.Add(new FileLayoutNode(file));
+                    dirNode.Files.Add(new FileLayoutNode(file, dirNode));
                 }
             }
 
@@ -381,9 +584,7 @@ public static class IsoUdfImageBuilder
 
             foreach (var sub in dir.SubDirectories)
             {
-                string name = isJoliet
-                    ? IsoNameSanitizer.ToJolietName(sub.SourceDir.Name)
-                    : IsoNameSanitizer.ToIso9660DirectoryName(sub.SourceDir.Name);
+                string name = isJoliet ? sub.JolietName : sub.IsoName;
 
                 int identLen = isJoliet
                     ? Encoding.BigEndianUnicode.GetByteCount(name)
@@ -395,8 +596,10 @@ public static class IsoUdfImageBuilder
             foreach (var file in dir.Files)
             {
                 string name = isJoliet
-                    ? IsoNameSanitizer.ToJolietName(file.SourceFile.Name)
-                    : IsoNameSanitizer.ToIso9660Level1Name(file.SourceFile.Name);
+                    ? file.JolietName
+                    : (!string.IsNullOrEmpty(file.Iso9660Name)
+                        ? file.Iso9660Name
+                        : IsoNameSanitizer.ToIso9660Level1Name(file.SourceFile.Name));
 
                 int identLen = isJoliet
                     ? Encoding.BigEndianUnicode.GetByteCount(name)
@@ -427,9 +630,7 @@ public static class IsoUdfImageBuilder
             for (int i = 1; i < directories.Count; i++)
             {
                 var dir = directories[i];
-                string name = isJoliet
-                    ? IsoNameSanitizer.ToJolietName(dir.SourceDir.Name)
-                    : IsoNameSanitizer.ToIso9660DirectoryName(dir.SourceDir.Name);
+                string name = isJoliet ? dir.JolietName : dir.IsoName;
 
                 int identLen = isJoliet
                     ? Encoding.BigEndianUnicode.GetByteCount(name)
@@ -466,6 +667,13 @@ public static class IsoUdfImageBuilder
         public int JolietSectorCount { get; set; }
         public uint JolietExtentSizeBytes => (uint)(JolietSectorCount * SectorSize);
 
+        public string IsoName { get; set; } = string.Empty;
+        public string JolietName { get; set; } = string.Empty;
+        public string UdfName { get; set; } = string.Empty;
+        public int UdfFeLba { get; set; } = -1;
+        public int UdfFidLba { get; set; } = -1;
+        public int UdfFidBytes { get; set; }
+
         public DirectoryLayoutNode(CompilationDirectory sourceDir)
         {
             SourceDir = sourceDir;
@@ -475,12 +683,19 @@ public static class IsoUdfImageBuilder
     private sealed class FileLayoutNode
     {
         public CompilationFile SourceFile { get; }
+        public DirectoryLayoutNode? ParentDirectory { get; }
         public int StartLba { get; set; }
         public int SectorCount { get; set; }
+        public bool IsImportedFromPreviousSession { get; set; }
+        public string Iso9660Name { get; set; } = string.Empty;
+        public string JolietName { get; set; } = string.Empty;
+        public string UdfName { get; set; } = string.Empty;
+        public int UdfFeLba { get; set; } = -1;
 
-        public FileLayoutNode(CompilationFile sourceFile)
+        public FileLayoutNode(CompilationFile sourceFile, DirectoryLayoutNode? parentDirectory = null)
         {
             SourceFile = sourceFile;
+            ParentDirectory = parentDirectory;
             SectorCount = sourceFile.RequiredSectors;
         }
     }
@@ -520,223 +735,117 @@ public static class IsoUdfImageBuilder
     {
         byte[] zeroSector = new byte[SectorSize];
 
-        // 1. Write System Area: LBAs 0..15 (16 sectors = 32,768 zero bytes)
+        // Collect every metadata structure keyed by its absolute LBA, then emit everything (metadata and file
+        // payloads) strictly in LBA order with zero fill between extents. This keeps the writer correct no matter
+        // how the layout engine orders regions (e.g. ISO metadata placed after the UDF VDS on large trees).
+        var metadata = new List<(int Lba, byte[] Data)>();
+
+        metadata.Add((ctx.PvdLba, BuildPrimaryVolumeDescriptor(ctx)));
+
+        if (ctx.Options.BootConfiguration != null)
+        {
+            metadata.Add((ctx.BootRecordLba, ElToritoCatalogBuilder.BuildBootRecordVolumeDescriptor((uint)ctx.BootCatalogLba)));
+        }
+
+        if (ctx.Options.IncludeJoliet)
+        {
+            metadata.Add((ctx.JolietSvdLba, BuildJolietVolumeDescriptor(ctx)));
+        }
+
+        metadata.Add((ctx.TerminatorLba, BuildVolumeDescriptorTerminator()));
+
+        if (ctx.UdfEnabled)
+        {
+            metadata.Add((ctx.Bea01Lba, BuildUdfExtendedAreaDescriptor("BEA01")));
+            metadata.Add((ctx.NsrLba, BuildUdfExtendedAreaDescriptor("NSR02")));
+            metadata.Add((ctx.Tea01Lba, BuildUdfExtendedAreaDescriptor("TEA01")));
+        }
+
+        metadata.Add((ctx.IsoPathTableL_Lba, BuildPathTable(ctx.BfsDirectories, ctx.IsoPathTableSectors, isJoliet: false, isBigEndian: false)));
+        metadata.Add((ctx.IsoPathTableM_Lba, BuildPathTable(ctx.BfsDirectories, ctx.IsoPathTableSectors, isJoliet: false, isBigEndian: true)));
+
+        if (ctx.Options.IncludeJoliet)
+        {
+            metadata.Add((ctx.JolietPathTableL_Lba, BuildPathTable(ctx.BfsDirectories, ctx.JolietPathTableSectors, isJoliet: true, isBigEndian: false)));
+            metadata.Add((ctx.JolietPathTableM_Lba, BuildPathTable(ctx.BfsDirectories, ctx.JolietPathTableSectors, isJoliet: true, isBigEndian: true)));
+        }
+
+        foreach (var dir in ctx.BfsDirectories)
+        {
+            metadata.Add((dir.IsoLba, BuildDirectoryExtent(dir, isJoliet: false)));
+            if (ctx.Options.IncludeJoliet)
+            {
+                metadata.Add((dir.JolietLba, BuildDirectoryExtent(dir, isJoliet: true)));
+            }
+        }
+
+        if (ctx.Options.BootConfiguration != null)
+        {
+            var addLoadRbas = ctx.AdditionalBootImages.Select(x => (uint)x.StartLba).ToList();
+            metadata.Add((ctx.BootCatalogLba, ElToritoCatalogBuilder.BuildBootCatalogSector(
+                ctx.Options.BootConfiguration,
+                (uint)ctx.DefaultBootImageLba,
+                addLoadRbas)));
+            metadata.Add((ctx.DefaultBootImageLba, PadToSectors(ctx.DefaultBootImageData!, ctx.DefaultBootImageSectorCount)));
+            foreach (var sec in ctx.AdditionalBootImages)
+            {
+                metadata.Add((sec.StartLba, PadToSectors(sec.Data, sec.SectorCount)));
+            }
+        }
+
+        if (ctx.UdfEnabled)
+        {
+            AddUdfStructures(ctx, metadata);
+        }
+
+        // Merge metadata and file payloads into a single LBA-ordered emission plan.
+        var plan = new List<(int Lba, byte[]? Data, FileLayoutNode? File)>(metadata.Count + ctx.AllFiles.Count);
+        plan.AddRange(metadata.Select(m => (m.Lba, (byte[]?)m.Data, (FileLayoutNode?)null)));
+        plan.AddRange(ctx.AllFiles
+            .Where(f => !f.IsImportedFromPreviousSession && f.SectorCount > 0)
+            .Select(f => (f.StartLba, (byte[]?)null, (FileLayoutNode?)f)));
+        plan.Sort((a, b) => a.Lba.CompareTo(b.Lba));
+
+        // 1. System Area: 16 zero sectors at the start of the session
         for (int i = 0; i < 16; i++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (isAsync)
-            {
-                await stream.WriteAsync(zeroSector, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                stream.Write(zeroSector);
-            }
+            await WriteSector(stream, zeroSector, isAsync, cancellationToken).ConfigureAwait(false);
         }
 
         int writtenLba = ctx.SessionStartLba + 16;
 
-        // 2. Primary Volume Descriptor at sessionStartLba + 16
-        byte[] pvd = BuildPrimaryVolumeDescriptor(ctx);
-        await WriteSector(stream, pvd, isAsync, cancellationToken).ConfigureAwait(false);
-        writtenLba++;
-
-        // 3. El Torito Boot Record Volume Descriptor at LBA 17 (if enabled)
-        if (ctx.Options.BootConfiguration != null)
+        foreach (var item in plan)
         {
-            byte[] bootRecord = ElToritoCatalogBuilder.BuildBootRecordVolumeDescriptor((uint)ctx.BootCatalogLba);
-            await WriteSector(stream, bootRecord, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-        }
-
-        // 4. Joliet Supplementary Volume Descriptor at LBA 18 or 17 (if enabled)
-        if (ctx.Options.IncludeJoliet)
-        {
-            byte[] svd = BuildJolietVolumeDescriptor(ctx);
-            await WriteSector(stream, svd, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-        }
-
-        // 5. Volume Descriptor Set Terminator at next LBA
-        byte[] term = BuildVolumeDescriptorTerminator();
-        await WriteSector(stream, term, isAsync, cancellationToken).ConfigureAwait(false);
-        writtenLba++;
-
-        // 5. Optional UDF Bridge Descriptors (BEA01, NSR02/NSR03, TEA01)
-        if (ctx.Options.IncludeUdf)
-        {
-            byte[] bea01 = BuildUdfExtendedAreaDescriptor("BEA01");
-            await WriteSector(stream, bea01, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-
-            string nsrId = ctx.Options.UdfRevision >= 0x0200 ? "NSR03" : "NSR02";
-            byte[] nsr = BuildUdfExtendedAreaDescriptor(nsrId);
-            await WriteSector(stream, nsr, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-
-            byte[] tea01 = BuildUdfExtendedAreaDescriptor("TEA01");
-            await WriteSector(stream, tea01, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-        }
-
-        // 6. Write ISO Path Tables (Type L and Type M)
-        byte[] isoPathL = BuildPathTable(ctx.BfsDirectories, ctx.IsoPathTableSectors, isJoliet: false, isBigEndian: false);
-        await WriteBuffer(stream, isoPathL, isAsync, cancellationToken).ConfigureAwait(false);
-        writtenLba += ctx.IsoPathTableSectors;
-
-        byte[] isoPathM = BuildPathTable(ctx.BfsDirectories, ctx.IsoPathTableSectors, isJoliet: false, isBigEndian: true);
-        await WriteBuffer(stream, isoPathM, isAsync, cancellationToken).ConfigureAwait(false);
-        writtenLba += ctx.IsoPathTableSectors;
-
-        // 7. Write Joliet Path Tables (Type L and Type M)
-        if (ctx.Options.IncludeJoliet)
-        {
-            byte[] jolietPathL = BuildPathTable(ctx.BfsDirectories, ctx.JolietPathTableSectors, isJoliet: true, isBigEndian: false);
-            await WriteBuffer(stream, jolietPathL, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba += ctx.JolietPathTableSectors;
-
-            byte[] jolietPathM = BuildPathTable(ctx.BfsDirectories, ctx.JolietPathTableSectors, isJoliet: true, isBigEndian: true);
-            await WriteBuffer(stream, jolietPathM, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba += ctx.JolietPathTableSectors;
-        }
-
-        // 8. Write ISO Directory Extents
-        foreach (var dir in ctx.BfsDirectories)
-        {
-            byte[] dirExtent = BuildDirectoryExtent(dir, isJoliet: false);
-            await WriteBuffer(stream, dirExtent, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba += dir.IsoSectorCount;
-        }
-
-        // 9. Write Joliet Directory Extents
-        if (ctx.Options.IncludeJoliet)
-        {
-            foreach (var dir in ctx.BfsDirectories)
+            if (item.Lba < writtenLba)
             {
-                byte[] dirExtent = BuildDirectoryExtent(dir, isJoliet: true);
-                await WriteBuffer(stream, dirExtent, isAsync, cancellationToken).ConfigureAwait(false);
-                writtenLba += dir.JolietSectorCount;
+                throw new InvalidOperationException(
+                    $"Image layout error: structure at LBA {item.Lba} overlaps data already written up to LBA {writtenLba}.");
             }
-        }
 
-        // 10. Write El Torito Boot Catalog and Boot Image Sectors (if enabled)
-        if (ctx.Options.BootConfiguration != null)
-        {
-            var addLoadRbas = ctx.AdditionalBootImages.Select(x => (uint)x.StartLba).ToList();
-            byte[] bootCatalog = ElToritoCatalogBuilder.BuildBootCatalogSector(
-                ctx.Options.BootConfiguration,
-                (uint)ctx.DefaultBootImageLba,
-                addLoadRbas);
-            await WriteSector(stream, bootCatalog, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-
-            // Write Default Boot Image
-            await WritePayloadSectors(stream, ctx.DefaultBootImageData!, ctx.DefaultBootImageSectorCount, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba += ctx.DefaultBootImageSectorCount;
-
-            // Write Additional Section Boot Images
-            foreach (var sec in ctx.AdditionalBootImages)
-            {
-                await WritePayloadSectors(stream, sec.Data, sec.SectorCount, isAsync, cancellationToken).ConfigureAwait(false);
-                writtenLba += sec.SectorCount;
-            }
-        }
-
-        // 11. Write UDF AVDP at LBA 256 or sessionStartLba + 256 (if enabled)
-        if (ctx.Options.IncludeUdf)
-        {
-            int targetAvdpLba = ctx.SessionStartLba > 0 ? (ctx.SessionStartLba + 256) : 256;
-            while (writtenLba < targetAvdpLba)
+            while (writtenLba < item.Lba)
             {
                 await WriteSector(stream, zeroSector, isAsync, cancellationToken).ConfigureAwait(false);
                 writtenLba++;
             }
 
-            byte[] avdp = BuildUdfAvdpSector(tagLocation: (uint)targetAvdpLba, mainVdsLocation: (uint)(targetAvdpLba + 1));
-            await WriteSector(stream, avdp, isAsync, cancellationToken).ConfigureAwait(false);
-            writtenLba++;
-        }
-
-        // 11. Write File Data Extents
-        foreach (var file in ctx.AllFiles)
-        {
-            if (file.SourceFile.ImportedStartLba.HasValue)
+            if (item.Data != null)
             {
-                continue; // File already recorded in previous session
+                await WriteBuffer(stream, item.Data, isAsync, cancellationToken).ConfigureAwait(false);
+                writtenLba += item.Data.Length / SectorSize;
             }
-
-            // Zero-fill any sector gap up to file StartLba
-            while (writtenLba < file.StartLba)
+            else
             {
-                await WriteSector(stream, zeroSector, isAsync, cancellationToken).ConfigureAwait(false);
-                writtenLba++;
-            }
+                await WriteFilePayload(stream, item.File!, zeroSector, isAsync, cancellationToken).ConfigureAwait(false);
+                writtenLba += item.File!.SectorCount;
 
-            if (file.SourceFile.SizeBytes > 0)
-            {
-                using var fileStream = file.SourceFile.OpenRead();
-                byte[] transferBuf = new byte[65536];
-                long remaining = file.SourceFile.SizeBytes;
-
-                while (remaining > 0)
+                if (progress != null && ctx.TotalSectors > 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    int toRead = (int)Math.Min(remaining, transferBuf.Length);
-                    int read = isAsync
-                        ? await fileStream.ReadAsync(transferBuf.AsMemory(0, toRead), cancellationToken).ConfigureAwait(false)
-                        : fileStream.Read(transferBuf, 0, toRead);
-
-                    if (read == 0)
-                    {
-                        // File ended early, zero fill remainder
-                        var zeros = new byte[remaining];
-                        if (isAsync)
-                        {
-                            await stream.WriteAsync(zeros, cancellationToken).ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            stream.Write(zeros);
-                        }
-                        break;
-                    }
-
-                    if (isAsync)
-                    {
-                        await stream.WriteAsync(transferBuf.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        stream.Write(transferBuf, 0, read);
-                    }
-
-                    remaining -= read;
+                    progress.Report(Math.Min(1.0, (double)writtenLba / ctx.TotalSectors));
                 }
-
-                // Sector boundary padding
-                int padBytes = (int)(SectorSize - (file.SourceFile.SizeBytes % SectorSize));
-                if (padBytes < SectorSize)
-                {
-                    if (isAsync)
-                    {
-                        await stream.WriteAsync(zeroSector.AsMemory(0, padBytes), cancellationToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        stream.Write(zeroSector, 0, padBytes);
-                    }
-                }
-            }
-
-            writtenLba += file.SectorCount;
-
-            if (progress != null && ctx.TotalSectors > 0)
-            {
-                progress.Report(Math.Min(1.0, (double)writtenLba / ctx.TotalSectors));
             }
         }
 
-        // 12. Pad any remaining sectors to exact total volume size
+        // Pad any remaining sectors to exact total volume size
         while (writtenLba < ctx.TotalSectors)
         {
             await WriteSector(stream, zeroSector, isAsync, cancellationToken).ConfigureAwait(false);
@@ -753,6 +862,73 @@ public static class IsoUdfImageBuilder
         }
 
         progress?.Report(1.0);
+    }
+
+    private static byte[] PadToSectors(byte[] data, int sectorCount)
+    {
+        byte[] padded = new byte[sectorCount * SectorSize];
+        data.AsSpan(0, Math.Min(data.Length, padded.Length)).CopyTo(padded);
+        return padded;
+    }
+
+    private static async Task WriteFilePayload(
+        Stream stream,
+        FileLayoutNode file,
+        byte[] zeroSector,
+        bool isAsync,
+        CancellationToken cancellationToken)
+    {
+        long expected = file.SourceFile.SizeBytes;
+        long remaining = expected;
+
+        if (remaining > 0)
+        {
+            using var fileStream = file.SourceFile.OpenRead();
+            byte[] transferBuf = new byte[65536];
+
+            while (remaining > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int toRead = (int)Math.Min(remaining, transferBuf.Length);
+                int read = isAsync
+                    ? await fileStream.ReadAsync(transferBuf.AsMemory(0, toRead), cancellationToken).ConfigureAwait(false)
+                    : fileStream.Read(transferBuf, 0, toRead);
+
+                if (read == 0)
+                {
+                    throw new IOException(
+                        $"Source file '{file.SourceFile.Name}' ended after {expected - remaining:N0} of {expected:N0} bytes. It may have been modified after it was added to the compilation.");
+                }
+
+                if (isAsync)
+                {
+                    await stream.WriteAsync(transferBuf.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    stream.Write(transferBuf, 0, read);
+                }
+
+                remaining -= read;
+            }
+        }
+
+        // Sector boundary padding up to the allocated sector count
+        long allocatedBytes = (long)file.SectorCount * SectorSize;
+        long pad = allocatedBytes - expected;
+        while (pad > 0)
+        {
+            int chunk = (int)Math.Min(pad, zeroSector.Length);
+            if (isAsync)
+            {
+                await stream.WriteAsync(zeroSector.AsMemory(0, chunk), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                stream.Write(zeroSector, 0, chunk);
+            }
+            pad -= chunk;
+        }
     }
 
     private static async Task WriteSector(Stream stream, byte[] sector, bool isAsync, CancellationToken cancellationToken)
@@ -864,7 +1040,7 @@ public static class IsoUdfImageBuilder
         WriteAsciiStringPadded(pvd.AsSpan(318, 128), ctx.Options.PublisherId, 128);
 
         // Data Preparer Identifier (128 bytes)
-        WriteAsciiStringPadded(pvd.AsSpan(446, 128), "CDBURNER", 128);
+        WriteAsciiStringPadded(pvd.AsSpan(446, 128), "IGNISDISC", 128);
 
         // Application Identifier (128 bytes)
         WriteAsciiStringPadded(pvd.AsSpan(574, 128), ctx.Options.ApplicationId, 128);
@@ -949,7 +1125,7 @@ public static class IsoUdfImageBuilder
         WriteUcs2BeString(svd.AsSpan(318, 128), ctx.Options.PublisherId);
 
         // Data Preparer Identifier (128 bytes)
-        WriteUcs2BeString(svd.AsSpan(446, 128), "CDBURNER");
+        WriteUcs2BeString(svd.AsSpan(446, 128), "IGNISDISC");
 
         // Application Identifier (128 bytes)
         WriteUcs2BeString(svd.AsSpan(574, 128), ctx.Options.ApplicationId);
@@ -1034,7 +1210,489 @@ public static class IsoUdfImageBuilder
         return sector;
     }
 
+    private static readonly Regex VtsFileNameRegex = new(
+        @"^VTS_(?<set>\d{2})_(?<index>\d)\.(?<ext>IFO|BUP|VOB)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static (int category, int setNum, int subOrder, string name) GetDvdVideoSortKey(string fileName)
+    {
+        string upper = fileName.ToUpperInvariant();
+        if (upper == "VIDEO_TS.IFO")
+        {
+            return (0, 0, 0, upper);
+        }
+        if (upper == "VIDEO_TS.VOB")
+        {
+            return (0, 0, 1, upper);
+        }
+        if (upper == "VIDEO_TS.BUP")
+        {
+            return (0, 0, 2, upper);
+        }
+
+        var match = VtsFileNameRegex.Match(upper);
+        if (match.Success)
+        {
+            int setNum = int.Parse(match.Groups["set"].Value);
+            int index = int.Parse(match.Groups["index"].Value);
+            string ext = match.Groups["ext"].Value;
+
+            int subOrder;
+            if (ext == "IFO" && index == 0)
+            {
+                subOrder = 1;
+            }
+            else if (ext == "VOB" && index == 0)
+            {
+                subOrder = 2;
+            }
+            else if (ext == "VOB" && index > 0)
+            {
+                subOrder = 10 + index;
+            }
+            else if (ext == "BUP" && index == 0)
+            {
+                subOrder = 30;
+            }
+            else
+            {
+                subOrder = 40 + index;
+            }
+
+            return (1, setNum, subOrder, upper);
+        }
+
+        return (2, 0, 0, upper);
+    }
+
+    private static void FinalizeEcma167Tag(byte[] sector, ushort tagId, uint tagLocation, ushort crcPayloadLength = 496)
+        => FinalizeEcma167Tag(sector.AsSpan(), tagId, tagLocation, crcPayloadLength);
+
+    private static void FinalizeEcma167Tag(Span<byte> sector, ushort tagId, uint tagLocation, ushort crcPayloadLength = 496)
+    {
+        BinaryPrimitives.WriteUInt16LittleEndian(sector[..2], tagId);
+        BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(2, 2), 2); // Descriptor version 2 (NSR02)
+        sector[4] = 0; // Checksum placeholder
+        sector[5] = 0; // Reserved
+        BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(6, 2), 1); // Serial Number 1
+        BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(10, 2), crcPayloadLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(sector.Slice(12, 4), tagLocation);
+
+        ushort crc = CalculateEcma167Crc(sector.Slice(16, crcPayloadLength));
+        BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(8, 2), crc);
+
+        byte sum = 0;
+        for (int i = 0; i < 16; i++)
+        {
+            if (i != 4)
+            {
+                sum = (byte)(sum + sector[i]);
+            }
+        }
+        sector[4] = sum;
+    }
+
     #endregion
+
+    #region UDF 1.02 (ECMA-167 / OSTA UDF) structures
+
+    private const int UdfVdsSectorCount = 16;
+    private const ushort UdfRevisionBcd = 0x0102;
+    private const int UdfFileEntryFixedSize = 176;
+    private const uint UdfMaxExtentBytes = 0x3FFFF800; // largest 2048-aligned length that fits the 30-bit extent length field
+    private const string UdfImplementationId = "*IgnisDisc";
+
+    private static int UdfFidLength(int identifierBytes) => (38 + identifierBytes + 3) & ~3;
+
+    /// <summary>
+    /// Adds the complete UDF 1.02 volume: Anchor Volume Descriptor Pointers, Volume Descriptor Sequence,
+    /// Logical Volume Integrity Descriptor, File Set Descriptor, and one File Entry per directory and file,
+    /// plus the File Identifier Descriptor streams that make up each directory.
+    /// UDF shares file data extents with ISO 9660 / Joliet (UDF Bridge).
+    /// </summary>
+    private static void AddUdfStructures(LayoutContext ctx, List<(int Lba, byte[] Data)> metadata)
+    {
+        int partitionStart = ctx.UdfPartitionStartLba;
+        int partitionLength = ctx.UdfClosingAvdpLba - partitionStart;
+        DateTime now = DateTime.UtcNow;
+        string label = ctx.Options.VolumeLabel ?? string.Empty;
+
+        // Unique IDs: root = 0, 1..15 reserved by UDF, the rest assigned sequentially.
+        ulong nextUniqueId = 16;
+        var uniqueIds = new Dictionary<object, ulong>(ReferenceEqualityComparer.Instance);
+        foreach (var dir in ctx.BfsDirectories)
+        {
+            uniqueIds[dir] = dir.DirNumber == 1 ? 0 : nextUniqueId++;
+        }
+        foreach (var file in ctx.AllFiles)
+        {
+            uniqueIds[file] = nextUniqueId++;
+        }
+
+        uint Lbn(int absoluteLba) => (uint)(absoluteLba - partitionStart);
+
+        // Anchors
+        metadata.Add((ctx.AvdpLba, BuildUdfAvdpSector((uint)ctx.AvdpLba, (uint)ctx.UdfVdsLba)));
+        metadata.Add((ctx.UdfClosingAvdpLba, BuildUdfAvdpSector((uint)ctx.UdfClosingAvdpLba, (uint)ctx.UdfVdsLba)));
+
+        // Volume Descriptor Sequence (absolute tag locations)
+        int v = ctx.UdfVdsLba;
+        byte[] vds = new byte[UdfVdsSectorCount * SectorSize];
+        Span<byte> S(int index) => vds.AsSpan(index * SectorSize, SectorSize);
+
+        // [0] Primary Volume Descriptor
+        {
+            var d = S(0);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 1);  // VDS number
+            BinaryPrimitives.WriteUInt32LittleEndian(d[20..], 0);  // PVD number
+            WriteUdfDString(d.Slice(24, 32), label);
+            BinaryPrimitives.WriteUInt16LittleEndian(d[56..], 1);  // volume sequence number
+            BinaryPrimitives.WriteUInt16LittleEndian(d[58..], 1);  // max volume sequence number
+            BinaryPrimitives.WriteUInt16LittleEndian(d[60..], 2);  // interchange level
+            BinaryPrimitives.WriteUInt16LittleEndian(d[62..], 2);  // max interchange level
+            BinaryPrimitives.WriteUInt32LittleEndian(d[64..], 1);  // character set list (CS0)
+            BinaryPrimitives.WriteUInt32LittleEndian(d[68..], 1);
+            // UDF 2.2.2.5: first 16 characters of the Volume Set Identifier should be a unique hex value
+            WriteUdfDString(d.Slice(72, 128), $"{now.Ticks:X16}{label}");
+            WriteUdfCharspec(d.Slice(200, 64));
+            WriteUdfCharspec(d.Slice(264, 64));
+            WriteUdfTimestamp(d.Slice(376, 12), now);
+            WriteUdfRegid(d.Slice(388, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            FinalizeEcma167Tag(d, 0x0001, (uint)v, 496);
+        }
+
+        // [1] Implementation Use Volume Descriptor ("*UDF LV Info")
+        {
+            var d = S(1);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 2);
+            WriteUdfRegid(d.Slice(20, 32), "*UDF LV Info", UdfDomainSuffix());
+            WriteUdfCharspec(d.Slice(52, 64));
+            WriteUdfDString(d.Slice(116, 128), label);
+            WriteUdfRegid(d.Slice(352, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            FinalizeEcma167Tag(d, 0x0004, (uint)(v + 1), 496);
+        }
+
+        // [2] Partition Descriptor
+        {
+            var d = S(2);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 3);
+            BinaryPrimitives.WriteUInt16LittleEndian(d[20..], 1);  // partition flags: allocated
+            BinaryPrimitives.WriteUInt16LittleEndian(d[22..], 0);  // partition number
+            WriteUdfRegid(d.Slice(24, 32), "+NSR02", ReadOnlySpan<byte>.Empty);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[184..], 1); // access type: read-only
+            BinaryPrimitives.WriteUInt32LittleEndian(d[188..], (uint)partitionStart);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[192..], (uint)partitionLength);
+            WriteUdfRegid(d.Slice(196, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            FinalizeEcma167Tag(d, 0x0005, (uint)(v + 2), 496);
+        }
+
+        // [3] Logical Volume Descriptor with one Type 1 partition map
+        {
+            var d = S(3);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 4);
+            WriteUdfCharspec(d.Slice(20, 64));
+            WriteUdfDString(d.Slice(84, 128), label);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[212..], SectorSize);
+            WriteUdfRegid(d.Slice(216, 32), "*OSTA UDF Compliant", UdfDomainSuffix());
+            WriteUdfLongAd(d.Slice(248, 16), SectorSize, Lbn(ctx.UdfFsdLba)); // File Set Descriptor location
+            BinaryPrimitives.WriteUInt32LittleEndian(d[264..], 6); // map table length
+            BinaryPrimitives.WriteUInt32LittleEndian(d[268..], 1); // number of partition maps
+            WriteUdfRegid(d.Slice(272, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            WriteUdfExtentAd(d.Slice(432, 8), 2 * SectorSize, (uint)(v + 6)); // integrity sequence (LVID + TD)
+            d[440] = 1; // partition map type 1
+            d[441] = 6; // partition map length
+            BinaryPrimitives.WriteUInt16LittleEndian(d[442..], 1); // volume sequence number
+            BinaryPrimitives.WriteUInt16LittleEndian(d[444..], 0); // partition number
+            FinalizeEcma167Tag(d, 0x0006, (uint)(v + 3), 440 + 6 - 16);
+        }
+
+        // [4] Unallocated Space Descriptor (read-only media: none)
+        {
+            var d = S(4);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 5);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[20..], 0);
+            FinalizeEcma167Tag(d, 0x0007, (uint)(v + 4), 8);
+        }
+
+        // [5] Terminating Descriptor ends the main VDS
+        FinalizeEcma167Tag(S(5), 0x0008, (uint)(v + 5), 496);
+
+        // [6] Logical Volume Integrity Descriptor (closed) + [7] Terminating Descriptor
+        {
+            var d = S(6);
+            WriteUdfTimestamp(d.Slice(16, 12), now);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[28..], 1); // integrity type: close
+            BinaryPrimitives.WriteUInt64LittleEndian(d[40..], nextUniqueId); // logical volume header: next unique id
+            BinaryPrimitives.WriteUInt32LittleEndian(d[72..], 1);  // number of partitions
+            BinaryPrimitives.WriteUInt32LittleEndian(d[76..], 46); // length of implementation use
+            BinaryPrimitives.WriteUInt32LittleEndian(d[80..], 0);  // free space table
+            BinaryPrimitives.WriteUInt32LittleEndian(d[84..], (uint)partitionLength); // size table
+            WriteUdfRegid(d.Slice(88, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[120..], (uint)ctx.AllFiles.Count);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[124..], (uint)ctx.BfsDirectories.Count);
+            BinaryPrimitives.WriteUInt16LittleEndian(d[128..], UdfRevisionBcd); // min read revision
+            BinaryPrimitives.WriteUInt16LittleEndian(d[130..], UdfRevisionBcd); // min write revision
+            BinaryPrimitives.WriteUInt16LittleEndian(d[132..], UdfRevisionBcd); // max write revision
+            FinalizeEcma167Tag(d, 0x0009, (uint)(v + 6), 88 + 46 - 16);
+            FinalizeEcma167Tag(S(7), 0x0008, (uint)(v + 7), 496);
+        }
+
+        metadata.Add((v, vds));
+
+        // File Set Descriptor + Terminating Descriptor (partition-relative tag locations)
+        var root = ctx.BfsDirectories[0];
+        {
+            byte[] fsd = new byte[SectorSize];
+            var d = fsd.AsSpan();
+            WriteUdfTimestamp(d.Slice(16, 12), now);
+            BinaryPrimitives.WriteUInt16LittleEndian(d[28..], 3); // interchange level
+            BinaryPrimitives.WriteUInt16LittleEndian(d[30..], 3);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[32..], 1);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[36..], 1);
+            WriteUdfCharspec(d.Slice(48, 64));
+            WriteUdfDString(d.Slice(112, 128), label);
+            WriteUdfCharspec(d.Slice(240, 64));
+            WriteUdfDString(d.Slice(304, 32), label);
+            WriteUdfLongAd(d.Slice(400, 16), SectorSize, Lbn(root.UdfFeLba)); // root directory ICB
+            WriteUdfRegid(d.Slice(416, 32), "*OSTA UDF Compliant", UdfDomainSuffix());
+            FinalizeEcma167Tag(d, 0x0100, Lbn(ctx.UdfFsdLba), 496);
+            metadata.Add((ctx.UdfFsdLba, fsd));
+
+            byte[] td = new byte[SectorSize];
+            FinalizeEcma167Tag(td, 0x0008, Lbn(ctx.UdfFsdTerminatorLba), 496);
+            metadata.Add((ctx.UdfFsdTerminatorLba, td));
+        }
+
+        // Directories: File Entry + File Identifier Descriptor stream
+        foreach (var dir in ctx.BfsDirectories)
+        {
+            var parent = dir.Parent ?? dir;
+            int fidSectors = (dir.UdfFidBytes + SectorSize - 1) / SectorSize;
+            byte[] fids = new byte[fidSectors * SectorSize];
+            int offset = 0;
+
+            offset += WriteUdfFid(fids, offset, Lbn(dir.UdfFidLba), characteristics: 0x0A, Array.Empty<byte>(), Lbn(parent.UdfFeLba));
+
+            foreach (var sub in dir.SubDirectories)
+            {
+                byte characteristics = 0x02;
+                if (sub.SourceDir.Attributes.HasFlag(FileAttributes.Hidden)) characteristics |= 0x01;
+                offset += WriteUdfFid(fids, offset, Lbn(dir.UdfFidLba), characteristics,
+                    EncodeOstaCompressedUnicode(sub.UdfName, 255), Lbn(sub.UdfFeLba));
+            }
+
+            foreach (var file in dir.Files)
+            {
+                byte characteristics = 0x00;
+                if (file.SourceFile.Attributes.HasFlag(FileAttributes.Hidden)) characteristics |= 0x01;
+                offset += WriteUdfFid(fids, offset, Lbn(dir.UdfFidLba), characteristics,
+                    EncodeOstaCompressedUnicode(file.UdfName, 255), Lbn(file.UdfFeLba));
+            }
+
+            if (offset != dir.UdfFidBytes)
+            {
+                throw new InvalidOperationException($"UDF directory stream size mismatch ({offset} != {dir.UdfFidBytes}).");
+            }
+
+            metadata.Add((dir.UdfFidLba, fids));
+            metadata.Add((dir.UdfFeLba, BuildUdfFileEntry(
+                Lbn(dir.UdfFeLba),
+                fileType: 4,
+                permissions: 0x14A5,
+                linkCount: (ushort)(1 + dir.SubDirectories.Count),
+                informationLength: (ulong)dir.UdfFidBytes,
+                dataLba: Lbn(dir.UdfFidLba),
+                uniqueId: uniqueIds[dir],
+                modifiedUtc: dir.SourceDir.LastWriteTimeUtc)));
+        }
+
+        // Files: File Entry pointing at the shared ISO/UDF data extent
+        foreach (var file in ctx.AllFiles)
+        {
+            metadata.Add((file.UdfFeLba, BuildUdfFileEntry(
+                Lbn(file.UdfFeLba),
+                fileType: 5,
+                permissions: 0x1084,
+                linkCount: 1,
+                informationLength: (ulong)Math.Max(0, file.SourceFile.SizeBytes),
+                dataLba: Lbn(file.StartLba),
+                uniqueId: uniqueIds[file],
+                modifiedUtc: file.SourceFile.LastWriteTimeUtc)));
+        }
+    }
+
+    private static byte[] BuildUdfFileEntry(
+        uint tagLbn,
+        byte fileType,
+        uint permissions,
+        ushort linkCount,
+        ulong informationLength,
+        uint dataLba,
+        ulong uniqueId,
+        DateTime modifiedUtc)
+    {
+        byte[] fe = new byte[SectorSize];
+        var d = fe.AsSpan();
+
+        // Allocation descriptors (short_ad): split into extents of at most ~1 GiB
+        int adCount = 0;
+        ulong remaining = informationLength;
+        uint position = dataLba;
+        int adOffset = UdfFileEntryFixedSize;
+        while (remaining > 0)
+        {
+            if (adOffset + 8 > SectorSize)
+            {
+                throw new NotSupportedException("File is too large to describe in a single UDF File Entry.");
+            }
+            uint length = (uint)Math.Min(remaining, UdfMaxExtentBytes);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[adOffset..], length); // type 0: recorded and allocated
+            BinaryPrimitives.WriteUInt32LittleEndian(d[(adOffset + 4)..], position);
+            position += (length + SectorSize - 1) / SectorSize;
+            remaining -= length;
+            adOffset += 8;
+            adCount++;
+        }
+        int adLength = adCount * 8;
+        ulong blocksRecorded = (informationLength + SectorSize - 1) / SectorSize;
+
+        // ICB tag
+        BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 0);  // prior recorded number of direct entries
+        BinaryPrimitives.WriteUInt16LittleEndian(d[20..], 4);  // strategy type 4
+        BinaryPrimitives.WriteUInt16LittleEndian(d[24..], 1);  // max number of entries
+        d[27] = fileType;                                      // 4 = directory, 5 = file
+        BinaryPrimitives.WriteUInt16LittleEndian(d[34..], 0);  // flags: short_ad allocation descriptors
+
+        BinaryPrimitives.WriteUInt32LittleEndian(d[36..], uint.MaxValue); // uid (not specified)
+        BinaryPrimitives.WriteUInt32LittleEndian(d[40..], uint.MaxValue); // gid (not specified)
+        BinaryPrimitives.WriteUInt32LittleEndian(d[44..], permissions);
+        BinaryPrimitives.WriteUInt16LittleEndian(d[48..], linkCount);
+        BinaryPrimitives.WriteUInt64LittleEndian(d[56..], informationLength);
+        BinaryPrimitives.WriteUInt64LittleEndian(d[64..], blocksRecorded);
+
+        DateTime ts = modifiedUtc == default || modifiedUtc.Year < 1980 ? DateTime.UtcNow : modifiedUtc;
+        WriteUdfTimestamp(d.Slice(72, 12), ts);  // access
+        WriteUdfTimestamp(d.Slice(84, 12), ts);  // modification
+        WriteUdfTimestamp(d.Slice(96, 12), ts);  // attribute
+        BinaryPrimitives.WriteUInt32LittleEndian(d[108..], 1); // checkpoint
+        WriteUdfRegid(d.Slice(128, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+        BinaryPrimitives.WriteUInt64LittleEndian(d[160..], uniqueId);
+        BinaryPrimitives.WriteUInt32LittleEndian(d[168..], 0);        // length of extended attributes
+        BinaryPrimitives.WriteUInt32LittleEndian(d[172..], (uint)adLength);
+
+        FinalizeEcma167Tag(d, 0x0105, tagLbn, (ushort)(UdfFileEntryFixedSize + adLength - 16));
+        return fe;
+    }
+
+    private static int WriteUdfFid(byte[] buffer, int offset, uint streamStartLbn, byte characteristics, byte[] identifier, uint icbLbn)
+    {
+        int length = UdfFidLength(identifier.Length);
+        var d = buffer.AsSpan(offset, length);
+        BinaryPrimitives.WriteUInt16LittleEndian(d[16..], 1); // file version number
+        d[18] = characteristics;
+        d[19] = (byte)identifier.Length;
+        WriteUdfLongAd(d.Slice(20, 16), SectorSize, icbLbn);
+        BinaryPrimitives.WriteUInt16LittleEndian(d[36..], 0); // length of implementation use
+        identifier.CopyTo(d[38..]);
+        uint tagLocation = streamStartLbn + (uint)(offset / SectorSize);
+        FinalizeEcma167Tag(d, 0x0101, tagLocation, (ushort)(length - 16));
+        return length;
+    }
+
+    /// <summary>OSTA Compressed Unicode: compression ID 8 (one byte per char) or 16 (UTF-16BE).</summary>
+    private static byte[] EncodeOstaCompressedUnicode(string value, int maxBytes)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return Array.Empty<byte>();
+        }
+
+        bool wide = value.Any(c => c > 0xFF);
+        if (!wide)
+        {
+            int n = Math.Min(value.Length, maxBytes - 1);
+            byte[] r = new byte[n + 1];
+            r[0] = 8;
+            for (int i = 0; i < n; i++) r[i + 1] = (byte)value[i];
+            return r;
+        }
+
+        int chars = Math.Min(value.Length, (maxBytes - 1) / 2);
+        if (chars > 0 && char.IsHighSurrogate(value[chars - 1])) chars--;
+        byte[] w = new byte[1 + chars * 2];
+        w[0] = 16;
+        for (int i = 0; i < chars; i++)
+        {
+            w[1 + i * 2] = (byte)(value[i] >> 8);
+            w[2 + i * 2] = (byte)value[i];
+        }
+        return w;
+    }
+
+    private static void WriteUdfDString(Span<byte> destination, string value)
+    {
+        destination.Clear();
+        byte[] encoded = EncodeOstaCompressedUnicode(value, destination.Length - 1);
+        if (encoded.Length == 0) return;
+        encoded.CopyTo(destination);
+        destination[^1] = (byte)encoded.Length;
+    }
+
+    private static void WriteUdfCharspec(Span<byte> destination)
+    {
+        destination.Clear();
+        destination[0] = 0; // CS0
+        Encoding.ASCII.GetBytes("OSTA Compressed Unicode", destination[1..]);
+    }
+
+    private static byte[] UdfDomainSuffix()
+    {
+        byte[] suffix = new byte[8];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, UdfRevisionBcd);
+        return suffix;
+    }
+
+    private static void WriteUdfRegid(Span<byte> destination, string identifier, ReadOnlySpan<byte> suffix)
+    {
+        destination.Clear();
+        Encoding.ASCII.GetBytes(identifier.Length > 23 ? identifier[..23] : identifier, destination.Slice(1, 23));
+        if (!suffix.IsEmpty)
+        {
+            suffix[..Math.Min(8, suffix.Length)].CopyTo(destination.Slice(24, 8));
+        }
+    }
+
+    private static void WriteUdfLongAd(Span<byte> destination, uint length, uint lbn, ushort partitionReference = 0)
+    {
+        destination.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(destination, length);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination[4..], lbn);
+        BinaryPrimitives.WriteUInt16LittleEndian(destination[8..], partitionReference);
+    }
+
+    private static void WriteUdfExtentAd(Span<byte> destination, uint length, uint location)
+    {
+        BinaryPrimitives.WriteUInt32LittleEndian(destination, length);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination[4..], location);
+    }
+
+    private static void WriteUdfTimestamp(Span<byte> destination, DateTime utc)
+    {
+        utc = utc.Kind == DateTimeKind.Local ? utc.ToUniversalTime() : utc;
+        BinaryPrimitives.WriteUInt16LittleEndian(destination, 0x1000); // type 1 (local time), offset 0 = UTC
+        BinaryPrimitives.WriteInt16LittleEndian(destination[2..], (short)utc.Year);
+        destination[4] = (byte)utc.Month;
+        destination[5] = (byte)utc.Day;
+        destination[6] = (byte)utc.Hour;
+        destination[7] = (byte)utc.Minute;
+        destination[8] = (byte)utc.Second;
+        destination[9] = (byte)(utc.Millisecond / 10);
+        destination[10] = 0;
+        destination[11] = 0;
+    }
+
+    #endregion
+
 
     #region Directory and Path Table Writers
 
@@ -1073,9 +1731,7 @@ public static class IsoUdfImageBuilder
         // 3. Child Subdirectories
         foreach (var sub in dir.SubDirectories)
         {
-            string name = isJoliet
-                ? IsoNameSanitizer.ToJolietName(sub.SourceDir.Name)
-                : IsoNameSanitizer.ToIso9660DirectoryName(sub.SourceDir.Name);
+            string name = isJoliet ? sub.JolietName : sub.IsoName;
 
             byte[] ident = isJoliet
                 ? Encoding.BigEndianUnicode.GetBytes(name)
@@ -1113,8 +1769,10 @@ public static class IsoUdfImageBuilder
         foreach (var file in dir.Files)
         {
             string name = isJoliet
-                ? IsoNameSanitizer.ToJolietName(file.SourceFile.Name)
-                : IsoNameSanitizer.ToIso9660Level1Name(file.SourceFile.Name);
+                ? file.JolietName
+                : (!string.IsNullOrEmpty(file.Iso9660Name)
+                    ? file.Iso9660Name
+                    : IsoNameSanitizer.ToIso9660Level1Name(file.SourceFile.Name));
 
             byte[] ident = isJoliet
                 ? Encoding.BigEndianUnicode.GetBytes(name)
@@ -1137,7 +1795,7 @@ public static class IsoUdfImageBuilder
             WriteDirectoryRecord(
                 extent.AsSpan(destOffset, recordLen),
                 (uint)file.StartLba,
-                (uint)file.SourceFile.SizeBytes,
+                (uint)Math.Min(file.SourceFile.SizeBytes, 0xFFFFF800L), // >4 GiB files are fully described only in UDF
                 file.SourceFile.LastWriteTimeUtc,
                 flags,
                 ident);
@@ -1174,9 +1832,7 @@ public static class IsoUdfImageBuilder
             }
             else
             {
-                string name = isJoliet
-                    ? IsoNameSanitizer.ToJolietName(dir.SourceDir.Name)
-                    : IsoNameSanitizer.ToIso9660DirectoryName(dir.SourceDir.Name);
+                string name = isJoliet ? dir.JolietName : dir.IsoName;
 
                 byte[] nameBytes = isJoliet
                     ? Encoding.BigEndianUnicode.GetBytes(name)

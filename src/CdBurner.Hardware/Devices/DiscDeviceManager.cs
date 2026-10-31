@@ -287,30 +287,47 @@ public class DiscDeviceManager : IDiscDeviceService, IDisposable
         }
     }
 
+    private string? TryResolvePhysicalRecorderId(string volumeOrUniqueId)
+    {
+        if (string.IsNullOrWhiteSpace(volumeOrUniqueId))
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            if (_physicalRecorders.TryGetValue(volumeOrUniqueId, out var directMatch))
+            {
+                return directMatch.UniqueId;
+            }
+
+            var match = _physicalRecorders.Values.FirstOrDefault(r =>
+                string.Equals(r.VolumePath, volumeOrUniqueId, StringComparison.OrdinalIgnoreCase) ||
+                r.VolumePathNames.Any(p => string.Equals(p, volumeOrUniqueId, StringComparison.OrdinalIgnoreCase)));
+            return match?.UniqueId;
+        }
+    }
+
     private void OnMonitorDeviceChanged(object? sender, DeviceChangeEventArgs e)
     {
+        string? resolvedId = null;
+
+        if (e.ChangeType == DeviceChangeType.Removed && !string.IsNullOrWhiteSpace(e.UniqueId))
+        {
+            resolvedId = TryResolvePhysicalRecorderId(e.UniqueId);
+        }
+
         if (_enablePhysicalEnumeration && OperatingSystem.IsWindows())
         {
             RefreshPhysicalRecorders();
         }
 
-        // Try mapping volume path to physical recorder's unique ID
-        string resolvedId = e.UniqueId;
-        if (!string.IsNullOrWhiteSpace(e.UniqueId))
+        if (resolvedId == null && !string.IsNullOrWhiteSpace(e.UniqueId))
         {
-            lock (_lock)
-            {
-                var match = _physicalRecorders.Values.FirstOrDefault(r =>
-                    string.Equals(r.VolumePath, e.UniqueId, StringComparison.OrdinalIgnoreCase) ||
-                    r.VolumePathNames.Any(p => string.Equals(p, e.UniqueId, StringComparison.OrdinalIgnoreCase)));
-                if (match != null)
-                {
-                    resolvedId = match.UniqueId;
-                }
-            }
+            resolvedId = TryResolvePhysicalRecorderId(e.UniqueId);
         }
 
-        DeviceChanged?.Invoke(this, new DeviceChangeEventArgs(resolvedId, e.ChangeType));
+        DeviceChanged?.Invoke(this, new DeviceChangeEventArgs(resolvedId ?? e.UniqueId, e.ChangeType));
     }
 
     public void Dispose()

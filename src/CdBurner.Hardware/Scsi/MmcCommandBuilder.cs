@@ -132,6 +132,11 @@ public static class MmcCommandBuilder
         byte mainChannelSelectionBits = 0xF8,
         byte subChannelSelection = 0)
     {
+        if (transferBlocks is < 0 or > 0xFFFFFF)
+        {
+            throw new ArgumentOutOfRangeException(nameof(transferBlocks), "Transfer blocks must fit in a 24-bit unsigned integer (0..0xFFFFFF).");
+        }
+
         byte[] cdb = new byte[12];
         cdb[0] = OpCodeReadCd;
         cdb[1] = (byte)((expectedSectorType & 0x07) << 2);
@@ -265,6 +270,11 @@ public static class MmcCommandBuilder
     /// </summary>
     public static byte[] BuildSendCueSheetCdb(uint cueSheetLength)
     {
+        if (cueSheetLength > 0xFFFFFF)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cueSheetLength), "CUE sheet length must fit in a 24-bit unsigned integer (0..0xFFFFFF).");
+        }
+
         byte[] cdb = new byte[10];
         cdb[0] = OpCodeSendCueSheet;
         cdb[6] = (byte)((cueSheetLength >> 16) & 0xFF);

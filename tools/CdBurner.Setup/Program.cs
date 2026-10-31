@@ -12,18 +12,21 @@ namespace CdBurner.Setup;
 internal static class Program
 {
     public const string AppTitle = "IgnisDisc Optical Studio";
-    public const string AppVersion = "1.04";
+    public const string AppVersion = "1.07";
     public const string Publisher = "Ignis Optical Engineering";
     public const string UninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\IgnisDisc";
     public const string LegacyUninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CdBurner";
 
+    private const string ManifestFileName = ".ignisdisc-manifest.txt";
+
     [STAThread]
     public static int Main(string[] args)
     {
-        string defaultInstallDir = GetExistingInstallLocation() ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs",
-            "IgnisDisc");
+        string defaultInstallDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(
+            GetExistingInstallLocation() ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs",
+                "IgnisDisc")));
 
         bool silent = false;
         bool uninstall = false;
@@ -57,7 +60,7 @@ internal static class Program
             }
             else if (string.Equals(arg, "--install-dir", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
-                installDir = Path.GetFullPath(args[++i]);
+                installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(args[++i]));
             }
         }
 
@@ -176,26 +179,40 @@ internal static class Program
     {
         string[] processNames = { "IgnisDisc", "CdBurner.App", "ignisdisc-cli", "cdburner-cli" };
         var running = new List<Process>();
+        string? installDirWithSep = string.IsNullOrWhiteSpace(installDir)
+            ? null
+            : Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir)) + Path.DirectorySeparatorChar;
 
         foreach (var name in processNames)
         {
             foreach (var p in Process.GetProcessesByName(name))
             {
+                bool added = false;
                 try
                 {
                     string? exePath = null;
                     try { exePath = p.MainModule?.FileName; } catch { }
 
-                    if (string.IsNullOrEmpty(exePath) ||
-                        string.IsNullOrEmpty(installDir) ||
-                        exePath.StartsWith(Path.GetFullPath(installDir), StringComparison.OrdinalIgnoreCase))
+                    if (!string.IsNullOrEmpty(exePath))
                     {
-                        running.Add(p);
+                        string normalizedExe = Path.GetFullPath(exePath);
+                        if (string.IsNullOrEmpty(installDirWithSep) ||
+                            normalizedExe.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase))
+                        {
+                            running.Add(p);
+                            added = true;
+                        }
                     }
                 }
                 catch
                 {
-                    running.Add(p);
+                }
+                finally
+                {
+                    if (!added)
+                    {
+                        p.Dispose();
+                    }
                 }
             }
         }
@@ -215,6 +232,10 @@ internal static class Program
 
             if (res != MessageBoxResult.OK)
             {
+                foreach (var p in running)
+                {
+                    p.Dispose();
+                }
                 return false;
             }
         }
@@ -269,17 +290,23 @@ internal static class Program
         bool createStartMenuShortcut,
         bool addToPath,
         bool registerUninstaller,
-        IProgress<(double Percent, string Status)>? progress)
+        IProgress<(double Percent, string Status)>? progress,
+        bool ensureClosed = true)
     {
+        installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+        string installDirWithSep = installDir + Path.DirectorySeparatorChar;
+
         Directory.CreateDirectory(installDir);
         progress?.Report((2, "Checking for running instances..."));
 
-        if (!EnsureRunningProcessesClosed(installDir, silent: progress == null))
+        if (ensureClosed && !EnsureRunningProcessesClosed(installDir, silent: progress == null))
         {
             throw new InvalidOperationException($"Update was cancelled because {AppTitle} is currently running.");
         }
 
         progress?.Report((5, $"Preparing target directory: {installDir}"));
+
+        var installedFiles = new List<string>();
 
         using (Stream payloadStream = OpenPayloadStream())
         using (var archive = new ZipArchive(payloadStream, ZipArchiveMode.Read))
@@ -291,7 +318,7 @@ internal static class Program
             {
                 processed++;
                 string destinationPath = Path.GetFullPath(Path.Combine(installDir, entry.FullName));
-                if (!destinationPath.StartsWith(Path.GetFullPath(installDir), StringComparison.OrdinalIgnoreCase))
+                if (!destinationPath.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -309,6 +336,7 @@ internal static class Program
                 }
 
                 entry.ExtractToFile(destinationPath, overwrite: true);
+                installedFiles.Add(Path.GetRelativePath(installDir, destinationPath));
 
                 double pct = 5.0 + (processed * 80.0 / totalEntries);
                 progress?.Report((pct, $"Extracting ({processed}/{totalEntries}): {entry.Name}"));
@@ -327,6 +355,17 @@ internal static class Program
             {
                 File.Copy(currentProcessPath, uninstallerPath, overwrite: true);
             }
+            installedFiles.Add("Uninstall-IgnisDisc.exe");
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            string manifestPath = Path.Combine(installDir, ManifestFileName);
+            installedFiles.Add(ManifestFileName);
+            File.WriteAllLines(manifestPath, installedFiles.Distinct(StringComparer.OrdinalIgnoreCase));
         }
         catch
         {
@@ -396,14 +435,38 @@ internal static class Program
     {
         try
         {
+            string normalizedInstallDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
             string? currentPath = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User);
             var parts = (currentPath ?? string.Empty)
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
 
-            if (!parts.Any(p => string.Equals(p.TrimEnd('\\'), installDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
+            if (!parts.Any(p => string.Equals(Path.TrimEndingDirectorySeparator(p), normalizedInstallDir, StringComparison.OrdinalIgnoreCase)))
             {
-                parts.Add(installDir);
+                parts.Add(normalizedInstallDir);
+                Environment.SetEnvironmentVariable("Path", string.Join(";", parts), EnvironmentVariableTarget.User);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void RemoveDirectoryFromUserPath(string installDir)
+    {
+        try
+        {
+            string normalizedInstallDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+            string? currentPath = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User);
+            if (string.IsNullOrWhiteSpace(currentPath)) return;
+
+            var parts = currentPath
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            int removed = parts.RemoveAll(p => string.Equals(Path.TrimEndingDirectorySeparator(p), normalizedInstallDir, StringComparison.OrdinalIgnoreCase));
+            if (removed > 0)
+            {
                 Environment.SetEnvironmentVariable("Path", string.Join(";", parts), EnvironmentVariableTarget.User);
             }
         }
@@ -444,6 +507,9 @@ internal static class Program
     {
         try
         {
+            installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+            string installDirWithSep = installDir + Path.DirectorySeparatorChar;
+
             if (!silent)
             {
                 var confirm = System.Windows.MessageBox.Show(
@@ -457,6 +523,11 @@ internal static class Program
                 }
             }
 
+            if (!EnsureRunningProcessesClosed(installDir, silent))
+            {
+                return 1;
+            }
+
             string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"{AppTitle}.lnk");
             if (File.Exists(desktopLink)) File.Delete(desktopLink);
 
@@ -464,20 +535,96 @@ internal static class Program
             if (Directory.Exists(startMenuFolder)) Directory.Delete(startMenuFolder, recursive: true);
 
             Registry.CurrentUser.DeleteSubKeyTree(UninstallRegKeyPath, throwOnMissingSubKey: false);
+            RemoveDirectoryFromUserPath(installDir);
 
             if (Directory.Exists(installDir))
             {
-                foreach (string file in Directory.GetFiles(installDir, "*", SearchOption.AllDirectories))
+                string currentExe = Path.GetFullPath(Environment.ProcessPath ?? string.Empty);
+                string manifestPath = Path.Combine(installDir, ManifestFileName);
+
+                if (File.Exists(manifestPath))
                 {
-                    try
+                    string[] relativePaths = Array.Empty<string>();
+                    try { relativePaths = File.ReadAllLines(manifestPath); } catch { }
+
+                    foreach (string rel in relativePaths)
                     {
-                        if (!string.Equals(Path.GetFullPath(file), Path.GetFullPath(Environment.ProcessPath ?? string.Empty), StringComparison.OrdinalIgnoreCase))
+                        if (string.IsNullOrWhiteSpace(rel)) continue;
+                        try
                         {
-                            File.Delete(file);
+                            string candidate = Path.GetFullPath(Path.Combine(installDir, rel.Trim()));
+                            if (candidate.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase) &&
+                                File.Exists(candidate) &&
+                                !string.Equals(candidate, currentExe, StringComparison.OrdinalIgnoreCase))
+                            {
+                                File.Delete(candidate);
+                            }
+                        }
+                        catch { }
+                    }
+
+                    try { if (File.Exists(manifestPath)) File.Delete(manifestPath); } catch { }
+                }
+                else
+                {
+                    // No install manifest: only remove files that are unmistakably ours. Generic patterns such as
+                    // *.dll / *.json are only used when the folder clearly is an IgnisDisc install folder, so that an
+                    // install into a shared folder (e.g. Downloads) can never delete unrelated files.
+                    bool looksLikeDedicatedInstall =
+                        File.Exists(Path.Combine(installDir, "IgnisDisc.exe")) &&
+                        File.Exists(Path.Combine(installDir, "IgnisDisc.dll")) &&
+                        File.Exists(Path.Combine(installDir, "CdBurner.Core.dll")) &&
+                        string.Equals(Path.GetFileName(installDir), "IgnisDisc", StringComparison.OrdinalIgnoreCase);
+
+                    string[] knownPatterns = looksLikeDedicatedInstall
+                        ? new[]
+                        {
+                            "IgnisDisc.*", "ignisdisc-cli.*", "CdBurner.*", "cdburner-cli.*",
+                            "*.dll", "*.json", "*.pdb", "ffmpeg.exe", "Uninstall-IgnisDisc.exe"
+                        }
+                        : new[]
+                        {
+                            "IgnisDisc.*", "ignisdisc-cli.*", "CdBurner.*", "cdburner-cli.*", "Uninstall-IgnisDisc.exe"
+                        };
+
+                    foreach (string pattern in knownPatterns)
+                    {
+                        foreach (string file in Directory.GetFiles(installDir, pattern, SearchOption.TopDirectoryOnly))
+                        {
+                            try
+                            {
+                                if (!string.Equals(Path.GetFullPath(file), currentExe, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    File.Delete(file);
+                                }
+                            }
+                            catch { }
                         }
                     }
-                    catch { }
                 }
+
+                // Clean up any empty subdirectories and the install directory itself if empty
+                try
+                {
+                    foreach (string subDir in Directory.GetDirectories(installDir, "*", SearchOption.AllDirectories)
+                                                       .OrderByDescending(d => d.Length))
+                    {
+                        try
+                        {
+                            if (!Directory.EnumerateFileSystemEntries(subDir).Any())
+                            {
+                                Directory.Delete(subDir, recursive: false);
+                            }
+                        }
+                        catch { }
+                    }
+
+                    if (!Directory.EnumerateFileSystemEntries(installDir).Any())
+                    {
+                        Directory.Delete(installDir, recursive: false);
+                    }
+                }
+                catch { }
             }
 
             if (!silent)
@@ -620,7 +767,14 @@ internal sealed class SetupWizardWindow : Window
             };
             if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
             {
-                _installDirBox.Text = dlg.SelectedPath;
+                string selected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dlg.SelectedPath));
+                string leafName = Path.GetFileName(selected);
+                if (!string.Equals(leafName, "IgnisDisc", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(leafName, "CdBurner", StringComparison.OrdinalIgnoreCase))
+                {
+                    selected = Path.Combine(selected, "IgnisDisc");
+                }
+                _installDirBox.Text = selected;
             }
         };
         Grid.SetColumn(browseBtn, 1);
@@ -744,6 +898,14 @@ internal sealed class SetupWizardWindow : Window
             return;
         }
 
+        targetDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDir));
+        _installDirBox.Text = targetDir;
+
+        if (!Program.EnsureRunningProcessesClosed(targetDir, silent: false))
+        {
+            return;
+        }
+
         _installButton.IsEnabled = false;
         _installDirBox.IsEnabled = false;
         _desktopShortcutCheck.IsEnabled = false;
@@ -768,7 +930,8 @@ internal sealed class SetupWizardWindow : Window
                 startMenu,
                 addPath,
                 registerUninstaller: true,
-                progress));
+                progress,
+                ensureClosed: false));
 
             _isInstalled = true;
             _installButton.Content = _isUpgrade ? "✓ Upgraded" : "✓ Installed";
@@ -783,6 +946,10 @@ internal sealed class SetupWizardWindow : Window
             ExitCode = 1;
             _statusText.Text = $"Installation failed: {ex.Message}";
             _installButton.IsEnabled = true;
+            _installDirBox.IsEnabled = true;
+            _desktopShortcutCheck.IsEnabled = true;
+            _startMenuShortcutCheck.IsEnabled = true;
+            _addToPathCheck.IsEnabled = true;
             System.Windows.MessageBox.Show(
                 $"Failed to install {Program.AppTitle}:\n\n{ex.Message}",
                 Title,

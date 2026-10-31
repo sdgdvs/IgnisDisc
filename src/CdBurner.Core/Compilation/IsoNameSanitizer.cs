@@ -162,27 +162,42 @@ public static class IsoNameSanitizer
             return sanitized;
         }
 
-        // Truncate to 64 UTF-16 code units while preserving extension
+        // Truncate to 64 UTF-16 code units while preserving extension and surrogate pairs
         int lastDotIndex = sanitized.LastIndexOf('.');
         if (lastDotIndex > 0)
         {
             string ext = sanitized[lastDotIndex..]; // e.g. ".txt"
             if (ext.Length >= 64)
             {
-                return sanitized[..64];
+                return TruncateUtf16Safe(sanitized, 64);
             }
 
             int maxBaseLength = 64 - ext.Length;
             string basePart = sanitized[..lastDotIndex];
             if (basePart.Length > maxBaseLength)
             {
-                basePart = basePart[..maxBaseLength];
+                basePart = TruncateUtf16Safe(basePart, maxBaseLength);
             }
 
             return basePart + ext;
         }
 
-        return sanitized[..64];
+        return TruncateUtf16Safe(sanitized, 64);
+    }
+
+    private static string TruncateUtf16Safe(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        if (maxLength > 0 && char.IsHighSurrogate(value[maxLength - 1]))
+        {
+            maxLength--;
+        }
+
+        return value[..maxLength];
     }
 
     /// <summary>

@@ -55,9 +55,14 @@ public static class CdTextPackParser
         {
             if (p.PackType == CdTextPackType.SizeInfo && p.TrackNumberIndicator == 0)
             {
-                hasSizeInfo = true;
-                firstTrack = p.TextData[1];
-                lastTrack = p.TextData[2];
+                int candidateFirst = p.TextData[1];
+                int candidateLast = p.TextData[2];
+                if (candidateFirst >= 1 && candidateLast >= candidateFirst && candidateLast <= 99)
+                {
+                    hasSizeInfo = true;
+                    firstTrack = candidateFirst;
+                    lastTrack = candidateLast;
+                }
                 break;
             }
         }
@@ -66,7 +71,7 @@ public static class CdTextPackParser
         var packsByType = packs
             .Where(p => p.PackType != CdTextPackType.SizeInfo)
             .GroupBy(p => p.PackType)
-            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.SequenceNumber).ToList());
+            .ToDictionary(g => g.Key, OrderPacksForType);
 
         // If SizeInfo is missing or lastTrack == 0, infer lastTrack from Title packs
         if (!hasSizeInfo || lastTrack == 0)
@@ -74,7 +79,7 @@ public static class CdTextPackParser
             if (packsByType.TryGetValue(CdTextPackType.Title, out var titlePacks))
             {
                 var titleStrings = ExtractStrings(titlePacks, -1);
-                lastTrack = Math.Max(0, titleStrings.Count - 1);
+                lastTrack = Math.Clamp(titleStrings.Count - 1, 0, 99);
             }
         }
 
@@ -138,6 +143,27 @@ public static class CdTextPackParser
             DiscId: albumDiscId,
             UpcEan: albumUpcEan,
             Tracks: tracksList);
+    }
+
+    private static List<CdTextPack> OrderPacksForType(IEnumerable<CdTextPack> group)
+    {
+        var list = group.ToList();
+        if (list.Count <= 1)
+        {
+            return list;
+        }
+
+        // Preserve input pack order if sequence numbers wrapped past 255
+        for (int i = 1; i < list.Count; i++)
+        {
+            if (list[i].SequenceNumber < list[i - 1].SequenceNumber &&
+                (list[i - 1].SequenceNumber - list[i].SequenceNumber) > 128)
+            {
+                return list;
+            }
+        }
+
+        return list.OrderBy(p => p.SequenceNumber).ToList();
     }
 
     private static List<string> ExtractStrings(List<CdTextPack> packList, int expectedCount)

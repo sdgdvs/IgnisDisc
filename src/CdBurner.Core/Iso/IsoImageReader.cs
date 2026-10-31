@@ -130,7 +130,15 @@ public sealed class IsoImageReader : IDisposable
         }
 
         var stream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return new IsoImageReader(stream, leaveOpen: false, sessionStartLba);
+        try
+        {
+            return new IsoImageReader(stream, leaveOpen: false, sessionStartLba);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -166,115 +174,126 @@ public sealed class IsoImageReader : IDisposable
             _stream = stream;
         }
 
-        if (_stream.Length < (long)(sessionStartLba + 17) * OpticalConstants.DataSectorSize)
+        try
         {
-            throw new InvalidDataException("The stream is too short to be a valid ISO 9660 optical image.");
-        }
-
-        // 1. Read Primary Volume Descriptor at sessionStartLba + 16
-        byte[] pvd = new byte[OpticalConstants.DataSectorSize];
-        _stream.Position = (long)(sessionStartLba + 16) * OpticalConstants.DataSectorSize;
-        _stream.ReadExactly(pvd);
-
-        if (pvd[0] == 0x01 && Encoding.ASCII.GetString(pvd.AsSpan(1, 5)) == "CD001")
-        {
-            HasIso9660 = true;
-            PvdVolumeLabel = Encoding.ASCII.GetString(pvd.AsSpan(40, 32)).Trim();
-            TotalSectors = BinaryPrimitives.ReadInt32LittleEndian(pvd.AsSpan(80, 4));
-
-            uint isoRootLba = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(156 + 2, 4));
-            uint isoRootLength = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(156 + 10, 4));
-
-            var visitedIso = new HashSet<uint>();
-            IsoRootDirectory = ParseDirectoryExtent(
-                isoRootLba,
-                isoRootLength,
-                dirName: string.Empty,
-                virtualPath: "/",
-                isJoliet: false,
-                visitedIso);
-        }
-        else
-        {
-            throw new InvalidDataException($"Missing ISO 9660 Primary Volume Descriptor (PVD) at LBA {sessionStartLba + 16}.");
-        }
-
-        // 2. Scan for Joliet Supplementary Volume Descriptor and UDF descriptors
-        int maxScanLba = Math.Min(sessionStartLba + 32, (int)(_stream.Length / OpticalConstants.DataSectorSize));
-        for (int lba = sessionStartLba + 17; lba < maxScanLba; lba++)
-        {
-            byte[] sector = new byte[OpticalConstants.DataSectorSize];
-            _stream.Position = (long)lba * OpticalConstants.DataSectorSize;
-            _stream.ReadExactly(sector);
-
-            if (sector[0] == 0x02 && Encoding.ASCII.GetString(sector.AsSpan(1, 5)) == "CD001")
+            if (_stream.Length < (long)(sessionStartLba + 17) * OpticalConstants.DataSectorSize)
             {
-                // Supplementary Volume Descriptor - check for Joliet UCS-2 escape sequence at 88..90
-                if (sector[88] == 0x25 && sector[89] == 0x2F)
+                throw new InvalidDataException("The stream is too short to be a valid ISO 9660 optical image.");
+            }
+
+            // 1. Read Primary Volume Descriptor at sessionStartLba + 16
+            byte[] pvd = new byte[OpticalConstants.DataSectorSize];
+            _stream.Position = (long)(sessionStartLba + 16) * OpticalConstants.DataSectorSize;
+            _stream.ReadExactly(pvd);
+
+            if (pvd[0] == 0x01 && Encoding.ASCII.GetString(pvd.AsSpan(1, 5)) == "CD001")
+            {
+                HasIso9660 = true;
+                PvdVolumeLabel = Encoding.ASCII.GetString(pvd.AsSpan(40, 32)).Trim();
+                TotalSectors = BinaryPrimitives.ReadInt32LittleEndian(pvd.AsSpan(80, 4));
+
+                uint isoRootLba = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(156 + 2, 4));
+                uint isoRootLength = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(156 + 10, 4));
+
+                var visitedIso = new HashSet<uint>();
+                IsoRootDirectory = ParseDirectoryExtent(
+                    isoRootLba,
+                    isoRootLength,
+                    dirName: string.Empty,
+                    virtualPath: "/",
+                    isJoliet: false,
+                    visitedIso);
+            }
+            else
+            {
+                throw new InvalidDataException($"Missing ISO 9660 Primary Volume Descriptor (PVD) at LBA {sessionStartLba + 16}.");
+            }
+
+            // 2. Scan for Joliet Supplementary Volume Descriptor and UDF descriptors
+            int maxScanLba = Math.Min(sessionStartLba + 32, (int)(_stream.Length / OpticalConstants.DataSectorSize));
+            for (int lba = sessionStartLba + 17; lba < maxScanLba; lba++)
+            {
+                byte[] sector = new byte[OpticalConstants.DataSectorSize];
+                _stream.Position = (long)lba * OpticalConstants.DataSectorSize;
+                _stream.ReadExactly(sector);
+
+                if (sector[0] == 0x02 && Encoding.ASCII.GetString(sector.AsSpan(1, 5)) == "CD001")
                 {
-                    HasJoliet = true;
-                    JolietVolumeLabel = Encoding.BigEndianUnicode.GetString(sector.AsSpan(40, 32)).Trim('\0', ' ');
+                    // Supplementary Volume Descriptor - check for Joliet UCS-2 escape sequence at 88..90
+                    if (sector[88] == 0x25 && sector[89] == 0x2F)
+                    {
+                        HasJoliet = true;
+                        JolietVolumeLabel = Encoding.BigEndianUnicode.GetString(sector.AsSpan(40, 32)).Trim('\0', ' ');
 
-                    uint jolietRootLba = BinaryPrimitives.ReadUInt32LittleEndian(sector.AsSpan(156 + 2, 4));
-                    uint jolietRootLength = BinaryPrimitives.ReadUInt32LittleEndian(sector.AsSpan(156 + 10, 4));
+                        uint jolietRootLba = BinaryPrimitives.ReadUInt32LittleEndian(sector.AsSpan(156 + 2, 4));
+                        uint jolietRootLength = BinaryPrimitives.ReadUInt32LittleEndian(sector.AsSpan(156 + 10, 4));
 
-                    var visitedJoliet = new HashSet<uint>();
-                    JolietRootDirectory = ParseDirectoryExtent(
-                        jolietRootLba,
-                        jolietRootLength,
-                        dirName: string.Empty,
-                        virtualPath: "/",
-                        isJoliet: true,
-                        visitedJoliet);
+                        var visitedJoliet = new HashSet<uint>();
+                        JolietRootDirectory = ParseDirectoryExtent(
+                            jolietRootLba,
+                            jolietRootLength,
+                            dirName: string.Empty,
+                            virtualPath: "/",
+                            isJoliet: true,
+                            visitedJoliet);
+                    }
+                }
+                else if (sector[0] == 0xFF && Encoding.ASCII.GetString(sector.AsSpan(1, 5)) == "CD001")
+                {
+                    // Volume Descriptor Set Terminator
+                }
+                else if (sector[0] == 0x00)
+                {
+                    string id = Encoding.ASCII.GetString(sector.AsSpan(1, 5));
+                    if (id is "BEA01" or "NSR02" or "NSR03" or "TEA01")
+                    {
+                        // UDF descriptor present
+                    }
                 }
             }
-            else if (sector[0] == 0xFF && Encoding.ASCII.GetString(sector.AsSpan(1, 5)) == "CD001")
+
+            // 3. Check for UDF Anchor Volume Descriptor Pointer (AVDP) at LBA 256 or sessionStartLba + 256
+            long avdpLba = sessionStartLba > 0 ? (sessionStartLba + 256) : 256;
+            if (_stream.Length >= (avdpLba + 1) * OpticalConstants.DataSectorSize)
             {
-                // Volume Descriptor Set Terminator
-            }
-            else if (sector[0] == 0x00)
-            {
-                string id = Encoding.ASCII.GetString(sector.AsSpan(1, 5));
-                if (id is "BEA01" or "NSR02" or "NSR03" or "TEA01")
+                byte[] avdpSector = new byte[OpticalConstants.DataSectorSize];
+                _stream.Position = avdpLba * OpticalConstants.DataSectorSize;
+                _stream.ReadExactly(avdpSector);
+
+                ushort tagId = BinaryPrimitives.ReadUInt16LittleEndian(avdpSector.AsSpan(0, 2));
+                if (tagId == 0x0002) // TAG_AVDP
                 {
-                    // UDF descriptor present
+                    HasUdf = true;
                 }
             }
-        }
 
-        // 3. Check for UDF Anchor Volume Descriptor Pointer (AVDP) at LBA 256 or sessionStartLba + 256
-        long avdpLba = sessionStartLba > 0 ? (sessionStartLba + 256) : 256;
-        if (_stream.Length >= (avdpLba + 1) * OpticalConstants.DataSectorSize)
-        {
-            byte[] avdpSector = new byte[OpticalConstants.DataSectorSize];
-            _stream.Position = avdpLba * OpticalConstants.DataSectorSize;
-            _stream.ReadExactly(avdpSector);
-
-            ushort tagId = BinaryPrimitives.ReadUInt16LittleEndian(avdpSector.AsSpan(0, 2));
-            if (tagId == 0x0002) // TAG_AVDP
+            // Configure active root directory and label
+            RootDirectory = JolietRootDirectory ?? IsoRootDirectory ?? new IsoDirectoryEntry
             {
-                HasUdf = true;
-            }
+                Name = "/",
+                VirtualPath = "/",
+                IsDirectory = true
+            };
+
+            VolumeLabel = HasJoliet && !string.IsNullOrWhiteSpace(JolietVolumeLabel)
+                ? JolietVolumeLabel
+                : PvdVolumeLabel;
+
+            // Flatten files and directories for quick lookup
+            var allFilesList = new List<IsoFileEntry>();
+            var allDirsList = new List<IsoDirectoryEntry>();
+            CollectEntries(RootDirectory, allFilesList, allDirsList);
+            AllFiles = allFilesList.AsReadOnly();
+            AllDirectories = allDirsList.AsReadOnly();
         }
-
-        // Configure active root directory and label
-        RootDirectory = JolietRootDirectory ?? IsoRootDirectory ?? new IsoDirectoryEntry
+        catch
         {
-            Name = "/",
-            VirtualPath = "/",
-            IsDirectory = true
-        };
-
-        VolumeLabel = HasJoliet && !string.IsNullOrWhiteSpace(JolietVolumeLabel)
-            ? JolietVolumeLabel
-            : PvdVolumeLabel;
-
-        // Flatten files and directories for quick lookup
-        var allFilesList = new List<IsoFileEntry>();
-        var allDirsList = new List<IsoDirectoryEntry>();
-        CollectEntries(RootDirectory, allFilesList, allDirsList);
-        AllFiles = allFilesList.AsReadOnly();
-        AllDirectories = allDirsList.AsReadOnly();
+            if (!_leaveOpen)
+            {
+                _stream.Dispose();
+            }
+            throw;
+        }
     }
 
     /// <summary>
@@ -347,9 +366,18 @@ public sealed class IsoImageReader : IDisposable
     {
         ArgumentNullException.ThrowIfNull(fileEntry);
 
-        if (fileEntry.SizeBytes <= 0)
+        if (fileEntry.SizeBytes == 0)
         {
             return Array.Empty<byte>();
+        }
+
+        if (fileEntry.SizeBytes < 0 ||
+            fileEntry.SizeBytes > Array.MaxLength ||
+            fileEntry.StartLba < 0 ||
+            (long)fileEntry.StartLba * OpticalConstants.DataSectorSize + fileEntry.SizeBytes > _stream.Length)
+        {
+            throw new InvalidDataException(
+                $"File entry '{fileEntry.VirtualPath}' extent (LBA {fileEntry.StartLba}, size {fileEntry.SizeBytes}) exceeds ISO stream bounds ({_stream.Length} bytes).");
         }
 
         byte[] data = new byte[fileEntry.SizeBytes];
@@ -392,8 +420,14 @@ public sealed class IsoImageReader : IDisposable
         string dirName,
         string virtualPath,
         bool isJoliet,
-        HashSet<uint> visited)
+        HashSet<uint> visited,
+        int depth = 0)
     {
+        if (depth > 64)
+        {
+            throw new InvalidDataException("ISO directory hierarchy exceeds maximum supported recursion depth (64).");
+        }
+
         if (!visited.Add(extentLba))
         {
             return new IsoDirectoryEntry
@@ -415,10 +449,23 @@ public sealed class IsoImageReader : IDisposable
             IsDirectory = true
         };
 
+        if (extentLength == 0)
+        {
+            return dirEntry;
+        }
+
+        const uint MaxDirectoryExtentBytes = 16 * 1024 * 1024; // 16 MB cap
+        long extentOffset = (long)extentLba * OpticalConstants.DataSectorSize;
+        if (extentLength > MaxDirectoryExtentBytes || extentOffset < 0 || extentOffset + extentLength > _stream.Length)
+        {
+            throw new InvalidDataException(
+                $"Directory extent for '{virtualPath}' (LBA {extentLba}, length {extentLength}) is out of bounds or exceeds maximum directory extent limit.");
+        }
+
         byte[] buffer = new byte[extentLength];
         lock (_stream)
         {
-            _stream.Position = (long)extentLba * OpticalConstants.DataSectorSize;
+            _stream.Position = extentOffset;
             _stream.ReadExactly(buffer);
         }
 
@@ -480,6 +527,13 @@ public sealed class IsoImageReader : IDisposable
                         entryName = entryName[..semi];
                     }
 
+                    entryName = entryName.Replace("/", string.Empty).Replace("\\", string.Empty).Replace("\0", string.Empty);
+                    if (string.IsNullOrEmpty(entryName) || entryName is "." or "..")
+                    {
+                        offset += recordLen;
+                        continue;
+                    }
+
                     string childPath = virtualPath == "/" ? $"/{entryName}" : $"{virtualPath}/{entryName}";
 
                     if (isDir)
@@ -490,7 +544,8 @@ public sealed class IsoImageReader : IDisposable
                             entryName,
                             childPath,
                             isJoliet,
-                            visited);
+                            visited,
+                            depth + 1);
 
                         subDir.RecordingTimeUtc = recTime;
                         subDir.IsHidden = isHidden;

@@ -63,7 +63,7 @@ public static class CliCommandRunner
         {
             if (parsed.HasFlag("version") || parsed.HasFlag("v"))
             {
-                stdout.WriteLine("IgnisDisc (CdBurner CLI) v1.04 (.NET 10.0 Windows)");
+                stdout.WriteLine("IgnisDisc (CdBurner CLI) v1.06 (.NET 10.0 Windows)");
                 return 0;
             }
 
@@ -438,27 +438,52 @@ public static class CliCommandRunner
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
         string inputFolder = cmd.GetRequiredOption("input", "--input <folder>");
         string? volumeLabel = cmd.GetOption("label");
+        string? speedStr = cmd.GetOption("speed");
+        string? bootBiosPath = cmd.GetOption("boot-bios");
+        string? bootUefiPath = cmd.GetOption("boot-uefi");
         bool verify = cmd.HasFlag("verify");
+        bool closeDisc = !cmd.HasFlag("no-close");
 
         if (!Directory.Exists(inputFolder))
         {
             throw new DirectoryNotFoundException($"Input directory does not exist: {inputFolder}");
         }
 
+        bool hasUdfFlag = cmd.HasFlag("udf");
+        bool hasJolietFlag = cmd.HasFlag("joliet");
+        bool includeUdf = true;
+        bool includeJoliet = true;
+
+        if (hasUdfFlag || hasJolietFlag)
+        {
+            includeUdf = hasUdfFlag;
+            includeJoliet = hasJolietFlag;
+        }
+
         var recorder = FindRecorder(deviceService, driveId);
+        var mediaStatus = recorder.QueryMediaStatus();
+        var speedDesc = ParseSpeed(speedStr, mediaStatus.MediaType);
 
         string effectiveLabel = !string.IsNullOrWhiteSpace(volumeLabel) ? volumeLabel : "DATA_DISC";
+        var bootConfig = BuildBootConfiguration(bootBiosPath, bootUefiPath, effectiveLabel);
+
         var root = CompilationDirectory.CreateRoot();
         PopulateDirectoryFromDisk(root, inputFolder);
 
         var burnOptions = new DataBurnOptions
         {
             VolumeLabel = effectiveLabel,
+            Speed = speedDesc,
             VerifyAfterBurn = verify,
-            CloseDisc = true
+            CloseDisc = closeDisc
         };
 
-        var buildOptions = new IsoBuildOptions(VolumeLabel: effectiveLabel);
+        var buildOptions = new IsoBuildOptions(
+            VolumeLabel: effectiveLabel,
+            IncludeIso9660: true,
+            IncludeJoliet: includeJoliet,
+            IncludeUdf: includeUdf,
+            BootConfiguration: bootConfig);
 
         var burnService = new DataBurnService(burnEngine);
         var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions).ConfigureAwait(false);
@@ -598,81 +623,145 @@ public static class CliCommandRunner
         IBurnEngineBackend burnEngine)
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
-        string videoTsInput = cmd.GetRequiredOption("video-ts", "--video-ts <folder>");
+        string? videoTsInput = cmd.GetOption("video-ts") ?? cmd.GetOption("input");
+        if (string.IsNullOrWhiteSpace(videoTsInput))
+        {
+            throw new CommandLineException("Missing required option: --video-ts <folder-or-movie>");
+        }
         string? volumeLabel = cmd.GetOption("label");
 
-        if (!Directory.Exists(videoTsInput))
+        var pathTokens = videoTsInput.Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        bool allTokensExist = pathTokens.Length > 0 && pathTokens.All(p => File.Exists(p) || Directory.Exists(p));
+
+        if (!File.Exists(videoTsInput) && !Directory.Exists(videoTsInput) && !allTokensExist)
         {
-            throw new DirectoryNotFoundException($"VIDEO_TS directory does not exist: {videoTsInput}");
+            throw new DirectoryNotFoundException($"VIDEO_TS directory or movie file does not exist: {videoTsInput}");
         }
 
         var recorder = FindRecorder(deviceService, driveId);
-
-        var root = CompilationDirectory.CreateRoot();
-        CompilationDirectory videoTsDir;
-
-        string folderName = Path.GetFileName(videoTsInput.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        if (string.Equals(folderName, "VIDEO_TS", StringComparison.OrdinalIgnoreCase))
+        if (recorder is VirtualDiscRecorder vRec)
         {
-            videoTsDir = root.AddDirectory("VIDEO_TS");
-            PopulateDirectoryFromDisk(videoTsDir, videoTsInput);
-
-            string? parent = Path.GetDirectoryName(Path.GetFullPath(videoTsInput));
-            if (!string.IsNullOrEmpty(parent))
+            var mediaStatus = vRec.QueryMediaStatus();
+            if (!mediaStatus.MediaPresent || (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable))
             {
-                string siblingAudioTs = Path.Combine(parent, "AUDIO_TS");
-                if (Directory.Exists(siblingAudioTs))
-                {
-                    var audioTs = root.AddDirectory("AUDIO_TS");
-                    PopulateDirectoryFromDisk(audioTs, siblingAudioTs);
-                }
+                vRec.InsertMedia(VirtualDiscMedium.CreateBlankDvdR47());
             }
         }
-        else
+
+        var analysis = DvdInputNormalizer.AnalyzeInput(videoTsInput);
+        if (!analysis.CanAuthorOrBurn)
         {
-            string childVideoTs = Path.Combine(videoTsInput, "VIDEO_TS");
-            if (Directory.Exists(childVideoTs))
+            throw new InvalidOperationException($"Input cannot be authored or burned to DVD-Video: {string.Join("; ", analysis.NormalizationNotes)}");
+        }
+
+        string sourceRootDirectory;
+        string? tempAuthorDir = null;
+        string effectiveLabel = !string.IsNullOrWhiteSpace(volumeLabel) ? volumeLabel : (analysis.SuggestedVolumeLabel ?? "DVD_VIDEO");
+        DataBurnResult result;
+
+        try
+        {
+            if (analysis.RequiresAuthoring)
+            {
+                tempAuthorDir = Path.Combine(Path.GetTempPath(), "IgnisDisc_CliAuthor_" + Guid.NewGuid().ToString("N"));
+                var authorService = new DvdVideoAuthoringService();
+                var authorOptions = new DvdAuthoringOptions
+                {
+                    VolumeLabel = effectiveLabel,
+                    AutoCreatePlayMenu = true
+                };
+
+                var authResult = await authorService.AuthorAsync(videoTsInput, tempAuthorDir, authorOptions).ConfigureAwait(false);
+                if (!authResult.Success)
+                {
+                    throw new InvalidOperationException($"DVD-Video authoring failed: {authResult.ErrorMessage}");
+                }
+
+                sourceRootDirectory = authResult.OutputRootDirectory;
+            }
+            else
+            {
+                sourceRootDirectory = analysis.ExistingVideoTsPath ?? videoTsInput;
+            }
+
+            var root = CompilationDirectory.CreateRoot();
+            CompilationDirectory videoTsDir;
+
+            string folderName = Path.GetFileName(sourceRootDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.Equals(folderName, "VIDEO_TS", StringComparison.OrdinalIgnoreCase))
             {
                 videoTsDir = root.AddDirectory("VIDEO_TS");
-                PopulateDirectoryFromDisk(videoTsDir, childVideoTs);
+                PopulateDirectoryFromDisk(videoTsDir, sourceRootDirectory, skipDvdIgnoredFiles: true);
 
-                string childAudioTs = Path.Combine(videoTsInput, "AUDIO_TS");
-                if (Directory.Exists(childAudioTs))
+                string? parent = Path.GetDirectoryName(Path.GetFullPath(sourceRootDirectory));
+                if (!string.IsNullOrEmpty(parent))
                 {
-                    var audioTs = root.AddDirectory("AUDIO_TS");
-                    PopulateDirectoryFromDisk(audioTs, childAudioTs);
+                    string siblingAudioTs = Path.Combine(parent, "AUDIO_TS");
+                    if (Directory.Exists(siblingAudioTs))
+                    {
+                        var audioTs = root.AddDirectory("AUDIO_TS");
+                        PopulateDirectoryFromDisk(audioTs, siblingAudioTs, skipDvdIgnoredFiles: true);
+                    }
                 }
             }
             else
             {
-                videoTsDir = root.AddDirectory("VIDEO_TS");
-                PopulateDirectoryFromDisk(videoTsDir, videoTsInput);
+                string childVideoTs = Path.Combine(sourceRootDirectory, "VIDEO_TS");
+                if (Directory.Exists(childVideoTs))
+                {
+                    videoTsDir = root.AddDirectory("VIDEO_TS");
+                    PopulateDirectoryFromDisk(videoTsDir, childVideoTs, skipDvdIgnoredFiles: true);
+
+                    string childAudioTs = Path.Combine(sourceRootDirectory, "AUDIO_TS");
+                    if (Directory.Exists(childAudioTs))
+                    {
+                        var audioTs = root.AddDirectory("AUDIO_TS");
+                        PopulateDirectoryFromDisk(audioTs, childAudioTs, skipDvdIgnoredFiles: true);
+                    }
+                }
+                else
+                {
+                    videoTsDir = root.AddDirectory("VIDEO_TS");
+                    PopulateDirectoryFromDisk(videoTsDir, sourceRootDirectory, skipDvdIgnoredFiles: true);
+                }
+            }
+
+            // Ensure AUDIO_TS is always added to root
+            if (root.FindDirectoryByVirtualPath("/AUDIO_TS") == null)
+            {
+                root.AddDirectory("AUDIO_TS");
+            }
+
+            // Validate VIDEO_TS structure
+            var validator = new DvdVideoValidator();
+            bool hasAudioTs = root.FindDirectoryByVirtualPath("/AUDIO_TS") != null;
+            var validation = validator.ValidateDirectory(videoTsDir, hasAudioTs);
+            if (!validation.IsValid)
+            {
+                throw new InvalidOperationException($"DVD-Video structure validation failed: {string.Join("; ", validation.Errors)}");
+            }
+
+            // Align IFO and BUP files across 16-sector ECC boundaries
+            var planner = new DvdVideoLayoutPlanner();
+            planner.ApplyToCompilation(videoTsDir, startLba: 0);
+
+            var buildOptions = new IsoBuildOptions(
+                VolumeLabel: effectiveLabel,
+                IncludeIso9660: true,
+                IncludeUdf: true,
+                IncludeJoliet: false,
+                UdfRevision: 0x0102);
+
+            var burnService = new DataBurnService(burnEngine);
+            result = await burnService.BurnCompilationAsync(recorder, root, new DataBurnOptions { VolumeLabel = effectiveLabel, CloseDisc = true }, buildOptions).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (tempAuthorDir != null && Directory.Exists(tempAuthorDir))
+            {
+                try { Directory.Delete(tempAuthorDir, recursive: true); } catch { }
             }
         }
-
-        // Validate VIDEO_TS structure
-        var validator = new DvdVideoValidator();
-        bool hasAudioTs = root.FindDirectoryByVirtualPath("/AUDIO_TS") != null;
-        var validation = validator.ValidateDirectory(videoTsDir, hasAudioTs);
-        if (!validation.IsValid)
-        {
-            throw new InvalidOperationException($"DVD-Video structure validation failed: {string.Join("; ", validation.Errors)}");
-        }
-
-        // Align IFO and BUP files across 16-sector ECC boundaries
-        var planner = new DvdVideoLayoutPlanner();
-        planner.ApplyToCompilation(videoTsDir, startLba: 0);
-
-        string effectiveLabel = !string.IsNullOrWhiteSpace(volumeLabel) ? volumeLabel : "DVD_VIDEO";
-        var buildOptions = new IsoBuildOptions(
-            VolumeLabel: effectiveLabel,
-            IncludeIso9660: true,
-            IncludeUdf: true,
-            IncludeJoliet: false,
-            UdfRevision: 0x0102);
-
-        var burnService = new DataBurnService(burnEngine);
-        var result = await burnService.BurnCompilationAsync(recorder, root, new DataBurnOptions { VolumeLabel = effectiveLabel, CloseDisc = true }, buildOptions).ConfigureAwait(false);
 
         if (cmd.IsJson)
         {
@@ -680,7 +769,7 @@ public static class CliCommandRunner
             {
                 success = result.Success,
                 driveId = recorder.UniqueId,
-                videoTsFolder = Path.GetFullPath(videoTsInput),
+                videoTsFolder = videoTsInput.Contains(';') || videoTsInput.Contains('|') ? videoTsInput : Path.GetFullPath(videoTsInput),
                 volumeLabel = effectiveLabel,
                 sectorsWritten = result.SectorsWritten,
                 totalTime = result.TotalTime.ToString(),
@@ -1033,7 +1122,7 @@ public static class CliCommandRunner
         return null;
     }
 
-    private static void PopulateDirectoryFromDisk(CompilationDirectory target, string sourceDiskDir)
+    private static void PopulateDirectoryFromDisk(CompilationDirectory target, string sourceDiskDir, bool skipDvdIgnoredFiles = false)
     {
         var dirInfo = new DirectoryInfo(sourceDiskDir);
         if (!dirInfo.Exists) return;
@@ -1042,6 +1131,10 @@ public static class CliCommandRunner
         {
             try
             {
+                if (skipDvdIgnoredFiles && DvdInputNormalizer.IsIgnoredUselessFile(file.FullName))
+                {
+                    continue;
+                }
                 target.AddFile(new CompilationFile(file.FullName, file.Length));
             }
             catch
@@ -1054,7 +1147,7 @@ public static class CliCommandRunner
             try
             {
                 var childDir = target.AddDirectory(subDir.Name);
-                PopulateDirectoryFromDisk(childDir, subDir.FullName);
+                PopulateDirectoryFromDisk(childDir, subDir.FullName, skipDvdIgnoredFiles);
             }
             catch
             {
@@ -1091,14 +1184,14 @@ public static class CliCommandRunner
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
         stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
-        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--close] [--json]");
+        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--no-close] [--json]");
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
-        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--verify] [--json]");
+        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
         stdout.WriteLine("  burn-audio --drive <id> --tracks <wav1,wav2,...> [--title <album>] [--artist <name>] [--dao] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV tracks.");
-        stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder> [--label <vol>] [--json]");
-        stdout.WriteLine("      Validates, aligns, and burns a DVD-Video compliant disc from VIDEO_TS.");
+        stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--json]");
+        stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso> [--json]");

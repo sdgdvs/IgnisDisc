@@ -146,16 +146,19 @@ public sealed class ManagedComStream : IStream, IDisposable
         byte[] buffer = new byte[81920];
         long totalRead = 0;
         long totalWritten = 0;
+        ulong targetBytes = (ulong)cb;
 
-        while (totalWritten < cb)
+        while ((ulong)totalWritten < targetBytes)
         {
-            int toRead = (int)Math.Min(buffer.Length, cb - totalWritten);
+            ulong remaining = targetBytes - (ulong)totalWritten;
+            int toRead = (int)Math.Min((ulong)buffer.Length, remaining);
             int read = _sourceStream.Read(buffer, 0, toRead);
             if (read == 0)
             {
                 break;
             }
 
+            _onBytesRead?.Invoke(read);
             totalRead += read;
             pstm.Write(buffer, read, nint.Zero);
             totalWritten += read;

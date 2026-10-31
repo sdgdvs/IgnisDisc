@@ -63,18 +63,17 @@ public static class MultiSessionManager
             }
         }
 
-        // Hardware / generic fallback: read sectors into memory stream
+        // Hardware / generic fallback: read sectors starting at sessionStartLba into memory stream
         int sessionStartLba = DetermineSessionStartLba(recorder, sessionIndex, status);
-        int sectorsToRead = Math.Min(status.UsedSectors > 0 ? status.UsedSectors : 1000, 2048);
-        if (sectorsToRead <= 0)
-        {
-            sectorsToRead = 512;
-        }
+        int remainingSectorsOnDisc = status.UsedSectors > sessionStartLba
+            ? status.UsedSectors - sessionStartLba
+            : 1000;
+        int sectorsToRead = Math.Min(remainingSectorsOnDisc > 0 ? remainingSectorsOnDisc : 512, 2048);
 
         var memoryStream = new MemoryStream();
         var ripResult = await engine.ReadSectorsAsync(
             recorder,
-            startLba: 0,
+            startLba: sessionStartLba,
             sectorCount: sectorsToRead,
             raw2352Mode: false,
             sectorConsumer: async (lba, memory) =>
@@ -90,7 +89,10 @@ public static class MultiSessionManager
         }
 
         memoryStream.Position = 0;
-        return ImportSessionTree(memoryStream, sessionStartLba);
+        Stream sessionStream = sessionStartLba > 0
+            ? new SessionOffsetStream(memoryStream, (long)sessionStartLba * OpticalConstants.DataSectorSize)
+            : memoryStream;
+        return ImportSessionTree(sessionStream, sessionStartLba);
     }
 
     /// <summary>
@@ -220,6 +222,94 @@ public static class MultiSessionManager
         }
 
         return 0;
+    }
+
+    private sealed class SessionOffsetStream : Stream
+    {
+        private readonly Stream _inner;
+        private readonly long _baseOffset;
+        private long _position;
+
+        public SessionOffsetStream(Stream inner, long baseOffset)
+        {
+            _inner = inner;
+            _baseOffset = baseOffset;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => _baseOffset + _inner.Length;
+
+        public override long Position
+        {
+            get => _position;
+            set
+            {
+                ArgumentOutOfRangeException.ThrowIfNegative(value);
+                _position = value;
+            }
+        }
+
+        public override void Flush() => _inner.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            return Read(buffer.AsSpan(offset, count));
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty || _position >= Length)
+            {
+                return 0;
+            }
+
+            int totalRead = 0;
+            if (_position < _baseOffset)
+            {
+                int zeroBytes = (int)Math.Min(buffer.Length, _baseOffset - _position);
+                buffer.Slice(0, zeroBytes).Clear();
+                _position += zeroBytes;
+                totalRead += zeroBytes;
+                buffer = buffer.Slice(zeroBytes);
+            }
+
+            if (!buffer.IsEmpty && _position < Length)
+            {
+                _inner.Position = _position - _baseOffset;
+                int r = _inner.Read(buffer);
+                _position += r;
+                totalRead += r;
+            }
+
+            return totalRead;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            long target = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                SeekOrigin.End => Length + offset,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin))
+            };
+            Position = target;
+            return _position;
+        }
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _inner.Dispose();
+            }
+            base.Dispose(disposing);
+        }
     }
 
     #endregion

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.DvdVideo;
@@ -312,5 +313,90 @@ public sealed class Phase21_DataAndDvdViewModelTests : IDisposable
         // Assert 2: Burn succeeded
         Assert.True(burnResult.Success, $"Burn failed: {burnResult.ErrorMessage}");
         Assert.True(burnResult.SectorsWritten > 0);
+    }
+
+    [Fact]
+    public async Task DvdVideoViewModel_OneClickMkvAndMp4WithJunkFiles_AutoConvertsCreatesMenuBuildsIsoAndBurnsToVdrv01()
+    {
+        // 1. Arrange: Create temp folder containing movies and junk files
+        string movieFolder = Path.Combine(_tempDir, "HolidayVideos");
+        Directory.CreateDirectory(movieFolder);
+
+        File.WriteAllBytes(Path.Combine(movieFolder, "MyHolidayMovie.mkv"), new byte[65536]);
+        File.WriteAllBytes(Path.Combine(movieFolder, "BonusClip.mp4"), new byte[65536]);
+        File.WriteAllText(Path.Combine(movieFolder, "Thumbs.db"), "thumbnails cache");
+        File.WriteAllText(Path.Combine(movieFolder, "MyHolidayMovie.srt"), "1\n00:00:01,000 --> 00:00:04,000\nSubtitles");
+        File.WriteAllText(Path.Combine(movieFolder, "info.nfo"), "Media information");
+
+        // 2. Act 1: Initialize ViewModel with UseFfmpegWhenAvailable = false and set folder path
+        var vm = new DvdVideoViewModel(_deviceManager, _burnEngine) { UseFfmpegWhenAvailable = false };
+        vm.VideoTsFolderPath = movieFolder;
+
+        // 3. Assert 1: Properties updated for auto-authoring
+        Assert.True(vm.IsStructureValid, $"Structure should be valid: {string.Join("; ", vm.ValidationMessages)}");
+        Assert.True(vm.RequiresAutoAuthoring);
+        Assert.NotEmpty(vm.ExtentLayoutRows);
+        Assert.False(string.IsNullOrWhiteSpace(vm.VolumeLabel));
+        Assert.NotEqual("DVD_VIDEO", vm.VolumeLabel); // Automatically derived from folder/movie
+
+        // 4. Act 2: Build DVD-Video ISO image
+        string targetIso = Path.Combine(_tempDir, "AutoAuthoredDvd.iso");
+        string isoPath = await vm.BuildDvdIsoAsync(targetIso);
+
+        // 5. Assert 2: Verify ISO contents via IsoImageReader
+        Assert.True(File.Exists(isoPath));
+        using (var reader = IsoImageReader.FromFile(isoPath))
+        {
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VIDEO_TS.IFO"));
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VIDEO_TS.VOB")); // auto-created play menu
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VIDEO_TS.BUP"));
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VTS_01_0.IFO"));
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VTS_01_1.VOB"));
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VTS_01_0.BUP"));
+            Assert.NotNull(reader.FindFile("/VIDEO_TS/VTS_02_1.VOB"));
+            Assert.NotNull(reader.FindDirectory("/AUDIO_TS"));
+
+            byte[] ifoBytes = reader.ReadFileBytes("/VIDEO_TS/VIDEO_TS.IFO");
+            Assert.True(ifoBytes.Length >= 12);
+            string magic = Encoding.ASCII.GetString(ifoBytes, 0, 12);
+            Assert.StartsWith("DVDVIDEO-VMG", magic);
+        }
+
+        // 6. Act 3 & Assert 3: Burn to VDRV-01
+        var burnResult = await vm.StartDvdBurnAsync("VDRV-01");
+        Assert.True(burnResult.Success, $"Burn failed: {burnResult.ErrorMessage}");
+    }
+
+    [Fact]
+    public void MainViewModel_DvdVideoWorkspace_UpdatesBottomBarCapacityToDvdAndReflectsMovieSectors()
+    {
+        using var mainVm = new MainViewModel(_deviceManager, _burnEngine);
+
+        // Navigate to DVD-Video workspace
+        mainVm.NavigateCommand.Execute(NavigationTab.DvdVideo);
+        Assert.Equal(NavigationTab.DvdVideo, mainVm.SelectedNavigationTab);
+
+        // Even with no disc inserted yet, DVD-Video tab should measure against DVD-5 capacity (2,298,496 sectors), not 700 MB CD-R
+        Assert.Equal(OpticalConstants.DvdMinusR5Sectors, mainVm.CurrentCapacity.MediaMaxSectors);
+
+        // Add a movie file to DvdVideoViewModel
+        string sampleMp4 = Path.Combine(_tempDir, "FeatureFilm.mp4");
+        File.WriteAllBytes(sampleMp4, new byte[256 * 1024]);
+        mainVm.DvdVideo.AddMovieFiles(new[] { sampleMp4 });
+
+        Assert.True(mainVm.DvdVideo.TotalSectors > 0);
+        Assert.Equal(mainVm.DvdVideo.TotalSectors, mainVm.CurrentCapacity.TotalSectors);
+
+        // Also verify BuildVtsIfo handles > 511 NAV packs without overflowing Sector 5
+        var largeNavList = Enumerable.Range(0, 2500).Select(i => i * 15).ToList();
+        byte[] vtsIfo = DvdIfoGenerator.BuildVtsIfo(
+            titleSetNumber: 1,
+            standard: DvdVideoStandard.Ntsc,
+            aspect: DvdAspectRatio.Widescreen16x9,
+            titleVobTotalSectors: 40000,
+            durationSeconds: 6704,
+            menuVobSectors: 16,
+            navPackSectors: largeNavList);
+        Assert.Equal(6 * OpticalConstants.DataSectorSize, vtsIfo.Length);
     }
 }

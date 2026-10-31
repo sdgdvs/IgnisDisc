@@ -263,6 +263,7 @@ public class DvdVideoLayoutPlanner
             if (placement.SourceFile != null && !placement.IsPadding)
             {
                 placement.SourceFile.ImportedStartLba = placement.StartLba.Value;
+                placement.SourceFile.IsPlannedLayoutLba = true;
             }
         }
 

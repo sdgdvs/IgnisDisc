@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using CdBurner.Core.Audio;
 using CdBurner.Core.Primitives;
@@ -119,9 +120,31 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
 
         IMFMediaType? partialType = null;
         var outputStream = new MemoryStream();
+        bool returnOutputStreamDirectly = false;
         int actualChannels = OpticalConstants.CdAudioChannels;
         int actualSampleRate = OpticalConstants.CdAudioSampleRate;
         int actualBitsPerSample = OpticalConstants.CdAudioBitsPerSample;
+
+        void RefreshCurrentMediaType()
+        {
+            IMFMediaType? actualType = null;
+            try
+            {
+                if (reader.GetCurrentMediaType(MediaFoundationConstants.MF_SOURCE_READER_FIRST_AUDIO_STREAM, out actualType) == 0 && actualType != null)
+                {
+                    if (actualType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_NUM_CHANNELS, out uint ch) == 0 && ch > 0) actualChannels = (int)ch;
+                    if (actualType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_SAMPLES_PER_SECOND, out uint sr) == 0 && sr > 0) actualSampleRate = (int)sr;
+                    if (actualType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_BITS_PER_SAMPLE, out uint bps) == 0 && bps >= 8) actualBitsPerSample = (int)bps;
+                }
+            }
+            finally
+            {
+                if (actualType != null)
+                {
+                    Marshal.ReleaseComObject(actualType);
+                }
+            }
+        }
 
         try
         {
@@ -153,23 +176,7 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             }
 
             // Read the actual uncompressed PCM format negotiated by the decoder
-            IMFMediaType? actualType = null;
-            try
-            {
-                if (reader.GetCurrentMediaType(MediaFoundationConstants.MF_SOURCE_READER_FIRST_AUDIO_STREAM, out actualType) == 0 && actualType != null)
-                {
-                    if (actualType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_NUM_CHANNELS, out uint ch) == 0) actualChannels = (int)ch;
-                    if (actualType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_SAMPLES_PER_SECOND, out uint sr) == 0) actualSampleRate = (int)sr;
-                    if (actualType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_BITS_PER_SAMPLE, out uint bps) == 0) actualBitsPerSample = (int)bps;
-                }
-            }
-            finally
-            {
-                if (actualType != null)
-                {
-                    Marshal.ReleaseComObject(actualType);
-                }
-            }
+            RefreshCurrentMediaType();
 
             // Read decoded PCM samples until end of stream
             int consecutiveNullSamples = 0;
@@ -183,96 +190,124 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
                     out _,
                     out IMFSample? sample);
 
-                if (readHr != 0 || (streamFlags & (MediaFoundationConstants.MF_SOURCE_READERF_ENDOFSTREAM | MediaFoundationConstants.MF_SOURCE_READERF_ERROR)) != 0)
+                if (readHr != 0 || (streamFlags & MediaFoundationConstants.MF_SOURCE_READERF_ERROR) != 0)
                 {
                     if (sample != null)
                     {
                         Marshal.ReleaseComObject(sample);
                     }
-                    break;
+                    throw new InvalidDataException(
+                        $"Media Foundation audio decoding failed while reading stream samples (HRESULT 0x{readHr:X8}, Flags 0x{streamFlags:X8}).",
+                        readHr != 0 ? new COMException("IMFSourceReader.ReadSample failed.", readHr) : null);
                 }
 
-                if (sample == null)
+                if ((streamFlags & MediaFoundationConstants.MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0)
                 {
-                    if (++consecutiveNullSamples > 16)
-                    {
-                        break;
-                    }
-                    continue;
+                    RefreshCurrentMediaType();
                 }
-                consecutiveNullSamples = 0;
 
-                try
+                bool isEof = (streamFlags & MediaFoundationConstants.MF_SOURCE_READERF_ENDOFSTREAM) != 0;
+
+                if (sample != null)
                 {
-                    if (sample.GetBufferCount(out uint bufCount) == 0 && bufCount > 0)
+                    consecutiveNullSamples = 0;
+                    try
                     {
-                        if (sample.ConvertToContiguousBuffer(out IMFMediaBuffer buffer) == 0 && buffer != null)
+                        if (sample.GetBufferCount(out uint bufCount) == 0 && bufCount > 0)
                         {
-                            try
+                            if (sample.ConvertToContiguousBuffer(out IMFMediaBuffer buffer) == 0 && buffer != null)
                             {
-                                bool locked = false;
                                 try
                                 {
-                                    int lockHr = buffer.Lock(out IntPtr pBuffer, out _, out uint currentLength);
-                                    if (lockHr == 0 && pBuffer != IntPtr.Zero)
+                                    bool locked = false;
+                                    try
                                     {
-                                        locked = true;
-                                        if (currentLength > 0)
+                                        int lockHr = buffer.Lock(out IntPtr pBuffer, out _, out uint currentLength);
+                                        if (lockHr == 0 && pBuffer != IntPtr.Zero)
                                         {
-                                            byte[] managedBuffer = new byte[currentLength];
-                                            Marshal.Copy(pBuffer, managedBuffer, 0, (int)currentLength);
-                                            outputStream.Write(managedBuffer, 0, (int)currentLength);
+                                            locked = true;
+                                            if (currentLength > 0)
+                                            {
+                                                int byteLen = checked((int)currentLength);
+                                                byte[] managedBuffer = ArrayPool<byte>.Shared.Rent(byteLen);
+                                                try
+                                                {
+                                                    Marshal.Copy(pBuffer, managedBuffer, 0, byteLen);
+                                                    outputStream.Write(managedBuffer, 0, byteLen);
+                                                }
+                                                finally
+                                                {
+                                                    ArrayPool<byte>.Shared.Return(managedBuffer);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        if (locked)
+                                        {
+                                            buffer.Unlock();
                                         }
                                     }
                                 }
                                 finally
                                 {
-                                    if (locked)
-                                    {
-                                        buffer.Unlock();
-                                    }
+                                    Marshal.ReleaseComObject(buffer);
                                 }
-                            }
-                            finally
-                            {
-                                Marshal.ReleaseComObject(buffer);
                             }
                         }
                     }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(sample);
+                    }
                 }
-                finally
+                else if (!isEof)
                 {
-                    Marshal.ReleaseComObject(sample);
+                    if (++consecutiveNullSamples > 16)
+                    {
+                        break;
+                    }
+                }
+
+                if (isEof)
+                {
+                    break;
                 }
             }
+
+            if (actualSampleRate == OpticalConstants.CdAudioSampleRate &&
+                actualChannels == OpticalConstants.CdAudioChannels &&
+                actualBitsPerSample == OpticalConstants.CdAudioBitsPerSample)
+            {
+                outputStream.Position = 0;
+                returnOutputStreamDirectly = true;
+                return outputStream;
+            }
+
+            // Resample, upmix or convert bit-depth to canonical Red Book PCM if needed
+            byte[] rawBytes = outputStream.ToArray();
+            byte[] header = WavFileCodec.CreateWavHeader(rawBytes.Length, actualSampleRate, (short)actualChannels, (short)actualBitsPerSample);
+            using var combinedStream = new MemoryStream(header.Length + rawBytes.Length);
+            combinedStream.Write(header);
+            combinedStream.Write(rawBytes);
+            combinedStream.Position = 0;
+
+            byte[] redBookBytes = WavFileCodec.DecodeToRedBookPcm(combinedStream);
+            return new MemoryStream(redBookBytes, 0, redBookBytes.Length, writable: false, publiclyVisible: true);
         }
         finally
         {
+            if (!returnOutputStreamDirectly)
+            {
+                outputStream.Dispose();
+            }
             if (partialType != null)
             {
                 Marshal.ReleaseComObject(partialType);
             }
             Marshal.ReleaseComObject(reader);
         }
-
-        if (actualSampleRate == OpticalConstants.CdAudioSampleRate &&
-            actualChannels == OpticalConstants.CdAudioChannels &&
-            actualBitsPerSample == OpticalConstants.CdAudioBitsPerSample)
-        {
-            outputStream.Position = 0;
-            return outputStream;
-        }
-
-        // Resample, upmix or convert bit-depth to canonical Red Book PCM if needed
-        byte[] rawBytes = outputStream.ToArray();
-        byte[] header = WavFileCodec.CreateWavHeader(rawBytes.Length, actualSampleRate, (short)actualChannels, (short)actualBitsPerSample);
-        using var combinedStream = new MemoryStream(header.Length + rawBytes.Length);
-        combinedStream.Write(header);
-        combinedStream.Write(rawBytes);
-        combinedStream.Position = 0;
-
-        byte[] redBookBytes = WavFileCodec.DecodeToRedBookPcm(combinedStream);
-        return new MemoryStream(redBookBytes, 0, redBookBytes.Length, writable: false, publiclyVisible: true);
     }
 
     /// <summary>
@@ -330,9 +365,9 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
                 int hrNative = reader.GetNativeMediaType(MediaFoundationConstants.MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, out nativeType);
                 if (hrNative == 0 && nativeType != null)
                 {
-                    if (nativeType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_NUM_CHANNELS, out uint ch) == 0) channels = (int)ch;
-                    if (nativeType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_SAMPLES_PER_SECOND, out uint sr) == 0) sampleRate = (int)sr;
-                    if (nativeType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_BITS_PER_SAMPLE, out uint bps) == 0) bitsPerSample = (int)bps;
+                    if (nativeType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_NUM_CHANNELS, out uint ch) == 0 && ch > 0) channels = (int)ch;
+                    if (nativeType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_SAMPLES_PER_SECOND, out uint sr) == 0 && sr > 0) sampleRate = (int)sr;
+                    if (nativeType.GetUINT32(MediaFoundationGuids.MF_MT_AUDIO_BITS_PER_SAMPLE, out uint bps) == 0 && bps >= 8) bitsPerSample = (int)bps;
                     if (nativeType.GetGUID(MediaFoundationGuids.MF_MT_SUBTYPE, out Guid sub) == 0)
                     {
                         if (sub == MediaFoundationGuids.MFAudioFormat_MP3) formatName = "MP3";

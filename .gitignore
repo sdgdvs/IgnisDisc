@@ -7,3 +7,12 @@ state/current-turn-prompt.md
 *.user
 *.suo
 *.tmp
+
+# Installer payload staged during Build-Installer.ps1
+tools/CdBurner.Setup/payload.zip
+
+# Local crash logs written next to the executable
+startup_error.log
+
+# Never commit ffmpeg binaries
+ffmpeg.exe

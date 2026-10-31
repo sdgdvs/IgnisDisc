@@ -8,7 +8,7 @@ namespace CdBurner.Hardware.Devices;
 /// <summary>
 /// Physical optical disc recorder backend wrapping Windows IMAPIv2 <see cref="IDiscRecorder2"/> COM interface.
 /// </summary>
-public class ImapiDiscRecorder : IDiscRecorderBackend
+public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
 {
     private IDiscRecorder2? _recorder;
     private readonly string _uniqueId;
@@ -414,19 +414,53 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
                         }
 
                         int usedSectors = Math.Max(0, totalSectors - freeSectors);
+
+                        // Overwrite-only media (DVD+RW, DVD-RAM, BD-RE, restricted-overwrite DVD-RW) are rewritten from
+                        // the start by IDiscFormat2Data.Write, so never lay out an "appended" session on them.
+                        bool overwriteOnly = (mediaState & ImapiFormat2DataMediaState.OverwriteOnly) != 0;
+                        if (overwriteOnly)
+                        {
+                            nextWritable = 0;
+                        }
+
+                        // Size of the recorded area as reported by the drive itself (more accurate than total - free,
+                        // and needed for reading back finalized or rewritable discs).
+                        if (!isBlank)
+                        {
+                            int? readable = Scsi.PhysicalSectorReader.ReadCapacity(VolumePath);
+                            if (readable is > 0)
+                            {
+                                usedSectors = readable.Value;
+                            }
+                        }
                         long totalBytes = (long)totalSectors * OpticalConstants.DataSectorSize;
                         long freeBytes = (long)freeSectors * OpticalConstants.DataSectorSize;
-                        int lastRecordedLba = nextWritable > 0 ? nextWritable - 1 : (isBlank ? -1 : usedSectors - 1);
+                        int lastRecordedLba = isBlank ? -1 : usedSectors - 1;
 
                         int sessionCount = 0;
+                        Array? multisession = null;
                         try
                         {
-                            var multisession = dataFormat.MultisessionInterfaces;
+                            multisession = dataFormat.MultisessionInterfaces;
                             sessionCount = multisession?.Length ?? (isBlank ? 0 : 1);
                         }
                         catch
                         {
                             sessionCount = isBlank ? 0 : 1;
+                        }
+                        finally
+                        {
+                            if (multisession != null)
+                            {
+                                for (int i = 0; i < multisession.Length; i++)
+                                {
+                                    var item = multisession.GetValue(i);
+                                    if (item != null && Marshal.IsComObject(item))
+                                    {
+                                        try { Marshal.ReleaseComObject(item); } catch { }
+                                    }
+                                }
+                            }
                         }
 
                         return new MediaStatusDto
@@ -435,7 +469,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
                             MediaPresent = true,
                             IsBlank = isBlank,
                             IsRewritable = isRewritable,
-                            IsAppendable = isAppendable || (!isFinalized && freeSectors > 0),
+                            IsAppendable = !overwriteOnly && (isAppendable || (!isFinalized && freeSectors > 0)),
                             TotalSectors = totalSectors,
                             FreeSectors = freeSectors,
                             UsedSectors = usedSectors,
@@ -482,6 +516,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
                         var mediaType = MapPhysicalTypeToDiscMediaType(physicalType);
                         bool isBlank = eraseFormat.MediaPhysicallyBlank || eraseFormat.MediaHeuristicallyBlank;
                         int nominalSectors = mediaType.GetNominalCapacitySectors();
+                        int recordedSectors = isBlank ? 0 : (Scsi.PhysicalSectorReader.ReadCapacity(VolumePath) ?? nominalSectors);
                         long nominalBytes = mediaType.GetNominalCapacityBytes();
 
                         return new MediaStatusDto
@@ -493,12 +528,12 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
                             IsAppendable = false,
                             TotalSectors = nominalSectors,
                             FreeSectors = isBlank ? nominalSectors : 0,
-                            UsedSectors = isBlank ? 0 : nominalSectors,
+                            UsedSectors = recordedSectors,
                             TotalCapacityBytes = nominalBytes,
                             FreeCapacityBytes = isBlank ? nominalBytes : 0,
                             SessionCount = isBlank ? 0 : 1,
                             MediaManufacturerId = null,
-                            LastRecordedLba = isBlank ? -1 : nominalSectors - 1
+                            LastRecordedLba = isBlank ? -1 : recordedSectors - 1
                         };
                     }
                 }
@@ -511,6 +546,37 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
         {
             Imapi2ComFactory.FinalRelease(ref dataFormat);
             Imapi2ComFactory.FinalRelease(ref eraseFormat);
+        }
+
+        // Pressed / read-only discs (CD-ROM, DVD-ROM, BD-ROM) are not writable formats for IMAPI, but they can
+        // still be read, ripped, verified and scanned.
+        try
+        {
+            int? readOnlySectors = Scsi.PhysicalSectorReader.ReadCapacity(VolumePath);
+            if (readOnlySectors is > 0)
+            {
+                bool isCd = readOnlySectors.Value <= 450_000; // ~ 880 MB: larger than any CD
+                long bytes = (long)readOnlySectors.Value * OpticalConstants.DataSectorSize;
+                return new MediaStatusDto
+                {
+                    MediaType = isCd ? DiscMediaType.CdRom : DiscMediaType.DvdRom,
+                    MediaPresent = true,
+                    IsBlank = false,
+                    IsRewritable = false,
+                    IsAppendable = false,
+                    TotalSectors = readOnlySectors.Value,
+                    FreeSectors = 0,
+                    UsedSectors = readOnlySectors.Value,
+                    TotalCapacityBytes = bytes,
+                    FreeCapacityBytes = 0,
+                    SessionCount = 1,
+                    MediaManufacturerId = null,
+                    LastRecordedLba = readOnlySectors.Value - 1
+                };
+            }
+        }
+        catch
+        {
         }
 
         return EmptyMediaStatus();
@@ -621,12 +687,16 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
         {
             if (_recorder != null)
             {
-                try
+                if (disposing && _exclusiveClient != null)
                 {
-                    _recorder.ReleaseExclusiveAccess();
-                }
-                catch
-                {
+                    try
+                    {
+                        _recorder.ReleaseExclusiveAccess();
+                    }
+                    catch
+                    {
+                    }
+                    _exclusiveClient = null;
                 }
 
                 Imapi2ComFactory.FinalRelease(ref _recorder);
@@ -639,6 +709,19 @@ public class ImapiDiscRecorder : IDiscRecorderBackend
     ~ImapiDiscRecorder()
     {
         Dispose(false);
+    }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<DiscTocTrack> ReadTableOfContents()
+    {
+        try
+        {
+            return Scsi.PhysicalSectorReader.ReadTableOfContents(VolumePath);
+        }
+        catch
+        {
+            return Array.Empty<DiscTocTrack>();
+        }
     }
 
     public override string ToString()

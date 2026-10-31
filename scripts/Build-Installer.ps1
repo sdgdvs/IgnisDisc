@@ -1,6 +1,8 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Runtime = "win-x64"
+    [string]$Runtime = "win-x64",
+    [string]$FfmpegPath = "",
+    [string]$FfmpegLicensePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +50,28 @@ $IgnisCliExe = Join-Path $PublishDir "ignisdisc-cli.exe"
 $CdBurnerCliExe = Join-Path $PublishDir "cdburner-cli.exe"
 if (Test-Path $CdBurnerCliExe) {
     Copy-Item -Path $CdBurnerCliExe -Destination $IgnisCliExe -Force
+}
+
+# Optionally bundle ffmpeg.exe for DVD-Video transcoding.
+# Only an ffmpeg build you deliberately pass in is bundled, together with its license text, because ffmpeg is
+# LGPL/GPL software and redistributing it requires shipping the license and offering the corresponding source.
+# Recommended: an official LGPL build (e.g. https://github.com/BtbN/FFmpeg-Builds, "lgpl" variant).
+if ($FfmpegPath) {
+    if (-not (Test-Path $FfmpegPath)) { throw "FfmpegPath not found: $FfmpegPath" }
+    if (-not $FfmpegLicensePath -or -not (Test-Path $FfmpegLicensePath)) {
+        throw "When bundling ffmpeg, pass -FfmpegLicensePath pointing at the LICENSE file that ships with that ffmpeg build."
+    }
+    Copy-Item -Path $FfmpegPath -Destination (Join-Path $PublishDir "ffmpeg.exe") -Force
+    Copy-Item -Path $FfmpegLicensePath -Destination (Join-Path $PublishDir "ffmpeg-LICENSE.txt") -Force
+    Write-Host "Bundled ffmpeg.exe and its license for DVD-Video transcoding" -ForegroundColor Green
+} else {
+    Write-Host "ffmpeg not bundled (pass -FfmpegPath and -FfmpegLicensePath to include it). DVD-Video transcoding will use an ffmpeg found on PATH." -ForegroundColor Yellow
+}
+
+# Ship the project license and third-party notices with every build
+foreach ($doc in @("LICENSE", "THIRD-PARTY-NOTICES.md")) {
+    $src = Join-Path $RepoRoot $doc
+    if (Test-Path $src) { Copy-Item -Path $src -Destination (Join-Path $PublishDir $doc) -Force }
 }
 
 Write-Host "=== Step 2: Packaging Portable Archive & Setup Payload ===" -ForegroundColor Cyan

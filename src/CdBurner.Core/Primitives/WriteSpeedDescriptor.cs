@@ -28,14 +28,18 @@ public readonly record struct WriteSpeedDescriptor : IComparable<WriteSpeedDescr
     /// </summary>
     public static WriteSpeedDescriptor FromMultiplier(double multiplier, DiscMediaType mediaType, bool isAudio = false)
     {
-        if (multiplier < 0)
+        if (!double.IsFinite(multiplier) || multiplier < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(multiplier), "Multiplier cannot be negative.");
+            throw new ArgumentOutOfRangeException(nameof(multiplier), "Multiplier must be a finite non-negative number.");
         }
 
         int baseRate = GetBaseRate(mediaType, isAudio);
-        int bytesPerSec = (int)Math.Round(multiplier * baseRate);
-        return new WriteSpeedDescriptor(bytesPerSec, mediaType, isAudio);
+        long bytesPerSecLong = (long)Math.Round(multiplier * baseRate);
+        if (bytesPerSecLong > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(multiplier), "Multiplier results in a transfer rate exceeding maximum integer limit.");
+        }
+        return new WriteSpeedDescriptor((int)bytesPerSecLong, mediaType, isAudio);
     }
 
     /// <summary>

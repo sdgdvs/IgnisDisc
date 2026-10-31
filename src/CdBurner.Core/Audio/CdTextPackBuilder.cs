@@ -152,7 +152,8 @@ public static class CdTextPackBuilder
         var trackByteArrays = new byte[strings.Length][];
         for (int i = 0; i < strings.Length; i++)
         {
-            byte[] strBytes = Encoding.Latin1.GetBytes(strings[i]);
+            string sanitized = (strings[i] ?? string.Empty).Replace("\0", string.Empty);
+            byte[] strBytes = Encoding.Latin1.GetBytes(sanitized);
             byte[] withNull = new byte[strBytes.Length + 1];
             strBytes.CopyTo(withNull, 0);
             withNull[^1] = 0x00;

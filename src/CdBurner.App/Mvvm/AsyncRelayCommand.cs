@@ -76,7 +76,14 @@ public class AsyncRelayCommand : ICommand
     /// <inheritdoc/>
     public async void Execute(object? parameter)
     {
-        await ExecuteAsync(parameter);
+        try
+        {
+            await ExecuteAsync(parameter);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Unhandled AsyncRelayCommand exception: {ex}");
+        }
     }
 
     /// <summary>
@@ -196,7 +203,14 @@ public class AsyncRelayCommand<T> : ICommand
     /// <inheritdoc/>
     public async void Execute(object? parameter)
     {
-        await ExecuteAsync(parameter);
+        try
+        {
+            await ExecuteAsync(parameter);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Unhandled AsyncRelayCommand exception: {ex}");
+        }
     }
 
     /// <summary>

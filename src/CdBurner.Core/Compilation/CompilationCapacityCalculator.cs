@@ -104,7 +104,7 @@ public static class CompilationCapacityCalculator
         {
             // If the file was imported from a previous session and is already on disc,
             // it does not consume newly burned sectors in the current session.
-            if (!file.ImportedStartLba.HasValue)
+            if (!file.ImportedStartLba.HasValue || file.IsPlannedLayoutLba)
             {
                 total += CalculateFileSectors(file.SizeBytes);
             }
@@ -253,7 +253,7 @@ public static class CompilationCapacityCalculator
         int fileSectors = 0;
         foreach (var file in allFiles)
         {
-            if (!file.ImportedStartLba.HasValue)
+            if (!file.ImportedStartLba.HasValue || file.IsPlannedLayoutLba)
             {
                 rawBytes += file.SizeBytes;
                 fileSectors += CalculateFileSectors(file.SizeBytes);
@@ -298,7 +298,7 @@ public static class CompilationCapacityCalculator
         int fileSectors = 0;
         foreach (var file in fileList)
         {
-            if (!file.ImportedStartLba.HasValue)
+            if (!file.ImportedStartLba.HasValue || file.IsPlannedLayoutLba)
             {
                 rawBytes += file.SizeBytes;
                 fileSectors += CalculateFileSectors(file.SizeBytes);
