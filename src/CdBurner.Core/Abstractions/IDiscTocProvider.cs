@@ -19,4 +19,10 @@ public interface IDiscTocProvider
     /// Reads the Table of Contents of the inserted disc. Returns an empty list if no TOC is available.
     /// </summary>
     IReadOnlyList<DiscTocTrack> ReadTableOfContents();
+
+    /// <summary>
+    /// Reads the raw CD-Text packs (a whole number of 18-byte packs, without the 4-byte response header) from the
+    /// lead-in of the inserted disc. Returns null if the disc or drive provides no CD-Text.
+    /// </summary>
+    byte[]? ReadCdTextPacks() => null;
 }

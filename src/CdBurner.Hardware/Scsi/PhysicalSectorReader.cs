@@ -24,6 +24,9 @@ public static partial class PhysicalSectorReader
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
 
     private const uint IOCTL_CDROM_READ_TOC = 0x00024000;
+    private const uint IOCTL_CDROM_READ_TOC_EX = 0x00024054; // CTL_CODE(FILE_DEVICE_CD_ROM, 0x15, METHOD_BUFFERED, FILE_READ_ACCESS)
+    private const byte TocFormatCdText = 0x05;
+    private const int CdTextPackSize = 18;
     private const uint FSCTL_ALLOW_EXTENDED_DASD_IO = 0x00090083;
     private const uint IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C;
     private const int TrackModeCdda = 2;
@@ -206,6 +209,76 @@ public static partial class PhysicalSectorReader
         }
 
         return tracks;
+    }
+
+    /// <summary>
+    /// Reads the raw CD-Text packs from the disc lead-in (READ TOC format 5). Tries IOCTL_CDROM_READ_TOC_EX on a
+    /// read-only handle first (no elevation needed), then SCSI pass-through. Returns the packs without the 4-byte
+    /// response header, or null if the disc has no CD-Text.
+    /// </summary>
+    public static byte[]? ReadCdTextPacks(string volumePath)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return null;
+        }
+
+        // READ TOC allocation length is 16-bit; some bridges reject the maximum, so retry with a smaller buffer.
+        foreach (int bufferSize in new[] { 0xFFFF, 4 + CdTextPackSize * 512 })
+        {
+            using (var ro = OpenDevice(volumePath, FileAccess.Read, out _))
+            {
+                if (ro != null)
+                {
+                    // CDROM_READ_TOC_EX { Format:4, Reserved1:3, Msf:1; SessionTrack; Reserved2; Reserved3 }
+                    byte[] request = { TocFormatCdText, 0, 0, 0 };
+                    byte[] response = new byte[bufferSize];
+                    if (DeviceIoControlBuffer(ro, IOCTL_CDROM_READ_TOC_EX, request, response, out _))
+                    {
+                        return ExtractCdTextPacks(response, response.Length);
+                    }
+                }
+            }
+
+            using (var rw = OpenDevice(volumePath, FileAccess.ReadWrite, out _))
+            {
+                if (rw != null)
+                {
+                    using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
+                    byte[] response = new byte[bufferSize];
+                    byte[] cdb = MmcCommandBuilder.BuildReadTocPmaAtipCdb(TocFormatCdText, 0, (ushort)bufferSize);
+                    var result = transport.ExecuteCommand(cdb, response, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(10));
+                    if (result.IsSuccess)
+                    {
+                        return ExtractCdTextPacks(response, (int)Math.Min(result.DataTransferLength, response.Length));
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Strips the READ TOC response header (2-byte big-endian length of the bytes that follow it, then 2 reserved
+    /// bytes) and returns the whole 18-byte packs that were actually transferred.
+    /// </summary>
+    internal static byte[]? ExtractCdTextPacks(byte[] response, int validLength)
+    {
+        if (validLength < 4)
+        {
+            return null;
+        }
+
+        int dataLength = (response[0] << 8) | response[1]; // excludes the length field itself
+        int packBytes = Math.Min(dataLength - 2, validLength - 4);
+        packBytes -= packBytes % CdTextPackSize;
+        if (packBytes < CdTextPackSize)
+        {
+            return null;
+        }
+
+        return response.AsSpan(4, packBytes).ToArray();
     }
 
     /// <summary>

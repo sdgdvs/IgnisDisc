@@ -35,6 +35,12 @@ public class AudioRipOptions
     /// Optional subset of 1-based track numbers to rip. If null or empty, all tracks are ripped.
     /// </summary>
     public IReadOnlyList<int>? TrackNumbersToRip { get; set; }
+
+    /// <summary>
+    /// Optional metadata (e.g. from an online lookup) that takes precedence over CD-Text for file names, the CUE
+    /// sheet and <see cref="AudioCdRipResult.CdText"/>. Tracks it does not cover keep their CD-Text or generic names.
+    /// </summary>
+    public CdTextAlbumMetadata? MetadataOverride { get; set; }
 }
 
 /// <summary>
@@ -148,24 +154,33 @@ public class AudioCdRipperService
         CdTextAlbumMetadata? cdText = null;
         var tracks = new List<AudioDiscoveredTrack>();
 
-        // Physical drives: read the real Table of Contents
+        // Physical drives: read the real Table of Contents and any CD-Text in the lead-in
         if (recorder is IDiscTocProvider tocProvider)
         {
             var toc = tocProvider.ReadTableOfContents();
+            if (toc.Any(t => t.IsAudio))
+            {
+                cdText = TryParseCdText(tocProvider.ReadCdTextPacks());
+            }
+
             foreach (var t in toc.Where(t => t.IsAudio))
             {
+                var (title, performer, songwriter, composer, isrc) = MergeCdText(t.TrackNumber, null, null, null, null, null, cdText);
                 tracks.Add(new AudioDiscoveredTrack(
                     t.TrackNumber,
                     t.StartLba,
                     t.SectorCount,
                     t.TrackNumber == 1 ? OpticalConstants.CdLeadInFrames : 0,
-                    $"Track {t.TrackNumber:D2}",
-                    "Unknown Artist"));
+                    title,
+                    performer,
+                    songwriter,
+                    composer,
+                    isrc));
             }
 
             if (tracks.Count > 0)
             {
-                return (tracks, null);
+                return (tracks, cdText);
             }
         }
 
@@ -181,17 +196,7 @@ public class AudioCdRipperService
         {
             // Read optional CdTextBytes
             var cdTextBytesProp = mediumObj.GetType().GetProperty("CdTextBytes");
-            if (cdTextBytesProp?.GetValue(mediumObj) is byte[] cdBytes && cdBytes.Length >= 18)
-            {
-                try
-                {
-                    cdText = CdTextPackParser.ParsePacks(cdBytes);
-                }
-                catch
-                {
-                    // Ignore malformed CD-Text packs
-                }
-            }
+            cdText = TryParseCdText(cdTextBytesProp?.GetValue(mediumObj) as byte[]);
 
             // Read Sessions and Tracks
             var sessionsProp = mediumObj.GetType().GetProperty("Sessions");
@@ -215,35 +220,17 @@ public class AudioCdRipperService
                             string? composer = tType.GetProperty("Composer")?.GetValue(t) as string;
                             string? isrc = tType.GetProperty("Isrc")?.GetValue(t) as string;
 
-                            // Merge or override with decoded CD-Text if available
-                            if (cdText != null && cdText.Tracks != null)
-                            {
-                                var cdt = cdText.Tracks.FirstOrDefault(x => x.TrackNumber == trkNum);
-                                if (cdt != null)
-                                {
-                                    if (!string.IsNullOrEmpty(cdt.Title)) title = cdt.Title;
-                                    if (!string.IsNullOrEmpty(cdt.Performer)) performer = cdt.Performer;
-                                    if (!string.IsNullOrEmpty(cdt.Songwriter)) songwriter = cdt.Songwriter;
-                                    if (!string.IsNullOrEmpty(cdt.Composer)) composer = cdt.Composer;
-                                    if (!string.IsNullOrEmpty(cdt.Isrc)) isrc = cdt.Isrc;
-                                }
-
-                                if (string.IsNullOrEmpty(performer) && !string.IsNullOrEmpty(cdText.AlbumPerformer))
-                                {
-                                    performer = cdText.AlbumPerformer;
-                                }
-                            }
-
+                            var merged = MergeCdText(trkNum, title, performer, songwriter, composer, isrc, cdText);
                             tracks.Add(new AudioDiscoveredTrack(
                                 trkNum,
                                 startLba,
                                 count,
                                 preGap,
-                                string.IsNullOrWhiteSpace(title) ? $"Track {trkNum:D2}" : title,
-                                string.IsNullOrWhiteSpace(performer) ? (cdText?.AlbumPerformer ?? "Unknown Artist") : performer,
-                                songwriter,
-                                composer,
-                                isrc));
+                                merged.Title,
+                                merged.Performer,
+                                merged.Songwriter,
+                                merged.Composer,
+                                merged.Isrc));
                         }
                     }
                 }
@@ -267,6 +254,60 @@ public class AudioCdRipperService
         }
 
         return (tracks, cdText);
+    }
+
+    private static CdTextAlbumMetadata? TryParseCdText(byte[]? packs)
+    {
+        if (packs == null || packs.Length < CdTextPack.PackSizeBytes)
+        {
+            return null;
+        }
+
+        try
+        {
+            return CdTextPackParser.ParsePacks(packs);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidDataException)
+        {
+            // Malformed or CRC-damaged CD-Text: fall back to generic track names.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Overlays decoded CD-Text on top of the given per-track fields and applies the generic fallbacks
+    /// ("Track NN", album performer, "Unknown Artist").
+    /// </summary>
+    private static (string Title, string Performer, string? Songwriter, string? Composer, string? Isrc) MergeCdText(
+        int trackNumber,
+        string? title,
+        string? performer,
+        string? songwriter,
+        string? composer,
+        string? isrc,
+        CdTextAlbumMetadata? cdText)
+    {
+        var cdt = cdText?.Tracks?.FirstOrDefault(x => x.TrackNumber == trackNumber);
+        if (cdt != null)
+        {
+            if (!string.IsNullOrEmpty(cdt.Title)) title = cdt.Title;
+            if (!string.IsNullOrEmpty(cdt.Performer)) performer = cdt.Performer;
+            if (!string.IsNullOrEmpty(cdt.Songwriter)) songwriter = cdt.Songwriter;
+            if (!string.IsNullOrEmpty(cdt.Composer)) composer = cdt.Composer;
+            if (!string.IsNullOrEmpty(cdt.Isrc)) isrc = cdt.Isrc;
+        }
+
+        if (string.IsNullOrWhiteSpace(performer) && !string.IsNullOrWhiteSpace(cdText?.AlbumPerformer))
+        {
+            performer = cdText.AlbumPerformer;
+        }
+
+        return (
+            string.IsNullOrWhiteSpace(title) ? $"Track {trackNumber:D2}" : title,
+            string.IsNullOrWhiteSpace(performer) ? "Unknown Artist" : performer,
+            songwriter,
+            composer,
+            isrc);
     }
 
     /// <summary>
@@ -297,6 +338,17 @@ public class AudioCdRipperService
         Directory.CreateDirectory(outputDirectory);
 
         var (allTracks, cdText) = QueryTracksAndCdText(recorder);
+        if (options.MetadataOverride is { } metadataOverride)
+        {
+            allTracks = allTracks.Select(t =>
+            {
+                // The generic placeholder must not block the override's album performer.
+                string? performer = t.Performer == "Unknown Artist" ? null : t.Performer;
+                var m = MergeCdText(t.TrackNumber, t.Title, performer, t.Songwriter, t.Composer, t.Isrc, metadataOverride);
+                return t with { Title = m.Title, Performer = m.Performer, Songwriter = m.Songwriter, Composer = m.Composer, Isrc = m.Isrc };
+            }).ToList();
+            cdText = metadataOverride;
+        }
         if (allTracks.Count == 0)
         {
             return AudioCdRipResult.Failed("No recorded audio tracks found on media.");

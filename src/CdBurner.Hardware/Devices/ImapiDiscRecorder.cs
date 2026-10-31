@@ -724,6 +724,19 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
         }
     }
 
+    /// <inheritdoc/>
+    public byte[]? ReadCdTextPacks()
+    {
+        try
+        {
+            return Scsi.PhysicalSectorReader.ReadCdTextPacks(VolumePath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public override string ToString()
     {
         string vp = VolumePath;
