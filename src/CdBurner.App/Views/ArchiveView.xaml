@@ -1,0 +1,447 @@
+<UserControl x:Class="CdBurner.App.Views.ArchiveView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
+             xmlns:converters="clr-namespace:CdBurner.App.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:ArchiveViewModel}"
+             Background="{DynamicResource SurfaceBackgroundBrush}"
+             Foreground="{DynamicResource TextPrimaryBrush}">
+
+    <UserControl.Resources>
+        <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <converters:InverseBooleanToVisibilityConverter x:Key="InvBoolToVis" />
+        <converters:NullToVisibilityConverter x:Key="NullToVis" />
+        <converters:InverseBooleanConverter x:Key="InverseBooleanConverter" />
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="16">
+            <Grid.RowDefinitions>
+                <!-- Row 0: Card 1 - Plan & Stage -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 1: Card 2 - Discs -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 2: Card 3 - Verify & Repair -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 3: Footer - Status & Progress -->
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 0: CARD 1 - PLAN & STAGE                                             -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="📋 Plan &amp; Stage Archival Discs"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <!-- Source Folder -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="Source Folder:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SourceFolder, UpdateSourceTrigger=PropertyChanged}"
+                                 VerticalAlignment="Center"
+                                 Padding="6,4"
+                                 Background="{DynamicResource ControlBackgroundBrush}"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource ControlBorderBrush}" />
+                        <Button Grid.Column="2"
+                                Content="Browse..."
+                                Command="{Binding BrowseSourceCommand}"
+                                Margin="8,0,0,0"
+                                Padding="12,4" />
+                    </Grid>
+
+                    <!-- Media & Redundancy -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="32" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="160" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Media selection -->
+                        <TextBlock Grid.Column="0"
+                                   Text="Media Type:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontWeight="SemiBold" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding MediaOptions}"
+                                  SelectedItem="{Binding SelectedMedia}"
+                                  DisplayMemberPath="Name"
+                                  VerticalAlignment="Center" />
+
+                        <!-- Redundancy -->
+                        <TextBlock Grid.Column="3"
+                                   Text="Recovery Data:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,10,0" />
+                        <Slider Grid.Column="4"
+                                Minimum="0"
+                                Maximum="30"
+                                Value="{Binding RedundancyPercent}"
+                                IsEnabled="{Binding Par2Available}"
+                                SmallChange="1"
+                                LargeChange="5"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="5"
+                                VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="5"
+                                   Text="{Binding RedundancyPercent, StringFormat='{}{0}% PAR2'}"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   FontWeight="SemiBold"
+                                   Margin="8,0,0,0"
+                                   MinWidth="60" />
+                    </Grid>
+
+                    <!-- Par2 Status Text -->
+                    <TextBlock Text="{Binding Par2StatusText}"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               FontSize="12"
+                               Margin="130,0,0,10"
+                               TextWrapping="Wrap" />
+
+                    <!-- Staging Folder -->
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="Staging Folder:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding StagingFolder, UpdateSourceTrigger=PropertyChanged}"
+                                 VerticalAlignment="Center"
+                                 Padding="6,4"
+                                 Background="{DynamicResource ControlBackgroundBrush}"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource ControlBorderBrush}" />
+                        <Button Grid.Column="2"
+                                Content="Browse..."
+                                Command="{Binding BrowseStagingCommand}"
+                                Margin="8,0,0,0"
+                                Padding="12,4" />
+                    </Grid>
+
+                    <!-- Action Buttons & PlanSummary -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0"
+                                Content="📋 Plan"
+                                Command="{Binding PlanCommand}"
+                                Padding="16,6"
+                                Margin="0,0,10,0"
+                                FontWeight="SemiBold" />
+                        <Button Grid.Column="1"
+                                Content="📦 Stage discs"
+                                Command="{Binding StageCommand}"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Padding="16,6"
+                                Margin="0,0,16,0"
+                                FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="2"
+                                   Text="{Binding PlanSummary}"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   FontWeight="SemiBold"
+                                   FontSize="13"
+                                   TextTrimming="CharacterEllipsis" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 1: CARD 2 - DISCS                                                    -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="1"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="260" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="💿 Planned &amp; Staged Discs"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,24,0" />
+
+                        <TextBlock Grid.Column="1"
+                                   Text="Target Burner:"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0" />
+
+                        <ComboBox Grid.Column="2"
+                                  ItemsSource="{Binding AvailableRecorders}"
+                                  SelectedItem="{Binding SelectedRecorder}"
+                                  VerticalAlignment="Center">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding VolumePath}" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding ProductId}" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+
+                        <CheckBox Grid.Column="3"
+                                  Content="Verify after burning"
+                                  IsChecked="{Binding VerifyAfterBurn}"
+                                  VerticalAlignment="Center"
+                                  Margin="16,0,0,0" />
+                    </Grid>
+
+                    <!-- Discs List -->
+                    <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="4"
+                            MinHeight="100"
+                            MaxHeight="260">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Discs}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="{DynamicResource CardBorderBrush}"
+                                                BorderThickness="0,0,0,1"
+                                                Padding="10,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding DiscNumber, StringFormat='Disc {0:D2}'}"
+                                                               FontWeight="Bold"
+                                                               Foreground="{DynamicResource AccentBrush}"
+                                                               Margin="0,0,8,0" />
+                                                    <TextBlock Text="·" Margin="0,0,8,0" Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <TextBlock Text="{Binding FileCount, StringFormat='{}{0:N0} files'}"
+                                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                                               Margin="0,0,8,0" />
+                                                    <TextBlock Text="·" Margin="0,0,8,0" Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <TextBlock Text="{Binding SizeText}"
+                                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                                               Margin="0,0,8,0" />
+                                                    <TextBlock Text="·" Margin="0,0,8,0" Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <TextBlock Text="{Binding Status}"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                    <TextBlock Text="{Binding StagedPath, StringFormat=' ({0})'}"
+                                                               Foreground="{DynamicResource TextMutedBrush}"
+                                                               FontSize="11"
+                                                               Visibility="{Binding StagedPath, Converter={StaticResource NullToVis}}"
+                                                               Margin="8,0,0,0" />
+                                                </StackPanel>
+
+                                                <Button Grid.Column="1"
+                                                        Content="🔥 Burn"
+                                                        Command="{Binding DataContext.BurnDiscCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Padding="14,4"
+                                                        Margin="8,0,0,0" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 2: CARD 3 - VERIFY & REPAIR                                          -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="2"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="🔍 Verify &amp; Repair Archive Discs"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <!-- Verify Path -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="Verify Path:"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontWeight="SemiBold" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding VerifyPath, UpdateSourceTrigger=PropertyChanged}"
+                                 VerticalAlignment="Center"
+                                 Padding="6,4"
+                                 Background="{DynamicResource ControlBackgroundBrush}"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource ControlBorderBrush}" />
+                        <Button Grid.Column="2"
+                                Content="Browse..."
+                                Command="{Binding BrowseVerifyFolderCommand}"
+                                Margin="8,0,0,0"
+                                Padding="12,4" />
+                        <Button Grid.Column="3"
+                                Content="✔ Verify folder"
+                                Command="{Binding VerifyCommand}"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Margin="8,0,0,0"
+                                Padding="12,4" />
+                        <Button Grid.Column="4"
+                                Content="💿 Verify disc in drive"
+                                Command="{Binding VerifyDriveCommand}"
+                                Margin="8,0,0,0"
+                                Padding="12,4" />
+                    </Grid>
+
+                    <!-- Verification Summary & Repair Button -->
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding VerificationSummary}"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+
+                        <Button Grid.Column="1"
+                                Content="🛠 Repair"
+                                Command="{Binding RepairCommand}"
+                                Visibility="{Binding CanRepair, Converter={StaticResource BoolToVis}}"
+                                ToolTip="Repairs a copied folder using its PAR2 recovery data. Discs are read-only: copy the disc to a folder first."
+                                Padding="14,4"
+                                Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Verification Problems List -->
+                    <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="4"
+                            MinHeight="60"
+                            MaxHeight="140">
+                        <ListBox ItemsSource="{Binding VerificationProblems}"
+                                 FontFamily="Consolas, Courier New, monospace"
+                                 FontSize="12"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 3: FOOTER - STATUS & PROGRESS                                        -->
+            <!-- ========================================================================= -->
+            <Border Grid.Row="3"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="200" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               FontSize="12"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="0,0,16,0" />
+
+                    <ProgressBar Grid.Column="1"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding Progress}"
+                                 Height="6"
+                                 VerticalAlignment="Center"
+                                 Margin="0,0,16,0"
+                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+
+                    <Button Grid.Column="2"
+                            Content="🛑 Cancel"
+                            Command="{Binding CancelCommand}"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                            Padding="12,4" />
+                </Grid>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

@@ -233,7 +233,7 @@
         <!-- ========================================================================= -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <!-- Left Navigation Rail (7 module tabs) -->
+                <!-- Left Navigation Rail (8 module tabs) -->
                 <ColumnDefinition Width="220" />
                 <!-- Content Host Area -->
                 <ColumnDefinition Width="*" />
@@ -293,6 +293,17 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="💿" FontSize="14" Margin="0,0,10,0" />
                             <TextBlock Text="Disc Image Studio" />
+                        </StackPanel>
+                    </RadioButton>
+
+                    <!-- Tab: Archive Studio -->
+                    <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=Archive}"
+                                 Command="{Binding NavigateCommand}"
+                                 CommandParameter="{x:Static vm:NavigationTab.Archive}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🗄️" FontSize="14" Margin="0,0,10,0" />
+                            <TextBlock Text="Archive" />
                         </StackPanel>
                     </RadioButton>
 

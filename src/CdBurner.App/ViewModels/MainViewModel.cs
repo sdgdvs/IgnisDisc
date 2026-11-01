@@ -24,6 +24,7 @@ public class MainViewModel : ObservableObject, IDisposable
     private readonly DvdVideoViewModel _dvdVideo;
     private readonly AudioBurnViewModel _audioBurn;
     private readonly ImageStudioViewModel _imageStudio;
+    private readonly ArchiveViewModel _archive;
     private readonly DriveUtilitiesViewModel _driveUtilities;
     private readonly VirtualDriveViewModel _virtualDrive;
     private readonly SettingsViewModel _settings;
@@ -61,6 +62,11 @@ public class MainViewModel : ObservableObject, IDisposable
     /// Gets the Disc Image Studio workspace view model.
     /// </summary>
     public ImageStudioViewModel ImageStudio => _imageStudio;
+
+    /// <summary>
+    /// Gets the Archive Studio workspace view model.
+    /// </summary>
+    public ArchiveViewModel Archive => _archive;
 
     /// <summary>
     /// Gets the Drive Utilities and Diagnostics workspace view model.
@@ -115,6 +121,7 @@ public class MainViewModel : ObservableObject, IDisposable
                     if (_dvdVideo != null) _dvdVideo.SelectedRecorder = value;
                     if (_audioBurn != null) _audioBurn.SelectedRecorder = value;
                     if (_imageStudio != null) _imageStudio.SelectedRecorder = value;
+                    if (_archive != null) _archive.SelectedRecorder = value;
                     if (_driveUtilities != null) _driveUtilities.SelectedRecorder = value;
                     if (_virtualDrive != null) _virtualDrive.SelectedRecorder = value;
                     if (_settings != null) _settings.SelectedRecorder = value;
@@ -175,6 +182,7 @@ public class MainViewModel : ObservableObject, IDisposable
         (_audioBurn?.IsBusy ?? false) ||
         (_dvdVideo?.IsBusy ?? false) ||
         (_imageStudio?.IsBusy ?? false) ||
+        (_archive?.IsBusy ?? false) ||
         (_driveUtilities?.IsBusy ?? false);
 
     /// <summary>
@@ -186,6 +194,7 @@ public class MainViewModel : ObservableObject, IDisposable
         try { _dvdVideo?.CancelActiveOperation(); } catch { }
         try { _audioBurn?.CancelActiveBurn(); } catch { }
         try { _imageStudio?.CancelActiveOperation(); } catch { }
+        try { _archive?.CancelActiveOperation(); } catch { }
         try { _driveUtilities?.CancelActiveOperation(); } catch { }
 
         if (_selectedRecorder != null)
@@ -415,6 +424,7 @@ public class MainViewModel : ObservableObject, IDisposable
         var settingsService = new AppSettingsService();
         _audioBurn = new AudioBurnViewModel(_deviceService, _burnEngine, settingsService: settingsService);
         _imageStudio = new ImageStudioViewModel(_deviceService, _burnEngine);
+        _archive = new ArchiveViewModel(_deviceService, _burnEngine);
         _driveUtilities = new DriveUtilitiesViewModel(_deviceService, _burnEngine);
         _virtualDrive = new VirtualDriveViewModel(_deviceService);
         _settings = new SettingsViewModel(settingsService, this);
@@ -456,6 +466,18 @@ public class MainViewModel : ObservableObject, IDisposable
             if (e.PropertyName == nameof(ImageStudioViewModel.SelectedRecorder) && !_syncingRecorder && _imageStudio.SelectedRecorder != null)
             {
                 SelectedRecorder = _imageStudio.SelectedRecorder;
+            }
+        };
+
+        _archive.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ArchiveViewModel.SelectedRecorder) && !_syncingRecorder && _archive.SelectedRecorder != null)
+            {
+                SelectedRecorder = _archive.SelectedRecorder;
+            }
+            else if (e.PropertyName == nameof(ArchiveViewModel.IsBusy))
+            {
+                OnPropertyChanged(nameof(IsAnyBurnActive));
             }
         };
 
@@ -538,6 +560,11 @@ public class MainViewModel : ObservableObject, IDisposable
             _imageStudio.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
         }
 
+        if (_archive != null)
+        {
+            _archive.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
+        }
+
         _audioBurn?.ApplyRipSettings(_settings.SettingsService.CurrentSettings);
 
         if (_dvdVideo != null)
@@ -577,6 +604,13 @@ public class MainViewModel : ObservableObject, IDisposable
             "Burn, create, rip, and verify ISO and BIN/CUE disc image archives.",
             "💿",
             _imageStudio);
+
+        _workspaces[NavigationTab.Archive] = new WorkspaceViewModel(
+            NavigationTab.Archive,
+            "Archive Studio",
+            "Plan, stage, burn, verify, and repair multi-disc archival sets with PAR2 recovery.",
+            "🗄️",
+            _archive);
 
         _workspaces[NavigationTab.DriveUtilities] = new WorkspaceViewModel(
             NavigationTab.DriveUtilities,
@@ -636,6 +670,7 @@ public class MainViewModel : ObservableObject, IDisposable
             _dvdVideo.AvailableRecorders.Clear();
             _audioBurn.AvailableRecorders.Clear();
             _imageStudio.AvailableRecorders.Clear();
+            _archive.AvailableRecorders.Clear();
             _driveUtilities.AvailableRecorders.Clear();
             _virtualDrive.AvailableRecorders.Clear();
             _settings.AvailableRecorders.Clear();
@@ -647,6 +682,7 @@ public class MainViewModel : ObservableObject, IDisposable
                 _dvdVideo.AvailableRecorders.Add(r);
                 _audioBurn.AvailableRecorders.Add(r);
                 _imageStudio.AvailableRecorders.Add(r);
+                _archive.AvailableRecorders.Add(r);
                 _driveUtilities.AvailableRecorders.Add(r);
                 _settings.AvailableRecorders.Add(r);
             }

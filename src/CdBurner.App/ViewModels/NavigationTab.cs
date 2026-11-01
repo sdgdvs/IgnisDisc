@@ -26,6 +26,11 @@ public enum NavigationTab
     ImageStudio,
 
     /// <summary>
+    /// Multi-disc spanning archive planning, staging, burning, checksum verification, and PAR2 recovery.
+    /// </summary>
+    Archive,
+
+    /// <summary>
     /// Optical drive hardware inspection, rewritable disc blanking, and surface scanning.
     /// </summary>
     DriveUtilities,

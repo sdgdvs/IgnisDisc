@@ -227,4 +227,100 @@ public static class Par2Runner
             File.Move(file, dest, overwrite: true);
         }
     }
+
+    /// <summary>
+    /// Repairs a disc copy in place: runs "par2 repair -q -B. RECOVERY\recovery.par2" with WorkingDirectory = folderRoot.
+    /// Returns par2's exit code (0 = repaired or nothing to do). Throws FileNotFoundException if RECOVERY\recovery.par2 is missing.
+    /// </summary>
+    /// <param name="par2Path">Path to par2 executable.</param>
+    /// <param name="folderRoot">Root folder containing the disc copy to repair.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>par2's exit code (0 = repaired or nothing to do).</returns>
+    /// <exception cref="ArgumentException">Thrown if parameters are null or whitespace.</exception>
+    /// <exception cref="FileNotFoundException">Thrown if par2 or RECOVERY\recovery.par2 is missing.</exception>
+    /// <exception cref="DirectoryNotFoundException">Thrown if folderRoot directory does not exist.</exception>
+    public static async Task<int> RepairAsync(
+        string par2Path,
+        string folderRoot,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(par2Path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(folderRoot);
+
+        if (!File.Exists(par2Path))
+        {
+            throw new FileNotFoundException($"par2 executable not found at '{par2Path}'.", par2Path);
+        }
+
+        if (!Directory.Exists(folderRoot))
+        {
+            throw new DirectoryNotFoundException($"Folder root directory not found: '{folderRoot}'.");
+        }
+
+        string recoveryPar2 = Path.Combine(folderRoot, ArchiveManifest.RecoveryFolderName, "recovery.par2");
+        if (!File.Exists(recoveryPar2))
+        {
+            throw new FileNotFoundException($"Recovery file not found: '{recoveryPar2}'.", recoveryPar2);
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = par2Path,
+            WorkingDirectory = folderRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        psi.ArgumentList.Add("repair");
+        psi.ArgumentList.Add("-q");
+        psi.ArgumentList.Add("-B.");
+        psi.ArgumentList.Add(Path.Combine(ArchiveManifest.RecoveryFolderName, "recovery.par2"));
+
+        using var proc = new Process { StartInfo = psi };
+
+        if (!proc.Start())
+        {
+            throw new InvalidOperationException($"Failed to start par2 process at '{par2Path}'.");
+        }
+
+        var outTask = proc.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errTask = proc.StandardError.ReadToEndAsync(cancellationToken);
+
+        try
+        {
+            await Task.WhenAll(outTask, errTask, proc.WaitForExitAsync(cancellationToken)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+            throw;
+        }
+        catch
+        {
+            try
+            {
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+            throw;
+        }
+
+        return proc.ExitCode;
+    }
 }
