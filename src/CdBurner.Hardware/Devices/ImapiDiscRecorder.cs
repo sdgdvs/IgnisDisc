@@ -441,8 +441,11 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                         Array? multisession = null;
                         try
                         {
+                            // MultisessionInterfaces lists the multisession *write interfaces* the format supports
+                            // (e.g. 2 on a blank CD-R), not the sessions on the disc; it is only probed here so the
+                            // COM objects are released below. The real count comes from the disc's TOC.
                             multisession = dataFormat.MultisessionInterfaces;
-                            sessionCount = multisession?.Length ?? (isBlank ? 0 : 1);
+                            sessionCount = isBlank ? 0 : (Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1);
                         }
                         catch
                         {

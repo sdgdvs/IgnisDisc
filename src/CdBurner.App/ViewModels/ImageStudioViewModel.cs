@@ -46,6 +46,43 @@ public class ImageStudioViewModel : ObservableObject
     private WriteSpeedDescriptor? _selectedWriteSpeed;
     private CancellationTokenSource? _activeCts;
     private bool _isBusy;
+
+    // Progress<T> delivers callbacks asynchronously (on thread-pool threads when there is no UI dispatcher), so a late
+    // "Completed (100%)" could overwrite an operation's final status message. Each operation takes a new epoch; the
+    // epoch check and the status write happen under one lock, and EndOperationProgress takes the same lock, so once it
+    // returns no callback of that operation can still write.
+    private int _progressEpoch;
+    private readonly object _progressLock = new();
+
+    private IProgress<BurnProgressSnapshot> CreateOperationProgress(Action<string> setStatus)
+    {
+        int epoch;
+        lock (_progressLock)
+        {
+            epoch = ++_progressEpoch;
+        }
+
+        return new Progress<BurnProgressSnapshot>(p =>
+        {
+            lock (_progressLock)
+            {
+                if (!_isBusy || epoch != _progressEpoch) return;
+                if (p.TotalLba > 0)
+                {
+                    BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
+                }
+                setStatus($"{p.CurrentActionDescription} ({BurnProgress:F0}%)");
+            }
+        });
+    }
+
+    private void EndOperationProgress()
+    {
+        lock (_progressLock)
+        {
+            _progressEpoch++;
+        }
+    }
     private string _statusMessage = "Ready";
     private double _burnProgress;
     private BurnOperationResult? _lastBurnResult;
@@ -627,15 +664,7 @@ public class ImageStudioViewModel : ObservableObject
 
         try
         {
-            var progress = new Progress<BurnProgressSnapshot>(p =>
-            {
-                if (!_isBusy) return;
-                if (p.TotalLba > 0)
-                {
-                    BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
-                }
-                StatusMessage = $"{p.CurrentActionDescription} ({BurnProgress:F0}%)";
-            });
+            var progress = CreateOperationProgress(text => StatusMessage = text);
 
             string ext = Path.GetExtension(SourceImagePath).ToLowerInvariant();
             BurnOperationResult burnResult;
@@ -673,6 +702,7 @@ public class ImageStudioViewModel : ObservableObject
                     linkedToken);
             }
 
+            EndOperationProgress();
             LastBurnResult = burnResult;
 
             if (burnResult.Success)
@@ -887,15 +917,7 @@ public class ImageStudioViewModel : ObservableObject
 
         try
         {
-            var progress = new Progress<BurnProgressSnapshot>(p =>
-            {
-                if (!_isBusy) return;
-                if (p.TotalLba > 0)
-                {
-                    BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
-                }
-                StatusMessage = $"{p.CurrentActionDescription} ({BurnProgress:F0}%)";
-            });
+            var progress = CreateOperationProgress(text => StatusMessage = text);
 
             RipOperationResult ripResult;
             if (raw)
@@ -908,6 +930,7 @@ public class ImageStudioViewModel : ObservableObject
                 ripResult = await _ripperService.RipToIsoAsync(recorder, _burnEngine, outputPath, progress: progress, ct: linkedToken);
             }
 
+            EndOperationProgress();
             LastRipResult = ripResult;
 
             if (ripResult.Success)
@@ -983,15 +1006,7 @@ public class ImageStudioViewModel : ObservableObject
 
         try
         {
-            var progress = new Progress<BurnProgressSnapshot>(p =>
-            {
-                if (!_isBusy) return;
-                if (p.TotalLba > 0)
-                {
-                    BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
-                }
-                VerificationStatusText = $"{p.CurrentActionDescription} ({BurnProgress:F0}%)";
-            });
+            var progress = CreateOperationProgress(text => VerificationStatusText = text);
 
             string ext = Path.GetExtension(SourceImagePath).ToLowerInvariant();
             VerificationResult result;
@@ -1021,6 +1036,7 @@ public class ImageStudioViewModel : ObservableObject
                     ct: linkedToken);
             }
 
+            EndOperationProgress();
             LastVerificationResult = result;
             CalculatedSha256 = result.ExpectedSha256;
             DiscSha256 = result.ActualSha256;

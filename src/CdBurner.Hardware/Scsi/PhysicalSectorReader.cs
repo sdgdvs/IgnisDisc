@@ -478,6 +478,30 @@ public static partial class PhysicalSectorReader
     }
 
     /// <summary>
+    /// Number of complete sessions on the inserted disc (IOCTL_CDROM_GET_LAST_SESSION on a read-only handle), or null
+    /// if the drive cannot report it.
+    /// </summary>
+    public static int? ReadSessionCount(string volumePath)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return null;
+        }
+
+        using var handle = OpenDevice(volumePath, FileAccess.Read, out _);
+        if (handle == null)
+        {
+            return null;
+        }
+
+        // CDROM_TOC_SESSION_DATA: Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA
+        byte[] session = new byte[12];
+        return DeviceIoControlBuffer(handle, IOCTL_CDROM_GET_LAST_SESSION, Array.Empty<byte>(), session, out _) && session[3] > 0
+            ? session[3]
+            : null;
+    }
+
+    /// <summary>
     /// Returns the number of readable sectors on the inserted disc (last recorded LBA + 1), or null if unknown.
     /// Uses READ CAPACITY via pass-through, then IOCTL_DISK_GET_LENGTH_INFO on a read-only handle.
     /// </summary>
