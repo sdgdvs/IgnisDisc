@@ -123,13 +123,18 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             {
                 try
                 {
+                    // No speed requested: use the fastest speed the drive supports for this media. The list's order
+                    // is not guaranteed (on an HL-DT-ST GP60NB50 the last entry was the slowest, so every default
+                    // burn ran at 1x: 5 minutes to write 45 MB), so take the maximum value instead of an end.
                     var supportedSpeeds = formatData.SupportedWriteSpeeds;
-                    if (supportedSpeeds != null && supportedSpeeds.Length > 0)
+                    if (supportedSpeeds != null)
                     {
-                        var maxVal = supportedSpeeds.GetValue(supportedSpeeds.Length - 1);
-                        if (maxVal != null)
+                        foreach (var speed in supportedSpeeds)
                         {
-                            targetSectorsPerSec = Convert.ToInt32(maxVal);
+                            if (speed != null)
+                            {
+                                targetSectorsPerSec = Math.Max(targetSectorsPerSec, Convert.ToInt32(speed));
+                            }
                         }
                     }
                 }

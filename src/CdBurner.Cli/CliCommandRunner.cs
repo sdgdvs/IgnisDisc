@@ -493,8 +493,10 @@ public static class CliCommandRunner
             IncludeUdf: includeUdf,
             BootConfiguration: bootConfig);
 
+        var phases = new PhaseTimingProgress(cmd.IsJson ? null : stdout);
         var burnService = new DataBurnService(burnEngine);
-        var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions).ConfigureAwait(false);
+        var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions, phases).ConfigureAwait(false);
+        phases.Complete();
 
         if (cmd.IsJson)
         {
@@ -509,6 +511,7 @@ public static class CliCommandRunner
                 totalTimeSeconds = result.TotalTime.TotalSeconds,
                 averageSpeedMultiplier = result.AverageSpeedMultiplier,
                 verified = result.Verified,
+                phases = phases.Phases.Select(p => new { phase = p.Name, seconds = Math.Round(p.Duration.TotalSeconds, 1) }),
                 error = result.ErrorMessage
             };
 
@@ -524,11 +527,67 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Sectors Burned: {result.SectorsWritten:N0}");
             stdout.WriteLine($"  Duration:       {result.TotalTime}");
             stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
+            phases.WriteSummary(stdout);
             return 0;
         }
 
         stderr.WriteLine($"Data burn failed: {result.ErrorMessage}");
+        phases.WriteSummary(stderr);
         return 1;
+    }
+
+    /// <summary>
+    /// Records how long each burn phase (IMAPI write action or service step) took, printing each phase as it starts.
+    /// Implemented synchronously rather than with <see cref="Progress{T}"/>, so reports are never reordered.
+    /// </summary>
+    private sealed class PhaseTimingProgress : IProgress<BurnProgressSnapshot>
+    {
+        private readonly TextWriter? _live;
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+        private readonly List<(string Name, TimeSpan Start)> _starts = new();
+        private readonly object _lock = new();
+        private TimeSpan? _end;
+
+        public PhaseTimingProgress(TextWriter? live) => _live = live;
+
+        public void Report(BurnProgressSnapshot value)
+        {
+            string name = string.IsNullOrWhiteSpace(value.CurrentActionDescription) ? "Working" : value.CurrentActionDescription;
+            lock (_lock)
+            {
+                if (_end != null || (_starts.Count > 0 && _starts[^1].Name == name)) return;
+                _starts.Add((name, _clock.Elapsed));
+                _live?.WriteLine($"  [{_clock.Elapsed:mm\\:ss}] {name}");
+            }
+        }
+
+        public void Complete()
+        {
+            lock (_lock) { _end ??= _clock.Elapsed; }
+        }
+
+        public IReadOnlyList<(string Name, TimeSpan Duration)> Phases
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    var end = _end ?? _clock.Elapsed;
+                    return _starts.Select((s, i) => (s.Name, (i + 1 < _starts.Count ? _starts[i + 1].Start : end) - s.Start)).ToList();
+                }
+            }
+        }
+
+        public void WriteSummary(TextWriter writer)
+        {
+            var phases = Phases;
+            if (phases.Count == 0) return;
+            writer.WriteLine("  Phase timing:");
+            foreach (var (name, duration) in phases)
+            {
+                writer.WriteLine($"    {name,-28} {duration:mm\\:ss\\.f}");
+            }
+        }
     }
 
     private static async Task<int> HandleBurnAudioAsync(
