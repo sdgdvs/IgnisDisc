@@ -1680,35 +1680,8 @@ public static class CliCommandRunner
 
     private static void PopulateDirectoryFromDisk(CompilationDirectory target, string sourceDiskDir, bool skipDvdIgnoredFiles = false)
     {
-        var dirInfo = new DirectoryInfo(sourceDiskDir);
-        if (!dirInfo.Exists) return;
-
-        foreach (var file in dirInfo.GetFiles())
-        {
-            try
-            {
-                if (skipDvdIgnoredFiles && DvdInputNormalizer.IsIgnoredUselessFile(file.FullName))
-                {
-                    continue;
-                }
-                target.AddFile(new CompilationFile(file.FullName, file.Length));
-            }
-            catch
-            {
-            }
-        }
-
-        foreach (var subDir in dirInfo.GetDirectories())
-        {
-            try
-            {
-                var childDir = target.AddDirectory(subDir.Name);
-                PopulateDirectoryFromDisk(childDir, subDir.FullName, skipDvdIgnoredFiles);
-            }
-            catch
-            {
-            }
-        }
+        CompilationFolderImporter.Import(target, sourceDiskDir, strict: false,
+            skipDvdIgnoredFiles ? DvdInputNormalizer.IsIgnoredUselessFile : null);
     }
 
     private static string FormatBytes(long bytes)
