@@ -1413,7 +1413,15 @@ public static class CliCommandRunner
 
         stdout.WriteLine(planOnly ? "Archive plan:" : "Archive staged successfully:");
         stdout.WriteLine($"  Set ID:           {plan.SetId}");
-        stdout.WriteLine($"  Media:            {media.GetDisplayName()}");
+        // --media plans for the smaller of the -R/+R capacities, so the plan fits either kind of disc.
+        string mediaName = media switch
+        {
+            DiscMediaType.CdR => "CD-R (700 MB)",
+            DiscMediaType.DvdPlusR => "DVD±R (4.7 GB)",
+            DiscMediaType.DvdMinusRDualLayer => "DVD±R DL (8.5 GB)",
+            _ => media.GetDisplayName()
+        };
+        stdout.WriteLine($"  Media:            {mediaName}");
         stdout.WriteLine($"  Redundancy:       {plan.RedundancyPercent}% PAR2");
         stdout.WriteLine($"  Total Data:       {plan.TotalBytes / 1048576.0:N1} MB in {plan.Discs.Sum(d => d.Files.Count):N0} files");
         stdout.WriteLine($"  Discs:            {plan.Discs.Count}");

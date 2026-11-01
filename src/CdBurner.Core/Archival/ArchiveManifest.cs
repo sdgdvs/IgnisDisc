@@ -25,6 +25,13 @@ public static class ArchiveManifest
     public const string RecoveryFolderName = "RECOVERY";
 
     /// <summary>
+    /// Opens a file for hashing with a 1 MB sequential read buffer. The default 4 KB buffer turns a large file into
+    /// hundreds of thousands of small reads, which is slow on optical drives (3.4 MB/s measured on a DVD).
+    /// </summary>
+    private static FileStream OpenForHashing(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20, FileOptions.SequentialScan | FileOptions.Asynchronous);
+
+    /// <summary>
     /// Resolves a manifest-relative path ('/' separators) under <paramref name="root"/>, or returns null if it is
     /// rooted, a UNC/device path, or escapes the root through "..".
     /// </summary>
@@ -83,7 +90,7 @@ public static class ArchiveManifest
             string diskPath = Path.Combine(discRoot, normalizedRelative.Replace('/', Path.DirectorySeparatorChar));
 
             string hashHex;
-            using (var stream = File.OpenRead(diskPath))
+            using (var stream = OpenForHashing(diskPath))
             {
                 byte[] hashBytes = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
                 hashHex = Convert.ToHexStringLower(hashBytes);
@@ -231,7 +238,7 @@ public static class ArchiveManifest
             }
 
             string actualHash;
-            using (var stream = File.OpenRead(diskFilePath))
+            using (var stream = OpenForHashing(diskFilePath))
             {
                 byte[] hashBytes = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
                 actualHash = Convert.ToHexStringLower(hashBytes);
