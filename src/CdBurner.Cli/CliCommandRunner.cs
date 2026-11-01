@@ -1411,7 +1411,10 @@ public static class CliCommandRunner
         foreach (var c in result.Corrupt) stdout.WriteLine($"    CORRUPT  {c}");
         if (!result.IsIntact && result.HasRecoveryData)
         {
-            stdout.WriteLine("  Copy the disc to a folder and run: par2 repair RECOVERY\\recovery.par2");
+            // -B. is required: the recovery set stores paths relative to the disc root, not to the RECOVERY folder.
+            stdout.WriteLine("  To repair: copy the disc to a folder, open a terminal in that folder and run:");
+            stdout.WriteLine("    par2 repair -B. RECOVERY\\recovery.par2");
+            stdout.WriteLine("  (par2 keeps each damaged original as <name>.1; delete those once verified.)");
         }
         return result.IsIntact ? 0 : 1;
     }

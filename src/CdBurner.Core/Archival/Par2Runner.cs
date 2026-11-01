@@ -59,6 +59,14 @@ public static class Par2Runner
             }
         }
 
+        // Per-user install location used when par2cmdline is unpacked from its GitHub release (not on PATH).
+        string localPrograms = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "par2cmdline", "par2.exe");
+        if (File.Exists(localPrograms))
+        {
+            return localPrograms;
+        }
+
         string baseDir = AppContext.BaseDirectory;
         if (!string.IsNullOrEmpty(baseDir))
         {
