@@ -49,6 +49,28 @@ public static class DiscIdCalculator
     private const int FramesPerSecond = 75;
 
     /// <summary>
+    /// Disc IDs for the disc in a recorder: from the physical TOC when the drive provides one (it includes data
+    /// tracks, which freedb counts), otherwise from the discovered audio tracks. Null if there are no audio tracks.
+    /// </summary>
+    public static DiscIdentifiers? CalculateForRecorder(IDiscRecorderBackend recorder)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+
+        IReadOnlyList<DiscTocTrack> toc = recorder is IDiscTocProvider tocProvider
+            ? tocProvider.ReadTableOfContents()
+            : Array.Empty<DiscTocTrack>();
+
+        if (toc.Count == 0)
+        {
+            toc = AudioCdRipperService.QueryTracksAndCdText(recorder).Tracks
+                .Select(t => new DiscTocTrack(t.TrackNumber, t.StartLba, t.SectorCount, true))
+                .ToList();
+        }
+
+        return toc.Count > 0 ? Calculate(toc) : null;
+    }
+
+    /// <summary>
     /// Computes the disc identifiers, or returns null if the TOC contains no audio tracks.
     /// </summary>
     public static DiscIdentifiers? Calculate(IReadOnlyList<DiscTocTrack> toc)

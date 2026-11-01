@@ -63,6 +63,26 @@ public class AppSettings
     public int LogRingBufferCapacity { get; set; } = 1000;
 
     /// <summary>
+    /// Hardware read offset correction in samples (-10000 to +10000) for Audio CD ripping. Default is 0.
+    /// </summary>
+    public int AudioReadOffsetSamples { get; set; } = 0;
+
+    /// <summary>
+    /// Whether to enable C2 error pointer based secure extraction by default when ripping Audio CDs.
+    /// </summary>
+    public bool SecureAudioRipByDefault { get; set; } = false;
+
+    /// <summary>
+    /// Whether to look up album and track metadata from MusicBrainz by default when ripping Audio CDs.
+    /// </summary>
+    public bool LookupMusicBrainzByDefault { get; set; } = true;
+
+    /// <summary>
+    /// Whether to verify extracted audio track CRCs against AccurateRip by default.
+    /// </summary>
+    public bool VerifyAccurateRipByDefault { get; set; } = true;
+
+    /// <summary>
     /// Creates a deep copy clone of the current settings.
     /// </summary>
     public AppSettings Clone()
@@ -77,7 +97,11 @@ public class AppSettings
             ThemeMode = ThemeMode,
             FfmpegExecutablePath = FfmpegExecutablePath,
             EnableVirtualDrive = EnableVirtualDrive,
-            LogRingBufferCapacity = LogRingBufferCapacity
+            LogRingBufferCapacity = LogRingBufferCapacity,
+            AudioReadOffsetSamples = AudioReadOffsetSamples,
+            SecureAudioRipByDefault = SecureAudioRipByDefault,
+            LookupMusicBrainzByDefault = LookupMusicBrainzByDefault,
+            VerifyAccurateRipByDefault = VerifyAccurateRipByDefault
         };
     }
 }
@@ -220,6 +244,7 @@ public class AppSettingsService
             string json = File.ReadAllText(filePath);
             var settings = JsonSerializer.Deserialize<AppSettings>(json, ProjectSerializer.JsonOptions) ?? new AppSettings();
             settings.LogRingBufferCapacity = Math.Clamp(settings.LogRingBufferCapacity, 10, 100_000);
+            settings.AudioReadOffsetSamples = Math.Clamp(settings.AudioReadOffsetSamples, -10000, 10000);
             return settings;
         }
         catch
@@ -244,6 +269,7 @@ public class AppSettingsService
             await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
             var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, ProjectSerializer.JsonOptions, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             settings.LogRingBufferCapacity = Math.Clamp(settings.LogRingBufferCapacity, 10, 100_000);
+            settings.AudioReadOffsetSamples = Math.Clamp(settings.AudioReadOffsetSamples, -10000, 10000);
             return settings;
         }
         catch

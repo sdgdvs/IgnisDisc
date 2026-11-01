@@ -226,18 +226,17 @@ public class SettingsViewModel : ObservableObject
     /// </summary>
     public void SaveSettings()
     {
-        var settings = new AppSettings
-        {
-            DefaultWriteSpeedMultiplier = DefaultWriteSpeedMultiplier,
-            VerifyAfterBurnByDefault = VerifyAfterBurnByDefault,
-            EjectAfterBurnByDefault = EjectAfterBurnByDefault,
-            EnableBurnFreeByDefault = EnableBurnFreeByDefault,
-            TempStagingDirectory = TempStagingDirectory,
-            ThemeMode = ThemeMode,
-            FfmpegExecutablePath = FfmpegExecutablePath,
-            EnableVirtualDrive = EnableVirtualDrive,
-            LogRingBufferCapacity = LogRingBufferCapacity
-        };
+        // Start from the current settings so values owned by other screens (e.g. audio rip options) are kept.
+        var settings = _settingsService.CurrentSettings.Clone();
+        settings.DefaultWriteSpeedMultiplier = DefaultWriteSpeedMultiplier;
+        settings.VerifyAfterBurnByDefault = VerifyAfterBurnByDefault;
+        settings.EjectAfterBurnByDefault = EjectAfterBurnByDefault;
+        settings.EnableBurnFreeByDefault = EnableBurnFreeByDefault;
+        settings.TempStagingDirectory = TempStagingDirectory;
+        settings.ThemeMode = ThemeMode;
+        settings.FfmpegExecutablePath = FfmpegExecutablePath;
+        settings.EnableVirtualDrive = EnableVirtualDrive;
+        settings.LogRingBufferCapacity = LogRingBufferCapacity;
 
         _settingsService.CurrentSettings = settings;
         _settingsService.Save();

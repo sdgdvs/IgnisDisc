@@ -399,32 +399,68 @@
                         </Grid>
                     </Border>
 
-                    <!-- Ripper Options & Capabilities Description -->
+                    <!-- Ripper Options & Accuracy Settings Card -->
                     <Border Grid.Row="1"
                             Background="{DynamicResource CardBackgroundBrush}"
                             BorderBrush="{DynamicResource CardBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="8"
-                            Padding="16,14"
+                            Padding="16,12"
                             Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="Extraction Specifications &amp; Metadata Preservation"
-                                       FontWeight="SemiBold"
-                                       FontSize="14"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                       Margin="0,0,0,6" />
-                            <TextBlock Text="• Extracts Red Book CD-DA raw 2,352-byte sectors to uncompressed canonical 44.1 kHz 16-bit Stereo RIFF WAVE (.wav) files."
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextSecondaryBrush}"
-                                       Margin="0,2" />
-                            <TextBlock Text="• Generates companion CDRWIN / Red Book CUE sheet ('album.cue') preserving track sequence, pre-gaps, and CD-Text metadata."
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextSecondaryBrush}"
-                                       Margin="0,2" />
-                            <TextBlock Text="• Automatic bad-sector retries and hardware defect logging."
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextSecondaryBrush}"
-                                       Margin="0,2" />
+                            <!-- Read Offset Row -->
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Column="0"
+                                           Text="Read offset (samples):"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,10,0" />
+                                <TextBox Grid.Column="1"
+                                         Text="{Binding ReadOffsetSamples, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="8,6"
+                                         Background="{DynamicResource ControlBackgroundBrush}"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         BorderBrush="{DynamicResource ControlBorderBrush}"
+                                         Margin="0,0,8,0"
+                                         ToolTip="Drive read offset correction in samples (-10000 to +10000) for sample-accurate ripping" />
+                                <Button Grid.Column="2"
+                                        Content="🔎 Detect"
+                                        Command="{Binding DetectReadOffsetCommand}"
+                                        VerticalAlignment="Center"
+                                        ToolTip="Detect drive read offset using an inserted commercial Audio CD against AccurateRip" />
+                            </Grid>
+
+                            <!-- CheckBoxes -->
+                            <WrapPanel Orientation="Horizontal">
+                                <CheckBox Content="Secure rip (C2 re-reads)"
+                                          IsChecked="{Binding SecureRip}"
+                                          Foreground="{DynamicResource TextPrimaryBrush}"
+                                          Margin="0,2,20,2"
+                                          ToolTip="Use C2 error pointers to verify audio sectors and re-read corrupted samples." />
+                                <CheckBox Content="Look up track names (MusicBrainz)"
+                                          IsChecked="{Binding LookupMetadata}"
+                                          Foreground="{DynamicResource TextPrimaryBrush}"
+                                          Margin="0,2,20,2"
+                                          ToolTip="Fetch album and track titles from MusicBrainz before ripping." />
+                                <CheckBox Content="Verify with AccurateRip"
+                                          IsChecked="{Binding VerifyAccurateRip}"
+                                          Foreground="{DynamicResource TextPrimaryBrush}"
+                                          Margin="0,2,20,2"
+                                          ToolTip="Cross-reference extracted track checksums with the online AccurateRip database." />
+                                <CheckBox Content="Continue past unreadable sectors"
+                                          IsChecked="{Binding ContinueOnUnreadable}"
+                                          Foreground="{DynamicResource TextPrimaryBrush}"
+                                          Margin="0,2,0,2"
+                                          ToolTip="Zero-fill unreadable sectors with silence instead of aborting the rip." />
+                            </WrapPanel>
                         </StackPanel>
                     </Border>
 
@@ -434,19 +470,61 @@
                             BorderBrush="{DynamicResource CardBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="8"
-                            Padding="24">
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                            <TextBlock Text="Ready for Digital Audio Extraction"
-                                       FontSize="16"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center"
-                                       Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <TextBlock Text="Select source optical drive below, configure destination directory, and click 'Rip Audio CD'."
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextMutedBrush}"
-                                       HorizontalAlignment="Center"
-                                       Margin="0,8,0,0" />
-                        </StackPanel>
+                            Padding="16">
+                        <Grid>
+                            <!-- Ready Placeholder (Collapsed when RipReport has content) -->
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <StackPanel.Style>
+                                    <Style TargetType="{x:Type StackPanel}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding RipReport}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding RipReport}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Text="Ready for Digital Audio Extraction"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="Select source optical drive below, configure destination directory, and click 'Rip Audio CD'."
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextMutedBrush}"
+                                           HorizontalAlignment="Center"
+                                           Margin="0,8,0,0" />
+                            </StackPanel>
+
+                            <!-- Monospace Consolas Rip Report (Collapsed when empty) -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                <ScrollViewer.Style>
+                                    <Style TargetType="{x:Type ScrollViewer}">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding RipReport}" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding RipReport}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ScrollViewer.Style>
+                                <TextBox Text="{Binding RipReport, Mode=OneWay}"
+                                         IsReadOnly="True"
+                                         TextWrapping="Wrap"
+                                         FontFamily="Consolas"
+                                         FontSize="12"
+                                         Background="Transparent"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         BorderThickness="0"
+                                         Padding="4" />
+                            </ScrollViewer>
+                        </Grid>
                     </Border>
 
                     <!-- Bottom Rip Action Bar -->

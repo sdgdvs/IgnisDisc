@@ -930,7 +930,7 @@ public static class CliCommandRunner
 
         var recorder = FindRecorder(deviceService, driveId);
 
-        var ids = CalculateDiscIds(recorder);
+        var ids = DiscIdCalculator.CalculateForRecorder(recorder);
 
         string? warning = null;
         CdTextAlbumMetadata? metadataOverride = null;
@@ -1226,26 +1226,6 @@ public static class CliCommandRunner
         return 0;
     }
 
-    /// <summary>
-    /// Disc IDs from the physical TOC when the drive provides one (it includes data tracks, which freedb counts),
-    /// otherwise from the discovered audio tracks.
-    /// </summary>
-    private static DiscIdentifiers? CalculateDiscIds(IDiscRecorderBackend recorder)
-    {
-        IReadOnlyList<DiscTocTrack> toc = recorder is IDiscTocProvider tocProvider
-            ? tocProvider.ReadTableOfContents()
-            : Array.Empty<DiscTocTrack>();
-
-        if (toc.Count == 0)
-        {
-            toc = AudioCdRipperService.QueryTracksAndCdText(recorder).Tracks
-                .Select(t => new DiscTocTrack(t.TrackNumber, t.StartLba, t.SectorCount, true))
-                .ToList();
-        }
-
-        return toc.Count > 0 ? DiscIdCalculator.Calculate(toc) : null;
-    }
-
     private static async Task<int> HandleDetectOffsetAsync(
         CommandLineArgs cmd,
         TextWriter stdout,
@@ -1257,7 +1237,7 @@ public static class CliCommandRunner
         var recorder = FindRecorder(deviceService, driveId);
 
         var tracks = AudioCdRipperService.QueryTracksAndCdText(recorder).Tracks;
-        var ids = CalculateDiscIds(recorder);
+        var ids = DiscIdCalculator.CalculateForRecorder(recorder);
         if (ids == null || tracks.Count == 0)
         {
             throw new CommandLineException("No audio tracks found. Insert an audio CD to detect the drive's read offset.");

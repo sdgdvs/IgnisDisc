@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Net.Http;
+using System.Text;
 using System.Windows.Input;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Audio;
+using CdBurner.Core.Persistence;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Audio;
 using CdBurner.Hardware.Devices;
@@ -23,6 +26,7 @@ public class AudioBurnViewModel : ObservableObject
     private readonly IAudioDecoder _audioDecoder;
     private readonly AudioCdBurnService _audioBurnService;
     private readonly AudioCdRipperService _ripperService;
+    private readonly AppSettingsService? _settingsService;
 
     private string _albumTitle = "Untitled Album";
     private string _albumPerformer = "Various Artists";
@@ -35,6 +39,12 @@ public class AudioBurnViewModel : ObservableObject
     private MsfAddress _totalDuration = new(0, 0, 0);
     private double _discUsagePercent;
     private string _ripOutputFolder = string.Empty;
+    private int _readOffsetSamples;
+    private bool _secureRip;
+    private bool _lookupMetadata = true;
+    private bool _verifyAccurateRip = true;
+    private bool _continueOnUnreadable;
+    private string _ripReport = string.Empty;
 
     private AudioTrackRowViewModel? _selectedTrack;
     private IDiscRecorderBackend? _selectedRecorder;
@@ -262,6 +272,7 @@ public class AudioBurnViewModel : ObservableObject
             {
                 StartAudioBurnCommand.RaiseCanExecuteChanged();
                 RipAudioCdCommand.RaiseCanExecuteChanged();
+                DetectReadOffsetCommand?.RaiseCanExecuteChanged();
                 CancelBurnCommand.RaiseCanExecuteChanged();
                 ClearAllTracksCommand.RaiseCanExecuteChanged();
             }
@@ -319,6 +330,91 @@ public class AudioBurnViewModel : ObservableObject
         set => SetProperty(ref _lastRipResult, value);
     }
 
+    /// <summary>
+    /// Hardware read offset correction in samples (-10000 to +10000) applied during Digital Audio Extraction.
+    /// </summary>
+    public int ReadOffsetSamples
+    {
+        get => _readOffsetSamples;
+        set
+        {
+            int clamped = Math.Clamp(value, -10000, 10000);
+            if (_readOffsetSamples != clamped)
+            {
+                _readOffsetSamples = clamped;
+                OnPropertyChanged();
+                SaveSettingsIfAvailable();
+            }
+            else if (_readOffsetSamples != value)
+            {
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether to use C2 error pointer based secure extraction and re-read suspect sectors.
+    /// </summary>
+    public bool SecureRip
+    {
+        get => _secureRip;
+        set
+        {
+            if (SetProperty(ref _secureRip, value))
+            {
+                SaveSettingsIfAvailable();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether to query MusicBrainz online database for album and track metadata prior to ripping.
+    /// </summary>
+    public bool LookupMetadata
+    {
+        get => _lookupMetadata;
+        set
+        {
+            if (SetProperty(ref _lookupMetadata, value))
+            {
+                SaveSettingsIfAvailable();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether to verify extracted track checksums against the online AccurateRip database after ripping.
+    /// </summary>
+    public bool VerifyAccurateRip
+    {
+        get => _verifyAccurateRip;
+        set
+        {
+            if (SetProperty(ref _verifyAccurateRip, value))
+            {
+                SaveSettingsIfAvailable();
+            }
+        }
+    }
+
+    /// <summary>
+    /// When true, unreadable sectors that fail all retries are zero-filled with silence instead of failing the rip.
+    /// </summary>
+    public bool ContinueOnUnreadable
+    {
+        get => _continueOnUnreadable;
+        set => SetProperty(ref _continueOnUnreadable, value);
+    }
+
+    /// <summary>
+    /// Multi-line summary report of the most recent Audio CD extraction and verification operation.
+    /// </summary>
+    public string RipReport
+    {
+        get => _ripReport;
+        set => SetProperty(ref _ripReport, value);
+    }
+
     #endregion
 
     #region Commands
@@ -364,6 +460,11 @@ public class AudioBurnViewModel : ObservableObject
     public AsyncRelayCommand RipAudioCdCommand { get; }
 
     /// <summary>
+    /// Measures the optical drive's audio read offset using an inserted CD matched against AccurateRip.
+    /// </summary>
+    public AsyncRelayCommand DetectReadOffsetCommand { get; }
+
+    /// <summary>
     /// Browses for an output directory to store ripped audio files.
     /// </summary>
     public RelayCommand BrowseRipOutputFolderCommand { get; }
@@ -376,16 +477,37 @@ public class AudioBurnViewModel : ObservableObject
     /// <param name="deviceService">Optional optical device enumeration service.</param>
     /// <param name="burnEngine">Optional optical burning engine backend.</param>
     /// <param name="audioDecoder">Optional audio decoder implementation.</param>
+    /// <param name="settingsService">Optional application settings persistence service.</param>
     public AudioBurnViewModel(
         IDiscDeviceService? deviceService = null,
         IBurnEngineBackend? burnEngine = null,
-        IAudioDecoder? audioDecoder = null)
+        IAudioDecoder? audioDecoder = null,
+        AppSettingsService? settingsService = null)
     {
         _deviceService = deviceService ?? new DiscDeviceManager(enablePhysicalEnumeration: false);
         _burnEngine = burnEngine ?? new VirtualBurnEngine();
         _audioDecoder = audioDecoder ?? new MediaFoundationAudioDecoder();
         _audioBurnService = new AudioCdBurnService(_burnEngine, _audioDecoder);
         _ripperService = new AudioCdRipperService();
+        _settingsService = settingsService;
+
+        if (_settingsService != null)
+        {
+            var s = _settingsService.CurrentSettings;
+            _readOffsetSamples = Math.Clamp(s.AudioReadOffsetSamples, -10000, 10000);
+            _secureRip = s.SecureAudioRipByDefault;
+            _lookupMetadata = s.LookupMusicBrainzByDefault;
+            _verifyAccurateRip = s.VerifyAccurateRipByDefault;
+        }
+        else
+        {
+            _readOffsetSamples = 0;
+            _secureRip = false;
+            _lookupMetadata = true;
+            _verifyAccurateRip = true;
+        }
+        _continueOnUnreadable = false;
+        _ripReport = string.Empty;
 
         try
         {
@@ -412,6 +534,7 @@ public class AudioBurnViewModel : ObservableObject
         StartAudioBurnCommand = new AsyncRelayCommand(async p => await StartAudioBurnAsync(p as string), _ => !IsBusy && Tracks.Count > 0);
         CancelBurnCommand = new RelayCommand(_ => CancelActiveBurn(), _ => IsBusy);
         RipAudioCdCommand = new AsyncRelayCommand(async p => await RipAudioCdAsync(p as string), _ => !IsBusy);
+        DetectReadOffsetCommand = new AsyncRelayCommand(DetectReadOffsetAsync, () => !IsBusy);
         BrowseRipOutputFolderCommand = new RelayCommand(BrowseRipOutputFolder);
 
         foreach (var r in _deviceService.GetRecorders())
@@ -943,17 +1066,144 @@ public class AudioBurnViewModel : ObservableObject
         }
     }
 
+    private bool _applyingSettings;
+
+    /// <summary>
+    /// Applies saved rip options (called after the settings file is loaded at startup) without saving them back.
+    /// </summary>
+    public void ApplyRipSettings(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _applyingSettings = true;
+        try
+        {
+            ReadOffsetSamples = settings.AudioReadOffsetSamples;
+            SecureRip = settings.SecureAudioRipByDefault;
+            LookupMetadata = settings.LookupMusicBrainzByDefault;
+            VerifyAccurateRip = settings.VerifyAccurateRipByDefault;
+        }
+        finally
+        {
+            _applyingSettings = false;
+        }
+    }
+
+    /// <summary>
+    /// Persists rip settings back to the configuration file if an <see cref="AppSettingsService"/> was supplied.
+    /// </summary>
+    private void SaveSettingsIfAvailable()
+    {
+        if (_settingsService == null || _applyingSettings) return;
+        try
+        {
+            var settings = _settingsService.CurrentSettings;
+            settings.AudioReadOffsetSamples = _readOffsetSamples;
+            settings.SecureAudioRipByDefault = _secureRip;
+            settings.LookupMusicBrainzByDefault = _lookupMetadata;
+            settings.VerifyAccurateRipByDefault = _verifyAccurateRip;
+            _settingsService.CurrentSettings = settings;
+            _settingsService.Save();
+        }
+        catch
+        {
+            // Ignore settings persistence exceptions in UI
+        }
+    }
+
+    /// <summary>
+    /// Measures the optical drive's audio read offset using an inserted CD matched against AccurateRip.
+    /// </summary>
+    public async Task DetectReadOffsetAsync()
+    {
+        var recorder = ResolveRecorder();
+        if (recorder == null)
+        {
+            StatusMessage = "No optical recorder selected or available.";
+            RipReport = "Offset detection failed: No optical recorder selected or available.";
+            return;
+        }
+
+        IsBusy = true;
+        StatusMessage = $"Detecting read offset for {recorder.UniqueId}...";
+        RipReport = string.Empty;
+
+        try
+        {
+            var query = AudioCdRipperService.QueryTracksAndCdText(recorder);
+            var tracks = query.Tracks;
+            var ids = DiscIdCalculator.CalculateForRecorder(recorder);
+            if (ids == null || tracks.Count == 0)
+            {
+                StatusMessage = "No audio tracks found on inserted disc.";
+                RipReport = "Offset detection failed: No audio tracks found. Insert an audio CD to detect the drive's read offset.";
+                return;
+            }
+
+            IReadOnlyList<AccurateRipPressing> pressings;
+            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+            {
+                pressings = await AccurateRipDatabase.FetchAsync(http, ids).ConfigureAwait(false);
+            }
+
+            if (pressings.Count == 0)
+            {
+                StatusMessage = "Disc not found in AccurateRip database.";
+                RipReport = "Offset detection failed: This disc is not in the AccurateRip database, so it cannot be used to detect the offset. Try a well-known commercial CD.";
+                return;
+            }
+
+            var detection = await ReadOffsetDetector.DetectAsync(_burnEngine, recorder, tracks, pressings).ConfigureAwait(false);
+            var best = detection.Best;
+
+            if (best == null)
+            {
+                string errMsg = detection.ErrorMessage ?? "No offset within +/-3000 samples matched the AccurateRip database.";
+                StatusMessage = $"Offset detection failed: {errMsg}";
+                RipReport = $"Offset detection failed: {errMsg}";
+                return;
+            }
+
+            ReadOffsetSamples = best.OffsetSamples;
+            StatusMessage = $"Read offset detected: {best.OffsetSamples:+0;-0;0} samples (confidence {best.Confidence}).";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("Read offset detected successfully:");
+            sb.AppendLine($"  Drive:          {recorder.UniqueId}");
+            sb.AppendLine($"  Read Offset:    {best.OffsetSamples:+0;-0;0} samples");
+            sb.AppendLine($"  Confidence:     {best.Confidence} matching submissions");
+            sb.AppendLine($"  Tracks Checked: {string.Join(", ", detection.ProbedTracks)}");
+            RipReport = sb.ToString().TrimEnd();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Offset detection cancelled.";
+            RipReport = "Offset detection cancelled by user.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Offset detection error: {ex.Message}";
+            RipReport = $"Offset detection failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     /// <summary>
     /// Extracts Red Book audio tracks from the inserted CD into uncompressed WAV files and companion CUE sheet.
     /// </summary>
     public async Task<AudioCdRipResult> RipAudioCdAsync(string? driveId = null, string? outputFolder = null, CancellationToken ct = default)
     {
+        RipReport = string.Empty;
+
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
             StatusMessage = "No optical recorder selected or available.";
             var fail = AudioCdRipResult.Failed(StatusMessage);
             LastRipResult = fail;
+            RipReport = $"Rip failed: {StatusMessage}";
             return fail;
         }
 
@@ -982,25 +1232,179 @@ public class AudioBurnViewModel : ObservableObject
                 StatusMessage = $"{p.CurrentActionDescription} ({BurnProgress:F0}%)";
             });
 
+            DiscIdentifiers? ids = null;
+            try
+            {
+                ids = DiscIdCalculator.CalculateForRecorder(recorder);
+            }
+            catch
+            {
+            }
+
+            string? warning = null;
+            CdTextAlbumMetadata? metadataOverride = null;
+
+            if (LookupMetadata && ids != null)
+            {
+                try
+                {
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                    var mbClient = new MusicBrainzClient(http, "IgnisDisc/1.06 ( https://ignisdisc-studio.web.app )");
+                    var releases = await mbClient.LookupDiscIdAsync(ids.MusicBrainzId, activeToken).ConfigureAwait(false);
+                    if (releases != null && releases.Count > 0)
+                    {
+                        metadataOverride = MusicBrainzClient.ToAlbumMetadata(releases[0], ids.MusicBrainzId);
+                    }
+                }
+                catch (HttpRequestException hre)
+                {
+                    warning = $"MusicBrainz lookup failed: {hre.Message}";
+                }
+                catch (TaskCanceledException tce)
+                {
+                    warning = $"MusicBrainz lookup timed out: {tce.Message}";
+                }
+                catch (Exception ex)
+                {
+                    warning = $"MusicBrainz lookup failed: {ex.Message}";
+                }
+            }
+
             var options = new AudioRipOptions
             {
                 GenerateCueSheet = true,
-                CueSheetFileName = "album.cue"
+                CueSheetFileName = "album.cue",
+                ContinueOnUnreadableSector = ContinueOnUnreadable,
+                MetadataOverride = metadataOverride,
+                ReadOffsetSamples = ReadOffsetSamples,
+                SecureMode = SecureRip
             };
 
             var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, activeToken);
             LastRipResult = ripResult;
 
+            string metadataSource = metadataOverride != null
+                ? "musicbrainz"
+                : (ripResult.CdText != null ? "cd-text" : "none");
+
+            string? accurateRipStatus = null;
+            var accurateRipTracks = new List<(AudioTrackRipInfo Info, AccurateRipTrackVerdict? Verdict)>();
+
+            if (ripResult.Success && VerifyAccurateRip)
+            {
+                if (ids == null)
+                {
+                    accurateRipStatus = "unavailable";
+                }
+                else
+                {
+                    try
+                    {
+                        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                        var pressings = await AccurateRipDatabase.FetchAsync(http, ids, cancellationToken: activeToken).ConfigureAwait(false);
+                        accurateRipStatus = pressings.Count == 0 ? "not-in-database" : "checked";
+                        foreach (var info in ripResult.TrackInfos)
+                        {
+                            accurateRipTracks.Add((info, pressings.Count == 0
+                                ? null
+                                : AccurateRipDatabase.Match(pressings, info.AudioTrackIndex, info.AccurateRipV1, info.AccurateRipV2)));
+                        }
+                    }
+                    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidDataException)
+                    {
+                        accurateRipStatus = "failed";
+                        warning = (warning == null ? "" : warning + "\n") + $"AccurateRip lookup failed: {ex.Message}";
+                    }
+                    catch (Exception ex)
+                    {
+                        accurateRipStatus = "failed";
+                        warning = (warning == null ? "" : warning + "\n") + $"AccurateRip lookup failed: {ex.Message}";
+                    }
+                }
+
+                if (ReadOffsetSamples == 0 && accurateRipStatus == "checked" && accurateRipTracks.Any(t => t.Verdict is { IsAccurate: false }))
+                {
+                    warning = (warning == null ? "" : warning + "\n") +
+                        "No read offset was configured; AccurateRip only matches when the drive's read offset is corrected (use 'Detect' or check the AccurateRip drive offset list).";
+                }
+            }
+
+            var sb = new StringBuilder();
             if (ripResult.Success)
             {
                 StatusMessage = $"Rip completed: {ripResult.TracksRipped} track(s) extracted to '{targetFolder}' ({ripResult.TotalTime}).";
                 BurnProgress = 100.0;
+
+                sb.AppendLine("Audio rip completed successfully:");
+                sb.AppendLine($"  Drive:            {recorder.UniqueId}");
+                sb.AppendLine($"  Output Folder:    {Path.GetFullPath(targetFolder)}");
+                sb.AppendLine($"  Tracks Ripped:    {ripResult.TracksRipped}");
+                sb.AppendLine($"  Sectors Read:     {ripResult.TotalSectorsRead:N0}");
+                sb.AppendLine($"  Duration:         {ripResult.TotalTime}");
+                sb.AppendLine($"  MusicBrainz ID:   {ids?.MusicBrainzId ?? "n/a"}");
+                sb.AppendLine($"  freedb ID:        {ids?.FreeDbIdHex ?? "n/a"}");
+                sb.AppendLine($"  AccurateRip:      {ids?.AccurateRipDatabasePath ?? "n/a"}");
+                sb.AppendLine($"  Metadata Source:  {metadataSource}");
+                sb.AppendLine($"  Read Offset:      {ReadOffsetSamples:+0;-0;0} samples");
+                if (SecureRip)
+                {
+                    sb.AppendLine(ripResult.SecureModeUsed
+                        ? $"  Secure Mode:      C2 error pointers ({ripResult.TrackInfos.Sum(t => t.RecoveredSectors)} sectors recovered, {ripResult.TrackInfos.Sum(t => t.SuspectSectors)} still suspect)"
+                        : "  Secure Mode:      requested, but the drive does not report C2 error pointers (plain read used)");
+                    foreach (var t in ripResult.TrackInfos.Where(t => t.SuspectSectors > 0))
+                    {
+                        sb.AppendLine($"    Track {t.TrackNumber:D2}: {t.SuspectSectors} suspect sector(s) - check AccurateRip or re-rip");
+                    }
+                }
+                if (ripResult.BadSectorLbas.Count > 0)
+                {
+                    sb.AppendLine($"  Bad Sectors:      {ripResult.BadSectorLbas.Count} (zero-filled)");
+                }
+                if (accurateRipStatus != null)
+                {
+                    sb.AppendLine($"  AccurateRip:      {accurateRipStatus}");
+                    foreach (var (info, verdict) in accurateRipTracks)
+                    {
+                        string line = verdict == null
+                            ? "not in database"
+                            : verdict.IsAccurate
+                                ? $"accurate (confidence {verdict.Confidence}/{verdict.TotalSubmissions}, {(verdict.MatchedV2 ? "v2" : "v1")})"
+                                : $"NOT accurate (0/{verdict.TotalSubmissions} submissions match)";
+                        sb.AppendLine($"    Track {info.TrackNumber:D2}: {line}  [v1 {info.AccurateRipV1:x8} v2 {info.AccurateRipV2:x8}]");
+                    }
+                }
+                if (!string.IsNullOrEmpty(warning))
+                {
+                    sb.AppendLine($"  Warning:          {warning}");
+                }
+                sb.AppendLine("  Files:");
+                foreach (var file in ripResult.RippedFilePaths)
+                {
+                    sb.AppendLine($"    {Path.GetFullPath(file)}");
+                }
+                if (!string.IsNullOrEmpty(ripResult.CueSheetPath) && File.Exists(ripResult.CueSheetPath))
+                {
+                    sb.AppendLine($"  CUE Sheet:        {Path.GetFullPath(ripResult.CueSheetPath)}");
+                }
             }
             else
             {
                 StatusMessage = $"Rip failed: {ripResult.ErrorMessage}";
+
+                sb.AppendLine($"Audio rip failed: {ripResult.ErrorMessage}");
+                if (ids != null)
+                {
+                    sb.AppendLine($"  MusicBrainz ID:   {ids.MusicBrainzId}");
+                    sb.AppendLine($"  freedb ID:        {ids.FreeDbIdHex}");
+                    sb.AppendLine($"  AccurateRip:      {ids.AccurateRipDatabasePath}");
+                }
+                if (!string.IsNullOrEmpty(warning))
+                {
+                    sb.AppendLine($"  Warning:          {warning}");
+                }
             }
 
+            RipReport = sb.ToString().TrimEnd();
             return ripResult;
         }
         catch (OperationCanceledException)
@@ -1008,6 +1412,7 @@ public class AudioBurnViewModel : ObservableObject
             StatusMessage = "Audio CD rip cancelled by user.";
             var cancelled = AudioCdRipResult.Failed(StatusMessage);
             LastRipResult = cancelled;
+            RipReport = "Audio CD rip cancelled by user.";
             return cancelled;
         }
         catch (Exception ex)
@@ -1015,6 +1420,7 @@ public class AudioBurnViewModel : ObservableObject
             StatusMessage = $"Rip error: {ex.Message}";
             var fail = AudioCdRipResult.Failed(ex.Message, ex);
             LastRipResult = fail;
+            RipReport = $"Rip error: {ex.Message}";
             return fail;
         }
         finally

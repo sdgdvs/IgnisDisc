@@ -3,6 +3,7 @@ using System.Windows.Input;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Compilation;
+using CdBurner.Core.Persistence;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Simulation;
@@ -410,11 +411,13 @@ public class MainViewModel : ObservableObject, IDisposable
 
         _dataBurn = new DataBurnViewModel(_deviceService, _burnEngine);
         _dvdVideo = new DvdVideoViewModel(_deviceService, _burnEngine);
-        _audioBurn = new AudioBurnViewModel(_deviceService, _burnEngine);
+        // One settings service shared by the Settings screen and the audio rip options, so both save the same file.
+        var settingsService = new AppSettingsService();
+        _audioBurn = new AudioBurnViewModel(_deviceService, _burnEngine, settingsService: settingsService);
         _imageStudio = new ImageStudioViewModel(_deviceService, _burnEngine);
         _driveUtilities = new DriveUtilitiesViewModel(_deviceService, _burnEngine);
         _virtualDrive = new VirtualDriveViewModel(_deviceService);
-        _settings = new SettingsViewModel(null, this);
+        _settings = new SettingsViewModel(settingsService, this);
 
         _dataBurn.PropertyChanged += (_, e) =>
         {
@@ -534,6 +537,8 @@ public class MainViewModel : ObservableObject, IDisposable
         {
             _imageStudio.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
         }
+
+        _audioBurn?.ApplyRipSettings(_settings.SettingsService.CurrentSettings);
 
         if (_dvdVideo != null)
         {
