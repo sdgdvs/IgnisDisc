@@ -686,6 +686,11 @@ code, pre {
   gap: 22px;
 }
 
+/* A lone card on the last row stretches across the full width */
+.feature-grid > .feature-card:last-child:nth-child(3n + 1) {
+  grid-column: 1 / -1;
+}
+
 .feature-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);

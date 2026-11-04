@@ -3,10 +3,10 @@
  * Edit SITE_CONFIG below (or run scripts/Publish-ReleaseAndSite.ps1) to update links.
  */
 const SITE_CONFIG = {
-  version: "1.06",
+  version: "1.07",
   githubRepoUrl: "https://github.com/tether-works/IgnisDisc",
-  setupDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.06/IgnisDisc-Setup.exe",
-  portableDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.06/IgnisDisc-Portable-win-x64.zip",
+  setupDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.07/IgnisDisc-Setup.exe",
+  portableDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.07/IgnisDisc-Portable-win-x64.zip",
   engineer: {
     initials: "DT",
     name: "tetherworks",
@@ -35,7 +35,7 @@ const STUDIO_VIEWS = {
     badge: "ISO 9660 L3 + Joliet UCS-2BE + UDF 2.60",
     rows: [
       ["/bin/IgnisDisc.exe", "68.4 MB", "UDF 2.60 + Joliet", "LBA 0000288", "SHA-256 Verified"],
-      ["/bin/cdburner-cli.exe", "14.2 MB", "UDF 2.60 + Joliet", "LBA 0035310", "SHA-256 Verified"],
+      ["/bin/ignisdisc-cli.exe", "14.2 MB", "UDF 2.60 + Joliet", "LBA 0035310", "SHA-256 Verified"],
       ["/docs/MMC5_SPTD_Spec.pdf", "4.8 MB", "UDF 2.60 + Joliet", "LBA 0042580", "AVDP @ LBA 256"],
       ["/VIDEO_TS/VTS_01_0.IFO", "64.0 KB", "32 KB ECC Aligned", "LBA 0045056", "16-Sector Boundary"]
     ],
