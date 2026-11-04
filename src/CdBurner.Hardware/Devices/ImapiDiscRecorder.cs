@@ -432,6 +432,13 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                             {
                                 usedSectors = readable.Value;
                             }
+
+                            // On overwrite-only media READ CAPACITY returns the whole formatted disc (a DVD+RW holding
+                            // 60 MB reported 4.38 GB used), so use the mounted file system's size when Windows has one.
+                            if (overwriteOnly && TryGetMountedVolumeSectors(VolumePath) is { } volumeSectors)
+                            {
+                                usedSectors = volumeSectors;
+                            }
                         }
                         long totalBytes = (long)totalSectors * OpticalConstants.DataSectorSize;
                         long freeBytes = (long)freeSectors * OpticalConstants.DataSectorSize;
@@ -473,6 +480,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                             IsBlank = isBlank,
                             IsRewritable = isRewritable,
                             IsAppendable = !overwriteOnly && (isAppendable || (!isFinalized && freeSectors > 0)),
+                            IsOverwriteOnly = overwriteOnly,
                             TotalSectors = totalSectors,
                             FreeSectors = freeSectors,
                             UsedSectors = usedSectors,
@@ -690,6 +698,32 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
         ImapiMediaPhysicalType.DvdDashRDoubleLayer => DiscMediaType.DvdMinusRDualLayer,
         _ => DiscMediaType.Unknown
     };
+
+    /// <summary>
+    /// Size of the file system Windows has mounted for the drive, in 2048-byte sectors, or null if none is mounted.
+    /// </summary>
+    private static int? TryGetMountedVolumeSectors(string? volumePath)
+    {
+        if (string.IsNullOrWhiteSpace(volumePath) || volumePath.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var drive = new DriveInfo(volumePath);
+            if (!drive.IsReady || drive.TotalSize <= 0)
+            {
+                return null;
+            }
+
+            return (int)Math.Min(int.MaxValue, (drive.TotalSize + OpticalConstants.DataSectorSize - 1) / OpticalConstants.DataSectorSize);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private static MediaStatusDto EmptyMediaStatus() => new()
     {

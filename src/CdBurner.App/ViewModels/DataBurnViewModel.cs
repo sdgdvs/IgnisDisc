@@ -706,6 +706,7 @@ public class DataBurnViewModel : ObservableObject
     public async Task<DataBurnResult> StartDataBurnAsync(object? parameter = null, CancellationToken cancellationToken = default)
     {
         IDiscRecorderBackend? targetRecorder = null;
+        bool replaceAllowed = false; // true only after the user saw the "will replace files" warning and clicked Burn
         if (parameter is IDiscRecorderBackend rec)
         {
             targetRecorder = rec;
@@ -731,6 +732,7 @@ public class DataBurnViewModel : ObservableObject
 
             SelectedRecorder = confirmed;
             targetRecorder = confirmed;
+            replaceAllowed = true;
         }
 
         targetRecorder ??= SelectedRecorder;
@@ -783,7 +785,8 @@ public class DataBurnViewModel : ObservableObject
                 CloseDisc = CloseDisc,
                 VerifyAfterBurn = VerifyAfterBurn,
                 EjectAfterBurn = EjectAfterBurn,
-                Speed = SelectedWriteSpeed
+                Speed = SelectedWriteSpeed,
+                OverwriteExistingData = replaceAllowed
             };
 
             var burnService = new DataBurnService(_burnEngine);

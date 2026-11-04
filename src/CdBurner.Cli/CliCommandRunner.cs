@@ -43,7 +43,8 @@ public static class CliCommandRunner
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
-        "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only"
+        "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only",
+        "overwrite"
     };
 
     /// <summary>
@@ -236,8 +237,11 @@ public static class CliCommandRunner
 
         var status = recorder.QueryMediaStatus();
         var caps = recorder.GetCapabilities();
-        bool isFinalized = status.MediaPresent && !status.IsBlank && !status.IsAppendable;
-        long usedBytes = Math.Max(0L, status.TotalCapacityBytes - status.FreeCapacityBytes);
+        // Overwrite-only media (DVD+RW, DVD-RAM) are never "finalized": each burn rewrites them from the start.
+        bool isFinalized = status.MediaPresent && !status.IsBlank && !status.IsAppendable && !status.IsOverwriteOnly;
+        long usedBytes = status.UsedSectors > 0
+            ? (long)status.UsedSectors * OpticalConstants.DataSectorSize
+            : Math.Max(0L, status.TotalCapacityBytes - status.FreeCapacityBytes);
 
         if (cmd.IsJson)
         {
@@ -257,6 +261,7 @@ public static class CliCommandRunner
                 isRewritable = status.IsRewritable,
                 isAppendable = status.IsAppendable,
                 isFinalized = isFinalized,
+                isOverwriteOnly = status.IsOverwriteOnly,
                 totalCapacityBytes = status.TotalCapacityBytes,
                 freeCapacityBytes = status.FreeCapacityBytes,
                 usedCapacityBytes = usedBytes,
@@ -286,9 +291,13 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Blank:                 {(status.IsBlank ? "Yes" : "No")}");
             stdout.WriteLine($"  Rewritable:            {(status.IsRewritable ? "Yes" : "No")}");
             stdout.WriteLine($"  Appendable:            {(status.IsAppendable ? "Yes" : "No")}");
-            stdout.WriteLine($"  Finalized:             {(isFinalized ? "Yes" : "No")}");
+            stdout.WriteLine(status.IsOverwriteOnly
+                ? "  Finalized:             No (rewritten in place; a burn replaces everything on it)"
+                : $"  Finalized:             {(isFinalized ? "Yes" : "No")}");
             stdout.WriteLine($"  Total Capacity:        {FormatBytes(status.TotalCapacityBytes)} ({status.TotalSectors:N0} sectors)");
-            stdout.WriteLine($"  Free Capacity:         {FormatBytes(status.FreeCapacityBytes)} ({status.FreeSectors:N0} sectors)");
+            stdout.WriteLine(status.HasDataThatBurningReplaces
+                ? $"  Free Capacity:         {FormatBytes(status.FreeCapacityBytes)} after replacing the current files (--overwrite)"
+                : $"  Free Capacity:         {FormatBytes(status.FreeCapacityBytes)} ({status.FreeSectors:N0} sectors)");
             stdout.WriteLine($"  Used Capacity:         {FormatBytes(usedBytes)} ({status.UsedSectors:N0} sectors)");
             stdout.WriteLine($"  Sessions:              {status.SessionCount}");
             stdout.WriteLine($"  Next Writable LBA:     {status.NextWritableLba:N0}");
@@ -381,6 +390,7 @@ public static class CliCommandRunner
         string? speedStr = cmd.GetOption("speed");
         bool verify = cmd.HasFlag("verify");
         bool closeDisc = !cmd.HasFlag("no-close");
+        bool overwrite = cmd.HasFlag("overwrite");
 
         if (!File.Exists(isoPath))
         {
@@ -396,7 +406,8 @@ public static class CliCommandRunner
         {
             Speed = speedDesc,
             VerifyAfterBurn = verify,
-            CloseDisc = closeDisc
+            CloseDisc = closeDisc,
+            OverwriteExistingData = overwrite
         };
 
         var burnService = new DataBurnService(burnEngine);
@@ -451,6 +462,7 @@ public static class CliCommandRunner
         string? bootUefiPath = cmd.GetOption("boot-uefi");
         bool verify = cmd.HasFlag("verify");
         bool closeDisc = !cmd.HasFlag("no-close");
+        bool overwrite = cmd.HasFlag("overwrite");
 
         if (!Directory.Exists(inputFolder))
         {
@@ -483,7 +495,8 @@ public static class CliCommandRunner
             VolumeLabel = effectiveLabel,
             Speed = speedDesc,
             VerifyAfterBurn = verify,
-            CloseDisc = closeDisc
+            CloseDisc = closeDisc,
+            OverwriteExistingData = overwrite
         };
 
         var buildOptions = new IsoBuildOptions(
@@ -820,7 +833,7 @@ public static class CliCommandRunner
                 UdfRevision: 0x0102);
 
             var burnService = new DataBurnService(burnEngine);
-            result = await burnService.BurnCompilationAsync(recorder, root, new DataBurnOptions { VolumeLabel = effectiveLabel, CloseDisc = true }, buildOptions).ConfigureAwait(false);
+            result = await burnService.BurnCompilationAsync(recorder, root, new DataBurnOptions { VolumeLabel = effectiveLabel, CloseDisc = true, OverwriteExistingData = cmd.HasFlag("overwrite") }, buildOptions).ConfigureAwait(false);
         }
         finally
         {
@@ -1780,13 +1793,13 @@ public static class CliCommandRunner
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
         stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
-        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--no-close] [--json]");
+        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
-        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--json]");
+        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
         stdout.WriteLine("  burn-audio --drive <id> --tracks <wav1,wav2,...> [--title <album>] [--artist <name>] [--dao] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV tracks.");
-        stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--json]");
+        stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
@@ -1837,7 +1850,10 @@ public static class CliCommandRunner
 
         public bool IsJson => HasFlag("json");
 
-        public bool HasFlag(string name) => Flags.Contains(name);
+        // A switch missing from KnownFlags is parsed as a value-less option; still count it as set so a new switch is
+        // never silently ignored (this happened to --overwrite).
+        public bool HasFlag(string name) =>
+            Flags.Contains(name) || (Options.TryGetValue(name, out var val) && val.Length == 0);
 
         public string? GetOption(string name) => Options.TryGetValue(name, out var val) ? val : null;
 

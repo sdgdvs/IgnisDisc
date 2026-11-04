@@ -732,6 +732,82 @@ public sealed class Phase19_CliIntegrationTests : IDisposable
 
     #endregion
 
+    #region Used rewritable discs (DVD+RW)
+
+    [Fact]
+    public async Task BurnData_UsedDvdPlusRw_NeedsOverwriteFlag()
+    {
+        string input = CreateSampleDataFolder();
+        var recorder = new UsedDvdPlusRwRecorder();
+        var engine = new OptionsCapturingEngine();
+        var devices = new TestDeviceService(recorder);
+
+        var (out1, err1) = CreateStringWriters();
+        int refused = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", recorder.UniqueId, "--input", input }, out1, err1, devices, engine);
+
+        Assert.Equal(1, refused);
+        Assert.Contains("--overwrite", err1.ToString());
+        Assert.Null(engine.Options);
+
+        // --overwrite as the last argument, which is how the hardware test that caught the dropped switch ran it.
+        var (out2, err2) = CreateStringWriters();
+        int allowed = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", recorder.UniqueId, "--input", input, "--overwrite" }, out2, err2, devices, engine);
+
+        Assert.True(allowed == 0, err2.ToString());
+        Assert.True(engine.Options!.OverwriteExistingData);
+    }
+
+    private sealed class UsedDvdPlusRwRecorder : IDiscRecorderBackend
+    {
+        public string UniqueId => "PHYS-RW";
+        public string VendorId => "HL-DT-ST";
+        public string ProductId => "DVDRAM GP60NB50";
+        public string ProductRevision => "RF02";
+        public string VolumePath => @"H:\";
+        public bool IsVirtual => false;
+        public DriveCapabilitiesDto GetCapabilities() => new();
+        public MediaStatusDto QueryMediaStatus() => new()
+        {
+            MediaPresent = true,
+            MediaType = DiscMediaType.DvdPlusRw,
+            IsBlank = false,
+            IsRewritable = true,
+            IsOverwriteOnly = true,
+            TotalSectors = 2_295_104,
+            FreeSectors = 2_295_104,
+            NextWritableLba = 0
+        };
+        public void EjectMedia() { }
+        public void CloseTray() { }
+        public bool AcquireExclusiveAccess(string clientName) => true;
+        public void ReleaseExclusiveAccess() { }
+        public void Dispose() { }
+    }
+
+    private sealed class OptionsCapturingEngine : IBurnEngineBackend
+    {
+        public DataBurnOptions? Options { get; private set; }
+
+        public Task<BurnOperationResult> BurnDataStreamAsync(IDiscRecorderBackend recorder, Stream imageStream, DataBurnOptions options, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
+        {
+            Options = options;
+            return Task.FromResult(BurnOperationResult.Succeeded(16, TimeSpan.FromSeconds(1)));
+        }
+
+        public Task<BurnOperationResult> BurnAudioTracksAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks, AudioBurnOptions options, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<BurnOperationResult> EraseMediaAsync(IDiscRecorderBackend recorder, bool fullErase, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<RipOperationResult> ReadSectorsAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount, bool raw2352Mode, Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    #endregion
+
     private sealed class TestDeviceService : IDiscDeviceService
     {
         private readonly IReadOnlyList<IDiscRecorderBackend> _recorders;

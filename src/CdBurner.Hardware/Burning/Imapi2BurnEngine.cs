@@ -113,6 +113,18 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             {
             }
 
+            // Used DVD+RW / DVD-RAM: IMAPI refuses to write over existing data (0xC0AA0405) unless told to.
+            if (options.OverwriteExistingData)
+            {
+                try
+                {
+                    formatData.put_ForceOverwrite(true);
+                }
+                catch
+                {
+                }
+            }
+
             // Write speed: explicitly configure safe CLV/Z-CLV write speed for portable USB drives
             int targetSectorsPerSec = -1;
             if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0 && options.Speed.Value.BytesPerSecond != int.MaxValue)
@@ -235,6 +247,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             if (cancellationToken.IsCancellationRequested || (uint)cex.ErrorCode == 0xC0AA0406u)
             {
                 return BurnOperationResult.CancelledResult("Burn operation was cancelled by user.");
+            }
+            if ((uint)cex.ErrorCode == 0xC0AA0405u)
+            {
+                // The disc holds data and overwriting it was not allowed (used DVD+RW / DVD-RAM).
+                return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.ReplaceExistingDataMessage, cex);
             }
             return BurnOperationResult.Failed($"IMAPIv2 COM error (0x{cex.ErrorCode:X8}): {cex.Message}", cex);
         }
@@ -595,6 +612,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             if (cancellationToken.IsCancellationRequested || (uint)cex.ErrorCode == 0xC0AA0406u)
             {
                 return BurnOperationResult.CancelledResult("Burn operation was cancelled by user.");
+            }
+            if ((uint)cex.ErrorCode == 0xC0AA0405u)
+            {
+                // The disc holds data and overwriting it was not allowed (used DVD+RW / DVD-RAM).
+                return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.ReplaceExistingDataMessage, cex);
             }
             return BurnOperationResult.Failed($"IMAPIv2 COM error (0x{cex.ErrorCode:X8}): {cex.Message}", cex);
         }

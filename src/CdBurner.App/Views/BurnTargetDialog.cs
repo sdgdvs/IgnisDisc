@@ -333,7 +333,12 @@ public sealed class BurnTargetDialog : Window
                 string stateDesc = status.IsBlank ? "Blank / Ready to Burn" : (status.IsAppendable ? "Appendable" : (status.IsRewritable ? "Rewritable" : "Non-Blank"));
                 _mediaStatusText.Text = $"Inserted Disc: {status.MediaType.GetDisplayName()} — {stateDesc}\nCapacity: {mb:F1} MB ({status.FreeSectors:N0} free sectors)";
 
-                if (!status.IsBlank && !status.IsAppendable && !status.IsRewritable)
+                if (status.HasDataThatBurningReplaces)
+                {
+                    _warningText.Text = $"⚠ The {status.MediaType.GetDisplayName()} in {rec.VolumePath} already has files on it. Burning will REPLACE everything on the disc. Click Burn only if you no longer need those files.";
+                    _warningBorder.Visibility = Visibility.Visible;
+                }
+                else if (!status.IsBlank && !status.IsAppendable && !status.IsRewritable)
                 {
                     _warningText.Text = $"⚠ The disc in {rec.VolumePath} does not appear to be blank. Please insert a blank writable disc and click Refresh.";
                     _warningBorder.Visibility = Visibility.Visible;
@@ -393,6 +398,41 @@ public sealed class BurnTargetDialog : Window
         }
 
         return dlg.ShowDialog() == true ? dlg.ConfirmedRecorder : null;
+    }
+
+    /// <summary>
+    /// For screens that burn without showing this dialog: if the disc in <paramref name="recorder"/> is a used
+    /// rewritable disc whose files a burn would replace, asks the user first. Returns false only when the user declined.
+    /// </summary>
+    public static bool ConfirmReplaceExistingData(IDiscRecorderBackend recorder, out bool replaceAllowed)
+    {
+        replaceAllowed = false;
+        MediaStatusDto status;
+        try
+        {
+            status = recorder.QueryMediaStatus();
+        }
+        catch
+        {
+            return true;
+        }
+
+        if (!status.HasDataThatBurningReplaces || !IsInteractiveSession)
+        {
+            return true;
+        }
+
+        var answer = MessageBox.Show(
+            Application.Current.MainWindow,
+            $"The {status.MediaType.GetDisplayName()} in {recorder.VolumePath} already has files on it.\n\n" +
+            "Burning will replace everything on the disc. Continue?",
+            "Replace the files on this disc?",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+
+        replaceAllowed = answer == MessageBoxResult.OK;
+        return replaceAllowed;
     }
 
     private sealed class DriveComboItem

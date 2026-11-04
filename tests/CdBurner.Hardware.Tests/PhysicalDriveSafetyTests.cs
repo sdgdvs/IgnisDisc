@@ -34,9 +34,11 @@ public class PhysicalDriveSafetyTests
     private sealed class CapturingEngine : IBurnEngineBackend
     {
         public byte[]? Captured { get; private set; }
+        public DataBurnOptions? CapturedOptions { get; private set; }
 
         public Task<BurnOperationResult> BurnDataStreamAsync(IDiscRecorderBackend recorder, Stream imageStream, DataBurnOptions options, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
         {
+            CapturedOptions = options;
             using var ms = new MemoryStream();
             imageStream.CopyTo(ms);
             Captured = ms.ToArray();
@@ -104,5 +106,55 @@ public class PhysicalDriveSafetyTests
 
         uint volumeSpace = BinaryPrimitives.ReadUInt32LittleEndian(pvd.Slice(80, 4));
         Assert.Equal((uint)(nextWritable + engine.Captured.Length / 2048), volumeSpace);
+    }
+
+    private static FakePhysicalRecorder UsedDvdPlusRw() => new()
+    {
+        // As reported by an HL-DT-ST GP60NB50 for a DVD+RW holding one 60 MB burn.
+        Status = new MediaStatusDto
+        {
+            MediaPresent = true,
+            MediaType = DiscMediaType.DvdPlusRw,
+            IsBlank = false,
+            IsRewritable = true,
+            IsAppendable = false,
+            IsOverwriteOnly = true,
+            TotalSectors = 2_295_104,
+            FreeSectors = 2_295_104,
+            NextWritableLba = 0
+        }
+    };
+
+    [Fact]
+    public async Task UsedDvdPlusRw_WithoutPermission_IsNotOverwritten()
+    {
+        var root = CompilationDirectory.CreateRoot();
+        root.AddFile("NEW.TXT", Encoding.ASCII.GetBytes("replacement"));
+        var engine = new CapturingEngine();
+
+        var result = await new DataBurnService(engine).BurnCompilationAsync(UsedDvdPlusRw(), root, new DataBurnOptions());
+
+        Assert.False(result.Success);
+        Assert.Equal(DataBurnService.ReplaceExistingDataMessage, result.ErrorMessage);
+        Assert.Null(engine.Captured);
+    }
+
+    [Fact]
+    public async Task UsedDvdPlusRw_WithPermission_IsRewrittenFromTheStart()
+    {
+        var root = CompilationDirectory.CreateRoot();
+        root.AddFile("NEW.TXT", Encoding.ASCII.GetBytes("replacement"));
+        var engine = new CapturingEngine();
+
+        var result = await new DataBurnService(engine).BurnCompilationAsync(
+            UsedDvdPlusRw(), root, new DataBurnOptions { OverwriteExistingData = true });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(engine.CapturedOptions!.OverwriteExistingData);
+
+        // The new file system starts at LBA 0, not after the old contents.
+        var pvd = engine.Captured!.AsSpan(16 * 2048, 2048);
+        uint volumeSpace = BinaryPrimitives.ReadUInt32LittleEndian(pvd.Slice(80, 4));
+        Assert.Equal((uint)(engine.Captured!.Length / 2048), volumeSpace);
     }
 }

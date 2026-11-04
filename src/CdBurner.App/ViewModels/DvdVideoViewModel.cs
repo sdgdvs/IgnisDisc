@@ -951,6 +951,7 @@ public class DvdVideoViewModel : ObservableObject
 
         // Resolve and confirm the target optical recorder FIRST before running lengthy transcoding/authoring
         IDiscRecorderBackend? targetRecorder = null;
+        bool replaceAllowed = false; // true only after the user saw the "will replace files" warning and clicked Burn
         if (parameter is IDiscRecorderBackend rec)
         {
             targetRecorder = rec;
@@ -976,6 +977,7 @@ public class DvdVideoViewModel : ObservableObject
 
             SelectedRecorder = confirmed;
             targetRecorder = confirmed;
+            replaceAllowed = true;
         }
 
         targetRecorder ??= SelectedRecorder;
@@ -1045,7 +1047,8 @@ public class DvdVideoViewModel : ObservableObject
                 CloseDisc = true,
                 VerifyAfterBurn = VerifyAfterBurn,
                 EjectAfterBurn = EjectAfterBurn,
-                Speed = SelectedWriteSpeed
+                Speed = SelectedWriteSpeed,
+                OverwriteExistingData = replaceAllowed
             };
 
             var burnService = new DataBurnService(_burnEngine);

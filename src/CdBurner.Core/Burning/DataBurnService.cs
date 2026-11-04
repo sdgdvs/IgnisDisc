@@ -16,6 +16,13 @@ public class DataBurnService
     private readonly IBurnEngineBackend _burnEngine;
 
     /// <summary>
+    /// Shown when a burn would replace the files on a used rewritable disc and the caller did not allow it.
+    /// </summary>
+    public const string ReplaceExistingDataMessage =
+        "This rewritable disc already has files on it, and burning will replace all of them. " +
+        "Confirm that you want to replace them (command line: add --overwrite), or erase the disc first.";
+
+    /// <summary>
     /// Gets the underlying burning engine backend.
     /// </summary>
     public IBurnEngineBackend BurnEngine => _burnEngine;
@@ -212,6 +219,11 @@ public class DataBurnService
         bool verifyRequested = burnOptions.VerifyAfterBurn;
         long initialStreamPosition = imageStream.CanSeek ? imageStream.Position : 0;
         var preBurnStatus = recorder.QueryMediaStatus();
+        if (preBurnStatus.HasDataThatBurningReplaces && !burnOptions.OverwriteExistingData)
+        {
+            return DataBurnResult.Failed(ReplaceExistingDataMessage);
+        }
+
         int burnStartLba = (!preBurnStatus.IsBlank && preBurnStatus.IsAppendable && preBurnStatus.NextWritableLba > 0)
             ? preBurnStatus.NextWritableLba
             : 0;
@@ -224,7 +236,8 @@ public class DataBurnService
             EjectWhenDone = verifyRequested ? false : ejectRequested,
             VerifyAfterBurn = false,
             CloseDisc = burnOptions.CloseDisc,
-            VolumeLabel = burnOptions.VolumeLabel
+            VolumeLabel = burnOptions.VolumeLabel,
+            OverwriteExistingData = burnOptions.OverwriteExistingData
         };
 
         BurnOperationResult burnResult;

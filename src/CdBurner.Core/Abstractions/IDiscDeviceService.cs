@@ -136,6 +136,18 @@ public class MediaStatusDto
     public bool IsBlank { get; init; }
     public bool IsRewritable { get; init; }
     public bool IsAppendable { get; init; }
+
+    /// <summary>
+    /// True for media that are rewritten in place rather than appended to or finalized (DVD+RW, DVD-RAM,
+    /// restricted-overwrite DVD-RW). A burn replaces everything on them.
+    /// </summary>
+    public bool IsOverwriteOnly { get; init; }
+
+    /// <summary>
+    /// True when burning to this disc would replace files already on it (a used DVD+RW or similar).
+    /// </summary>
+    public bool HasDataThatBurningReplaces => MediaPresent && IsOverwriteOnly && !IsBlank;
+
     public int TotalSectors { get; init; }
     public int FreeSectors { get; init; }
     public int UsedSectors { get; init; }
@@ -263,6 +275,12 @@ public class DataBurnOptions
     public bool VerifyAfterBurn { get; init; }
     public bool CloseDisc { get; init; } = true;
     public string? VolumeLabel { get; init; }
+
+    /// <summary>
+    /// Allows a burn to replace the files already on a rewritable disc such as a used DVD+RW. Off by default so data
+    /// is never destroyed without the user agreeing to it.
+    /// </summary>
+    public bool OverwriteExistingData { get; init; }
 }
 
 /// <summary>

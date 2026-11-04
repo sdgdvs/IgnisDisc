@@ -609,6 +609,7 @@ public class ImageStudioViewModel : ObservableObject
             return fail;
         }
 
+        bool replaceAllowed = false; // true only after the user saw the "will replace files" warning and clicked Burn
         if (string.IsNullOrWhiteSpace(driveId) && CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
         {
             var confirmed = CdBurner.App.Views.BurnTargetDialog.ConfirmRecorderSelection(
@@ -626,6 +627,7 @@ public class ImageStudioViewModel : ObservableObject
             }
 
             SelectedRecorder = confirmed;
+            replaceAllowed = true;
         }
 
         var recorder = ResolveRecorder(driveId);
@@ -678,7 +680,8 @@ public class ImageStudioViewModel : ObservableObject
                     {
                         VolumeLabel = Path.GetFileNameWithoutExtension(SourceImagePath),
                         CloseDisc = true,
-                        Speed = SelectedWriteSpeed
+                        Speed = SelectedWriteSpeed,
+                        OverwriteExistingData = replaceAllowed
                     },
                     progress,
                     linkedToken);
@@ -697,7 +700,7 @@ public class ImageStudioViewModel : ObservableObject
                 burnResult = await _burnEngine.BurnDataStreamAsync(
                     recorder,
                     fs,
-                    new DataBurnOptions { CloseDisc = true, Speed = SelectedWriteSpeed },
+                    new DataBurnOptions { CloseDisc = true, Speed = SelectedWriteSpeed, OverwriteExistingData = replaceAllowed },
                     progress,
                     linkedToken);
             }

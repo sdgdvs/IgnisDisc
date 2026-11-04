@@ -659,6 +659,14 @@ public class ArchiveViewModel : ObservableObject
             }
         }
 
+        // A used DVD+RW / DVD-RAM would be wiped by the burn: ask first.
+        if (!CdBurner.App.Views.BurnTargetDialog.ConfirmReplaceExistingData(SelectedRecorder, out bool replaceAllowed))
+        {
+            StatusMessage = $"Disc {row.DiscNumber} not burned: the disc in the drive still has files you chose to keep.";
+            row.Status = "Cancelled";
+            return DataBurnResult.Failed(StatusMessage);
+        }
+
         _activeCts?.Dispose();
         _activeCts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
@@ -696,7 +704,8 @@ public class ArchiveViewModel : ObservableObject
                 VolumeLabel = label,
                 CloseDisc = true,
                 VerifyAfterBurn = VerifyAfterBurn,
-                EjectAfterBurn = false
+                EjectAfterBurn = false,
+                OverwriteExistingData = replaceAllowed
             };
 
             var burnService = new DataBurnService(_burnEngine);
