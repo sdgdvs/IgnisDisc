@@ -68,7 +68,11 @@ public static class CliCommandRunner
         {
             if (parsed.HasFlag("version") || parsed.HasFlag("v"))
             {
-                stdout.WriteLine("IgnisDisc (CdBurner CLI) v1.06 (.NET 10.0 Windows)");
+                string? version = typeof(CliCommandRunner).Assembly
+                    .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                    .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                    .FirstOrDefault()?.InformationalVersion?.Split('+')[0];
+                stdout.WriteLine($"IgnisDisc (CdBurner CLI) v{version ?? "dev"} (.NET {Environment.Version.ToString(2)} Windows)");
                 return 0;
             }
 
@@ -1012,7 +1016,7 @@ public static class CliCommandRunner
             try
             {
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-                var mbClient = new MusicBrainzClient(http, "IgnisDisc/1.06 ( https://ignisdisc-studio.web.app )");
+                var mbClient = new MusicBrainzClient(http, MusicBrainzClient.DefaultUserAgent);
                 var releases = await mbClient.LookupDiscIdAsync(ids.MusicBrainzId).ConfigureAwait(false);
                 if (releases != null && releases.Count > 0)
                 {

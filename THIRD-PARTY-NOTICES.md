@@ -18,6 +18,18 @@ license text ships as `ffmpeg-LICENSE.txt` next to it. ffmpeg is licensed under 
 GPL-enabled builds); see https://ffmpeg.org/legal.html. Prefer an LGPL build, record exactly which build you shipped
 in the release notes, and link to its source.
 
+## par2cmdline (optional)
+
+Archive recovery data is created and repaired by calling an external `par2.exe`
+([par2cmdline](https://github.com/Parchive/par2cmdline), GPL v2+) as a separate program. It is **not** bundled; install
+it yourself if you want PAR2 recovery data on archive discs.
+
+## Online services (optional)
+
+Audio ripping can look up track names from [MusicBrainz](https://musicbrainz.org) and check rips against the
+[AccurateRip](http://www.accuraterip.com) database. Both lookups are optional and only send the disc's table-of-contents
+identifiers, never audio or personal data.
+
 ## Test-only dependencies (not shipped)
 
 xUnit, Microsoft.NET.Test.Sdk, coverlet, and LTRData.DiscUtils (used as an independent ISO 9660 / Joliet / UDF

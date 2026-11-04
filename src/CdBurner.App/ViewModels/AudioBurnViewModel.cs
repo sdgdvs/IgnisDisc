@@ -1249,7 +1249,7 @@ public class AudioBurnViewModel : ObservableObject
                 try
                 {
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-                    var mbClient = new MusicBrainzClient(http, "IgnisDisc/1.06 ( https://ignisdisc-studio.web.app )");
+                    var mbClient = new MusicBrainzClient(http, MusicBrainzClient.DefaultUserAgent);
                     var releases = await mbClient.LookupDiscIdAsync(ids.MusicBrainzId, activeToken).ConfigureAwait(false);
                     if (releases != null && releases.Count > 0)
                     {

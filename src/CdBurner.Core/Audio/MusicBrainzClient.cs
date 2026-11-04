@@ -15,6 +15,21 @@ public sealed class MusicBrainzClient
 {
     public const string DefaultBaseUrl = "https://musicbrainz.org/ws/2/";
 
+    /// <summary>
+    /// MusicBrainz asks clients to identify themselves; this uses the build's real version (e.g. "IgnisDisc/1.07").
+    /// </summary>
+    public static string DefaultUserAgent { get; } = BuildDefaultUserAgent();
+
+    private static string BuildDefaultUserAgent()
+    {
+        string? version = typeof(MusicBrainzClient).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .FirstOrDefault()?.InformationalVersion;
+        version = version?.Split('+')[0]; // drop the "+commit" suffix the SDK appends
+        return $"IgnisDisc/{(string.IsNullOrWhiteSpace(version) ? "dev" : version)} ( https://ignisdisc-studio.web.app )";
+    }
+
     private readonly HttpClient _httpClient;
     private readonly string _userAgent;
     private readonly string _baseUrl;
