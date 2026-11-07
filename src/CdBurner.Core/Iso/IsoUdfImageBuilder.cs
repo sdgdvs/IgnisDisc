@@ -272,13 +272,9 @@ public static class IsoUdfImageBuilder
             const long MaxIso9660FileSize = uint.MaxValue;
             var oversized = ctx.AllFiles.FirstOrDefault(f => f.SourceFile.SizeBytes > MaxIso9660FileSize);
 
-            // UDF partition can only reference data recorded inside the current session. Appended sessions that
-            // reference files from earlier sessions therefore fall back to ISO 9660 / Joliet only.
-            bool referencesPriorSession = sessionStartLba > 0 && ctx.AllFiles.Any(f =>
-                f.SourceFile.ImportedStartLba.HasValue &&
-                !f.SourceFile.IsPlannedLayoutLba &&
-                f.SourceFile.ImportedStartLba.Value < sessionStartLba);
-            ctx.UdfEnabled = options.IncludeUdf && !referencesPriorSession;
+            // Plain UDF 1.02 places its Anchor Volume Descriptor Pointer at fixed LBA 256 and cannot describe
+            // sessions starting above LBA 0. Appended sessions therefore emit ISO 9660 / Joliet descriptors only.
+            ctx.UdfEnabled = options.IncludeUdf && sessionStartLba == 0;
 
             if (oversized != null && !ctx.UdfEnabled)
             {

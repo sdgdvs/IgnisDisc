@@ -192,29 +192,8 @@ public class SurfaceScanService
         }
 
         int startLba = Math.Max(0, options.StartLba);
-        int totalSectors;
-        if (options.SectorCount.HasValue && options.SectorCount.Value > 0)
-        {
-            totalSectors = options.SectorCount.Value;
-        }
-        else if (mediaStatus.UsedSectors > 0)
-        {
-            totalSectors = Math.Max(0, mediaStatus.UsedSectors - startLba);
-        }
-        else if (mediaStatus.TotalSectors > 0)
-        {
-            totalSectors = Math.Max(0, mediaStatus.TotalSectors - startLba);
-        }
-        else if (mediaStatus.LastRecordedLba >= 0)
-        {
-            totalSectors = Math.Max(0, (mediaStatus.LastRecordedLba + 1) - startLba);
-        }
-        else
-        {
-            totalSectors = 0;
-        }
-
-        totalSectors = Math.Min(totalSectors, int.MaxValue - startLba);
+        var scanRanges = BuildScanRanges(recorder, mediaStatus, options, startLba);
+        int totalSectors = scanRanges.Sum(r => r.SectorCount);
 
         if (totalSectors <= 0)
         {
@@ -230,115 +209,120 @@ public class SurfaceScanService
         }
 
         int blockSize = options.BlockSizeSectors > 0 ? options.BlockSizeSectors : 256;
-        int sectorSize = options.Raw2352Mode ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
-        int baseRate = WriteSpeedDescriptor.GetBaseRate(mediaStatus.MediaType, isAudio: options.Raw2352Mode);
 
         var blocks = new List<SurfaceScanBlockResult>();
         var overallSw = Stopwatch.StartNew();
-        int currentLba = startLba;
-        int endLba = startLba + totalSectors;
+        int scannedSoFarTotal = 0;
 
-        while (currentLba < endLba)
+        foreach (var range in scanRanges)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            int sectorSize = range.Raw2352Mode ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
+            int baseRate = WriteSpeedDescriptor.GetBaseRate(mediaStatus.MediaType, isAudio: range.Raw2352Mode);
+            int currentLba = range.StartLba;
+            int endLba = range.StartLba + range.SectorCount;
 
-            int currentBlockSize = Math.Min(blockSize, endLba - currentLba);
-            var blockSw = Stopwatch.StartNew();
-            bool isDamaged = false;
-            int sectorsReadInBlock = 0;
-
-            try
+            while (currentLba < endLba)
             {
-                var ripResult = await engine.ReadSectorsAsync(
-                    recorder,
-                    startLba: currentLba,
-                    sectorCount: currentBlockSize,
-                    raw2352Mode: options.Raw2352Mode,
-                    sectorConsumer: (lba, memory) =>
-                    {
-                        sectorsReadInBlock++;
-                        return ValueTask.CompletedTask;
-                    },
-                    progress: null,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
 
-                if (!ripResult.Success || ripResult.BadSectorsCount > 0 || sectorsReadInBlock < currentBlockSize)
+                int currentBlockSize = Math.Min(blockSize, endLba - currentLba);
+                var blockSw = Stopwatch.StartNew();
+                bool isDamaged = false;
+                int sectorsReadInBlock = 0;
+
+                try
+                {
+                    var ripResult = await engine.ReadSectorsAsync(
+                        recorder,
+                        startLba: currentLba,
+                        sectorCount: currentBlockSize,
+                        raw2352Mode: range.Raw2352Mode,
+                        sectorConsumer: (lba, memory) =>
+                        {
+                            sectorsReadInBlock++;
+                            return ValueTask.CompletedTask;
+                        },
+                        progress: null,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    if (!ripResult.Success || ripResult.BadSectorsCount > 0 || sectorsReadInBlock < currentBlockSize)
+                    {
+                        isDamaged = true;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     isDamaged = true;
                 }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                isDamaged = true;
-            }
-            finally
-            {
-                blockSw.Stop();
-            }
-
-            SectorHealthStatus status;
-            double kbPerSec;
-            double multiplier;
-            TimeSpan elapsed = blockSw.Elapsed;
-
-            if (isDamaged)
-            {
-                status = SectorHealthStatus.Damaged;
-                kbPerSec = 0.0;
-                multiplier = 0.0;
-            }
-            else
-            {
-                double seconds = Math.Max(elapsed.TotalSeconds, 0.000001);
-                long bytesRead = (long)currentBlockSize * sectorSize;
-                double bytesPerSec = bytesRead / seconds;
-                kbPerSec = bytesPerSec / 1024.0;
-                multiplier = baseRate > 0 ? bytesPerSec / baseRate : 0.0;
-
-                if ((options.SlowSpeedThresholdKbPerSec > 0 && kbPerSec < options.SlowSpeedThresholdKbPerSec) ||
-                    (options.SlowSpeedMultiplierThreshold > 0 && multiplier < options.SlowSpeedMultiplierThreshold))
+                finally
                 {
-                    status = SectorHealthStatus.Slow;
+                    blockSw.Stop();
+                }
+
+                SectorHealthStatus status;
+                double kbPerSec;
+                double multiplier;
+                TimeSpan elapsed = blockSw.Elapsed;
+
+                if (isDamaged)
+                {
+                    status = SectorHealthStatus.Damaged;
+                    kbPerSec = 0.0;
+                    multiplier = 0.0;
                 }
                 else
                 {
-                    status = SectorHealthStatus.Good;
+                    double seconds = Math.Max(elapsed.TotalSeconds, 0.000001);
+                    long bytesRead = (long)currentBlockSize * sectorSize;
+                    double bytesPerSec = bytesRead / seconds;
+                    kbPerSec = bytesPerSec / 1024.0;
+                    multiplier = baseRate > 0 ? bytesPerSec / baseRate : 0.0;
+
+                    if ((options.SlowSpeedThresholdKbPerSec > 0 && kbPerSec < options.SlowSpeedThresholdKbPerSec) ||
+                        (options.SlowSpeedMultiplierThreshold > 0 && multiplier < options.SlowSpeedMultiplierThreshold))
+                    {
+                        status = SectorHealthStatus.Slow;
+                    }
+                    else
+                    {
+                        status = SectorHealthStatus.Good;
+                    }
                 }
-            }
 
-            var blockResult = new SurfaceScanBlockResult(
-                StartLba: currentLba,
-                SectorCount: currentBlockSize,
-                Status: status,
-                ReadSpeedKilobytesPerSec: kbPerSec,
-                ReadSpeedMultiplierX: multiplier,
-                Elapsed: elapsed);
+                var blockResult = new SurfaceScanBlockResult(
+                    StartLba: currentLba,
+                    SectorCount: currentBlockSize,
+                    Status: status,
+                    ReadSpeedKilobytesPerSec: kbPerSec,
+                    ReadSpeedMultiplierX: multiplier,
+                    Elapsed: elapsed);
 
-            blocks.Add(blockResult);
-            options.BlockProgress?.Report(blockResult);
+                blocks.Add(blockResult);
+                options.BlockProgress?.Report(blockResult);
+                scannedSoFarTotal += currentBlockSize;
 
-            if (progress != null)
-            {
-                int scannedSoFar = (currentLba - startLba) + currentBlockSize;
-                TimeSpan overallElapsed = overallSw.Elapsed;
-                TimeSpan remaining = scannedSoFar > 0 && totalSectors > scannedSoFar
-                    ? TimeSpan.FromSeconds(overallElapsed.TotalSeconds / scannedSoFar * (totalSectors - scannedSoFar))
-                    : TimeSpan.Zero;
-
-                progress.Report(new BurnProgressSnapshot
+                if (progress != null)
                 {
-                    ElapsedTime = overallElapsed,
-                    RemainingTime = remaining,
-                    CurrentLba = scannedSoFar,
-                    TotalLba = totalSectors,
-                    BufferLevelPercent = 100.0,
-                    CurrentSpeedMultiplier = multiplier,
-                    CurrentBytesPerSecond = (long)(kbPerSec * 1024.0),
-                    CurrentActionDescription = $"Scanning LBA {currentLba}..{currentLba + currentBlockSize - 1} ({status})"
-                });
-            }
+                    TimeSpan overallElapsed = overallSw.Elapsed;
+                    TimeSpan remaining = scannedSoFarTotal > 0 && totalSectors > scannedSoFarTotal
+                        ? TimeSpan.FromSeconds(overallElapsed.TotalSeconds / scannedSoFarTotal * (totalSectors - scannedSoFarTotal))
+                        : TimeSpan.Zero;
 
-            currentLba += currentBlockSize;
+                    progress.Report(new BurnProgressSnapshot
+                    {
+                        ElapsedTime = overallElapsed,
+                        RemainingTime = remaining,
+                        CurrentLba = scannedSoFarTotal,
+                        TotalLba = totalSectors,
+                        BufferLevelPercent = 100.0,
+                        CurrentSpeedMultiplier = multiplier,
+                        CurrentBytesPerSecond = (long)(kbPerSec * 1024.0),
+                        CurrentActionDescription = $"Scanning LBA {currentLba}..{currentLba + currentBlockSize - 1} ({status})"
+                    });
+                }
+
+                currentLba += currentBlockSize;
+            }
         }
 
         overallSw.Stop();
@@ -362,5 +346,68 @@ public class SurfaceScanService
             MaxSpeedKbPerSec: maxSpeed,
             AverageSpeedKbPerSec: avgSpeed,
             Blocks: blocks);
+    }
+
+    private static List<(int StartLba, int SectorCount, bool Raw2352Mode)> BuildScanRanges(
+        IDiscRecorderBackend recorder,
+        MediaStatusDto mediaStatus,
+        SurfaceScanOptions options,
+        int startLba)
+    {
+        // When no explicit sector sub-range was requested and the drive exposes a CD Table of Contents, scan each
+        // recorded track individually so multi-session inter-session gaps (~11,400 unrecorded sectors) are skipped
+        // and CD-DA audio tracks are read in 2352-byte raw mode automatically.
+        if (startLba == 0 && !options.SectorCount.HasValue &&
+            recorder is IDiscTocProvider tocProvider &&
+            tocProvider.ReadTableOfContents() is { Count: > 0 } tocTracks)
+        {
+            var tocRanges = new List<(int StartLba, int SectorCount, bool Raw2352Mode)>(tocTracks.Count);
+            foreach (var track in tocTracks)
+            {
+                int tStart = Math.Max(0, track.StartLba);
+                int tCount = track.SectorCount;
+                if (!track.IsAudio && mediaStatus.UsedSectors > tStart && tStart + tCount > mediaStatus.UsedSectors)
+                {
+                    tCount = mediaStatus.UsedSectors - tStart;
+                }
+
+                if (tCount > 0)
+                {
+                    tocRanges.Add((tStart, tCount, options.Raw2352Mode || track.IsAudio));
+                }
+            }
+
+            if (tocRanges.Count > 0)
+            {
+                return tocRanges;
+            }
+        }
+
+        int totalSectors;
+        if (options.SectorCount.HasValue && options.SectorCount.Value > 0)
+        {
+            totalSectors = options.SectorCount.Value;
+        }
+        else if (mediaStatus.UsedSectors > 0)
+        {
+            totalSectors = Math.Max(0, mediaStatus.UsedSectors - startLba);
+        }
+        else if (mediaStatus.TotalSectors > 0)
+        {
+            totalSectors = Math.Max(0, mediaStatus.TotalSectors - startLba);
+        }
+        else if (mediaStatus.LastRecordedLba >= 0)
+        {
+            totalSectors = Math.Max(0, (mediaStatus.LastRecordedLba + 1) - startLba);
+        }
+        else
+        {
+            totalSectors = 0;
+        }
+
+        totalSectors = Math.Min(totalSectors, int.MaxValue - startLba);
+        return totalSectors > 0
+            ? new List<(int StartLba, int SectorCount, bool Raw2352Mode)> { (startLba, totalSectors, options.Raw2352Mode) }
+            : new List<(int StartLba, int SectorCount, bool Raw2352Mode)>();
     }
 }

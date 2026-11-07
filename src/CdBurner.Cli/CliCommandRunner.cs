@@ -13,6 +13,7 @@ using CdBurner.Core.Images;
 using CdBurner.Core.Iso;
 using CdBurner.Core.Primitives;
 using CdBurner.Core.Utilities;
+using CdBurner.Hardware.Audio;
 using CdBurner.Hardware.Burning;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Simulation;
@@ -492,7 +493,26 @@ public static class CliCommandRunner
         var bootConfig = BuildBootConfiguration(bootBiosPath, bootUefiPath, effectiveLabel);
 
         var root = CompilationDirectory.CreateRoot();
+        if (!mediaStatus.IsBlank && mediaStatus.IsAppendable && !mediaStatus.IsOverwriteOnly)
+        {
+            try
+            {
+                root = await MultiSessionManager.ImportFromRecorderAsync(recorder, burnEngine).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                stderr.WriteLine($"Warning: Could not import previous session ({ex.Message}); writing new session without merging.");
+            }
+        }
+
         PopulateDirectoryFromDisk(root, inputFolder);
+
+        // Leaving a disc open for later sessions requires omitting UDF 1.02 (unless explicitly requested with --udf or
+        // required by a >= 4 GiB file), because Windows mounts UDF 1.02 at fixed LBA 256 and hides later Joliet sessions.
+        if (!closeDisc && !hasUdfFlag && !root.GetAllFilesRecursive().Any(f => f.SizeBytes > uint.MaxValue))
+        {
+            includeUdf = false;
+        }
 
         var burnOptions = new DataBurnOptions
         {
@@ -618,9 +638,12 @@ public static class CliCommandRunner
         string tracksRaw = cmd.GetRequiredOption("tracks", "--tracks <wav1,wav2,...>");
         string? title = cmd.GetOption("title");
         string? artist = cmd.GetOption("artist");
+        string? speedStr = cmd.GetOption("speed");
         bool dao = cmd.HasFlag("dao");
 
         var recorder = FindRecorder(deviceService, driveId);
+        var mediaStatus = recorder.QueryMediaStatus();
+        var speedDesc = ParseSpeed(speedStr, mediaStatus.MediaType, isAudio: true);
 
         var trackFiles = tracksRaw.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (trackFiles.Length == 0)
@@ -657,11 +680,12 @@ public static class CliCommandRunner
                 PreGapFrames: i == 0 ? 150 : 0));
         }
 
-        var audioBurnService = new AudioCdBurnService(burnEngine);
+        using var mfDecoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
+        var audioBurnService = new AudioCdBurnService(burnEngine, mfDecoder);
         var result = await audioBurnService.BurnAsync(
             recorder,
             compilation,
-            new AudioBurnOptions { UseDiscAtOnce = dao, WriteCdText = compilation.IncludeCdText }).ConfigureAwait(false);
+            new AudioBurnOptions { Speed = speedDesc, UseDiscAtOnce = dao, WriteCdText = compilation.IncludeCdText }).ConfigureAwait(false);
 
         if (cmd.IsJson)
         {
@@ -1686,13 +1710,13 @@ public static class CliCommandRunner
         return recorder;
     }
 
-    private static WriteSpeedDescriptor? ParseSpeed(string? speedStr, DiscMediaType mediaType)
+    private static WriteSpeedDescriptor? ParseSpeed(string? speedStr, DiscMediaType mediaType, bool isAudio = false)
     {
         if (string.IsNullOrWhiteSpace(speedStr)) return null;
         string cleaned = speedStr.TrimEnd('x', 'X').Trim();
         if (double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out double multiplier) && multiplier > 0)
         {
-            return WriteSpeedDescriptor.FromMultiplier(multiplier, mediaType);
+            return WriteSpeedDescriptor.FromMultiplier(multiplier, mediaType, isAudio);
         }
         return null;
     }
@@ -1801,8 +1825,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
-        stdout.WriteLine("  burn-audio --drive <id> --tracks <wav1,wav2,...> [--title <album>] [--artist <name>] [--dao] [--json]");
-        stdout.WriteLine("      Burns Red Book Audio CD from WAV tracks.");
+        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X>] [--dao] [--json]");
+        stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
         stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");

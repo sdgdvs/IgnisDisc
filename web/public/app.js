@@ -3,16 +3,15 @@
  * Edit SITE_CONFIG below (or run scripts/Publish-ReleaseAndSite.ps1) to update links.
  */
 const SITE_CONFIG = {
-  version: "1.07",
+  version: "1.08",
   githubRepoUrl: "https://github.com/tether-works/IgnisDisc",
-  setupDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.07/IgnisDisc-Setup.exe",
-  portableDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.07/IgnisDisc-Portable-win-x64.zip",
+  setupDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Setup.exe",
+  portableDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Portable-win-x64.zip",
   engineer: {
     initials: "DT",
-    name: "tetherworks",
-    role: "Personal Research & Open-Source Hardware/Software Systems",
-    email: "mailto:dev@tetherworks.dev?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Note",
-    linkedinUrl: "https://github.com/tether-works"
+    name: "tetherworks Systems",
+    role: "Open-Source Hardware & Software Systems",
+    email: "mailto:dev@tetherworks.dev?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Note"
   }
 };
 
@@ -32,11 +31,11 @@ const STUDIO_VIEWS = {
   },
   data: {
     title: "Multi-Filesystem Data & UDF Mastering",
-    badge: "ISO 9660 L3 + Joliet UCS-2BE + UDF 2.60",
+    badge: "ISO 9660 + Joliet UCS-2BE + UDF 1.02 Bridge",
     rows: [
-      ["/bin/IgnisDisc.exe", "68.4 MB", "UDF 2.60 + Joliet", "LBA 0000288", "SHA-256 Verified"],
-      ["/bin/ignisdisc-cli.exe", "14.2 MB", "UDF 2.60 + Joliet", "LBA 0035310", "SHA-256 Verified"],
-      ["/docs/MMC5_SPTD_Spec.pdf", "4.8 MB", "UDF 2.60 + Joliet", "LBA 0042580", "AVDP @ LBA 256"],
+      ["/bin/IgnisDisc.exe", "68.4 MB", "UDF 1.02 + Joliet", "LBA 0000288", "SHA-256 Verified"],
+      ["/bin/ignisdisc-cli.exe", "14.2 MB", "UDF 1.02 + Joliet", "LBA 0035310", "SHA-256 Verified"],
+      ["/docs/IGNISDISC-MANIFEST.sha256", "4.8 KB", "UDF 1.02 + Joliet", "LBA 0042580", "AVDP @ LBA 256"],
       ["/VIDEO_TS/VTS_01_0.IFO", "64.0 KB", "32 KB ECC Aligned", "LBA 0045056", "16-Sector Boundary"]
     ],
     headers: ["Virtual Path", "Size", "Bridge Mode", "Physical LBA", "Alignment / Integrity"],
@@ -66,7 +65,7 @@ const STUDIO_VIEWS = {
       ["Spindle Power State", "CDB 0x1B", "START_STOP_UNIT", "LoEj=0, Start=0", "Auto Spin-Down Armed"]
     ],
     headers: ["Sector Range", "Data Read", "Transfer Rate", "Read Latency", "Surface Health"],
-    footerLeft: "Book-Type Bitsetting: DVD+R -> DVD-ROM Supported • Rewritable Erase: Ready",
+    footerLeft: "Multi-Session Full TOC (0x02) • Rewritable Quick/Full Erase: Ready",
     footerRight: "Run Surface Scan"
   }
 };
@@ -106,7 +105,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const navGithub = document.getElementById("navGithubLink");
   const ctaGithub = document.getElementById("ctaGithub");
   const ctaContact = document.getElementById("ctaContactPrimary");
-  const ctaLinkedin = document.getElementById("ctaLinkedin");
   const engInitials = document.getElementById("engInitials");
   const engName = document.getElementById("engName");
   const engRole = document.getElementById("engRole");
@@ -124,7 +122,6 @@ document.addEventListener("DOMContentLoaded", () => {
       ctaContact.href = email;
     }
   }
-  if (ctaLinkedin) ctaLinkedin.href = SITE_CONFIG.engineer.linkedinUrl;
   if (engInitials) engInitials.textContent = SITE_CONFIG.engineer.initials;
   if (engName) engName.textContent = SITE_CONFIG.engineer.name;
   if (engRole) engRole.textContent = SITE_CONFIG.engineer.role;

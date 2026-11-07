@@ -73,6 +73,16 @@ public class AudioCdBurnService
             return BurnOperationResult.Failed("Mounted media is not writable (disc is finalized or not blank/rewritable).");
         }
 
+        if (mediaStatus.RequiresEraseToWrite)
+        {
+            return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.EraseRequiredMessage);
+        }
+
+        if (mediaStatus.IsOverwriteOnly)
+        {
+            return BurnOperationResult.Failed("Audio CDs require blank CD-R or CD-RW media.");
+        }
+
         progress?.Report(new BurnProgressSnapshot
         {
             CurrentActionDescription = "PreparingAudioTracks",

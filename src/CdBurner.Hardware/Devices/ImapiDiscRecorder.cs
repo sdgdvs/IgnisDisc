@@ -527,7 +527,14 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                         var mediaType = MapPhysicalTypeToDiscMediaType(physicalType);
                         bool isBlank = eraseFormat.MediaPhysicallyBlank || eraseFormat.MediaHeuristicallyBlank;
                         int nominalSectors = mediaType.GetNominalCapacitySectors();
-                        int recordedSectors = isBlank ? 0 : (Scsi.PhysicalSectorReader.ReadCapacity(VolumePath) ?? nominalSectors);
+                        int recordedSectors = 0;
+                        if (!isBlank)
+                        {
+                            recordedSectors = Scsi.PhysicalSectorReader.ReadCapacity(VolumePath)
+                                ?? (Scsi.PhysicalSectorReader.ReadTableOfContents(VolumePath) is { Count: > 0 } eraseToc
+                                    ? eraseToc.Max(t => t.StartLba + t.SectorCount)
+                                    : nominalSectors);
+                        }
                         long nominalBytes = mediaType.GetNominalCapacityBytes();
 
                         return new MediaStatusDto
@@ -542,7 +549,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                             UsedSectors = recordedSectors,
                             TotalCapacityBytes = nominalBytes,
                             FreeCapacityBytes = isBlank ? nominalBytes : 0,
-                            SessionCount = isBlank ? 0 : 1,
+                            SessionCount = isBlank ? 0 : (Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1),
                             MediaManufacturerId = null,
                             LastRecordedLba = isBlank ? -1 : recordedSectors - 1
                         };
@@ -580,7 +587,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                     UsedSectors = readOnlySectors.Value,
                     TotalCapacityBytes = bytes,
                     FreeCapacityBytes = 0,
-                    SessionCount = 1,
+                    SessionCount = Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1,
                     MediaManufacturerId = null,
                     LastRecordedLba = readOnlySectors.Value - 1
                 };
@@ -610,7 +617,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                     UsedSectors = sectors,
                     TotalCapacityBytes = (long)sectors * OpticalConstants.DataSectorSize,
                     FreeCapacityBytes = 0,
-                    SessionCount = 1,
+                    SessionCount = Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1,
                     MediaManufacturerId = null,
                     LastRecordedLba = sectors - 1
                 };

@@ -26,6 +26,8 @@ public static partial class PhysicalSectorReader
     private const uint IOCTL_CDROM_READ_TOC = 0x00024000;
     private const uint IOCTL_CDROM_GET_LAST_SESSION = 0x00024038; // CTL_CODE(FILE_DEVICE_CD_ROM, 0x0E, METHOD_BUFFERED, FILE_READ_ACCESS)
     private const uint IOCTL_CDROM_READ_TOC_EX = 0x00024054; // CTL_CODE(FILE_DEVICE_CD_ROM, 0x15, METHOD_BUFFERED, FILE_READ_ACCESS)
+    private const byte TocFormatSession = 0x01;
+    private const byte TocFormatFullToc = 0x02;
     private const byte TocFormatCdText = 0x05;
     private const int CdTextPackSize = 18;
     private const uint FSCTL_ALLOW_EXTENDED_DASD_IO = 0x00090083;
@@ -60,6 +62,36 @@ public static partial class PhysicalSectorReader
 
         // Device I/O is blocking; keep it off the caller's (possibly UI) thread.
         return Task.Run(() => ReadCoreAsync(volumePath, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// Best-effort SCSI START STOP UNIT (0x1B, start=false, loadEject=false, immediate=true) motor spin-down.
+    /// Safe to call on app exit or operation cancellation; never throws or ejects the tray.
+    /// </summary>
+    public static bool TrySpinDown(string? volumePath)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+            if (handle == null)
+            {
+                return false;
+            }
+
+            using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+            byte[] cdb = MmcCommandBuilder.BuildStartStopUnitCdb(start: false, loadEject: false, immediate: true);
+            var res = transport.ExecuteCommand(cdb, Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, TimeSpan.FromSeconds(5));
+            return res.IsSuccess;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static async Task<RipOperationResult> ReadCoreAsync(
@@ -160,67 +192,232 @@ public static partial class PhysicalSectorReader
             return Array.Empty<DiscTocTrack>();
         }
 
-        using var handle = OpenDevice(volumePath, FileAccess.Read, out _);
-        if (handle == null)
+        IReadOnlyList<DiscTocTrack> parsedTracks = Array.Empty<DiscTocTrack>();
+        using (var handle = OpenDevice(volumePath, FileAccess.Read, out _))
         {
-            return Array.Empty<DiscTocTrack>();
-        }
-
-        // CDROM_TOC: Length[2], FirstTrack, LastTrack, TRACK_DATA[100] (8 bytes each) = 804 bytes
-        byte[] toc = new byte[804];
-        if (!DeviceIoControlBuffer(handle, IOCTL_CDROM_READ_TOC, Array.Empty<byte>(), toc, out _))
-        {
-            return Array.Empty<DiscTocTrack>();
-        }
-
-        int first = toc[2];
-        int last = toc[3];
-        if (first < 1 || last < first || last > 99)
-        {
-            return Array.Empty<DiscTocTrack>();
-        }
-
-        var entries = new List<(int Number, int Lba, bool IsData)>();
-        for (int i = 0; i <= last - first + 1; i++) // includes lead-out (track 0xAA)
-        {
-            int off = 4 + i * 8;
-            byte control = (byte)(toc[off + 1] & 0x0F);
-            int number = toc[off + 2];
-            int lba = (toc[off + 5] * 60 + toc[off + 6]) * 75 + toc[off + 7] - 150; // MSF address
-            entries.Add((number, lba, (control & 0x04) != 0));
-        }
-
-        // CDROM_TOC_SESSION_DATA: Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA (TrackNumber at byte 6).
-        int? firstTrackOfLastSession = null;
-        byte[] session = new byte[12];
-        if (DeviceIoControlBuffer(handle, IOCTL_CDROM_GET_LAST_SESSION, Array.Empty<byte>(), session, out _) && session[3] > 1)
-        {
-            firstTrackOfLastSession = session[6];
-        }
-
-        var tracks = new List<DiscTocTrack>();
-        for (int i = 0; i < entries.Count - 1; i++)
-        {
-            var cur = entries[i];
-            var next = entries[i + 1];
-            int count = next.Lba - cur.Lba;
-
-            // Enhanced CD: the audio session ends 11,400 sectors (lead-out + lead-in + pre-gap) before the data track
-            // that opens the second session. A single-session audio-then-data disc has no such gap. If the session
-            // query is unavailable, assume Enhanced CD, which is by far the more common layout.
-            bool dataStartsLaterSession = firstTrackOfLastSession == null || next.Number == firstTrackOfLastSession;
-            if (!cur.IsData && next.IsData && next.Number != 0xAA && dataStartsLaterSession)
+            if (handle == null)
             {
-                count -= 11_400;
+                return Array.Empty<DiscTocTrack>();
             }
 
+            // Prefer Format 2 (Full TOC, MSF=1, SessionTrack=1 at byte 1) so every session's exact Lead-Out
+            // (Point 0xA2) is known, preventing multi-session tracks from spanning the 11,400-sector inter-session gap.
+            byte[] fullTocReq = { 0x80 | TocFormatFullToc, 1, 0, 0 };
+            byte[] fullTocResp = new byte[2048];
+            if (DeviceIoControlBuffer(handle, IOCTL_CDROM_READ_TOC_EX, fullTocReq, fullTocResp, out _))
+            {
+                parsedTracks = ParseFullToc(fullTocResp, fullTocResp.Length);
+            }
+
+            if (parsedTracks.Count == 0)
+            {
+                // Fallback: legacy Format 0 CDROM_TOC: Length[2], FirstTrack, LastTrack, TRACK_DATA[100] (8 bytes each) = 804 bytes
+                byte[] toc = new byte[804];
+                if (!DeviceIoControlBuffer(handle, IOCTL_CDROM_READ_TOC, Array.Empty<byte>(), toc, out _))
+                {
+                    return Array.Empty<DiscTocTrack>();
+                }
+
+                int first = toc[2];
+                int last = toc[3];
+                if (first < 1 || last < first || last > 99)
+                {
+                    return Array.Empty<DiscTocTrack>();
+                }
+
+                var entries = new List<(int Number, int Lba, bool IsData)>();
+                for (int i = 0; i <= last - first + 1; i++) // includes lead-out (track 0xAA)
+                {
+                    int off = 4 + i * 8;
+                    byte control = (byte)(toc[off + 1] & 0x0F);
+                    int number = toc[off + 2];
+                    int lba = (toc[off + 5] * 60 + toc[off + 6]) * 75 + toc[off + 7] - 150; // MSF address
+                    entries.Add((number, lba, (control & 0x04) != 0));
+                }
+
+                // CDROM_TOC_SESSION_DATA: Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA (TrackNumber at byte 6).
+                int? firstTrackOfLastSession = null;
+                byte[] session = new byte[16];
+                byte[] sessionReq = { TocFormatSession, 0, 0, 0 };
+                if ((DeviceIoControlBuffer(handle, IOCTL_CDROM_READ_TOC_EX, sessionReq, session, out _) ||
+                     DeviceIoControlBuffer(handle, IOCTL_CDROM_GET_LAST_SESSION, Array.Empty<byte>(), session, out _)) &&
+                    session[3] > 1)
+                {
+                    firstTrackOfLastSession = session[6];
+                }
+
+                var tracks = new List<DiscTocTrack>();
+                for (int i = 0; i < entries.Count - 1; i++)
+                {
+                    var cur = entries[i];
+                    var next = entries[i + 1];
+                    int count = next.Lba - cur.Lba;
+
+                    // Multi-session / Enhanced CD: a session ends ~11,400 sectors (lead-out + lead-in + pre-gap) before the
+                    // track that opens the next session.
+                    bool nextStartsNewSession = next.Number != 0xAA &&
+                        ((firstTrackOfLastSession != null && next.Number == firstTrackOfLastSession) ||
+                         (firstTrackOfLastSession == null && !cur.IsData && next.IsData));
+                    if (nextStartsNewSession && count > 11_400)
+                    {
+                        count -= 11_400;
+                    }
+
+                    if (count > 0)
+                    {
+                        tracks.Add(new DiscTocTrack(cur.Number, cur.Lba, count, !cur.IsData));
+                    }
+                }
+
+                parsedTracks = tracks;
+            }
+        }
+
+        return TrimDataTrackRunOut(volumePath, parsedTracks);
+    }
+
+    private static IReadOnlyList<DiscTocTrack> TrimDataTrackRunOut(string volumePath, IReadOnlyList<DiscTocTrack> tracks)
+    {
+        if (tracks.Count == 0 || !tracks.Any(t => !t.IsAudio))
+        {
+            return tracks;
+        }
+
+        using var source = OpenBestSource(volumePath, raw: false, out _);
+        if (source == null)
+        {
+            return tracks;
+        }
+
+        byte[] sector = new byte[OpticalConstants.DataSectorSize];
+        var adjusted = new List<DiscTocTrack>(tracks.Count);
+
+        foreach (var track in tracks)
+        {
+            if (track.IsAudio || track.SectorCount <= 2)
+            {
+                adjusted.Add(track);
+                continue;
+            }
+
+            int isoVolumeEndLba = 0;
+            if (track.SectorCount > 16 && source.Read(track.StartLba + 16, 1, sector) == null &&
+                sector[0] == 0x01 && sector[1] == (byte)'C' && sector[2] == (byte)'D' &&
+                sector[3] == (byte)'0' && sector[4] == (byte)'0' && sector[5] == (byte)'1')
+            {
+                isoVolumeEndLba = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(sector.AsSpan(80, 4));
+            }
+
+            // Orange Book / MMC TAO data tracks record up to 2 non-user run-out blocks immediately before the session
+            // Lead-Out. Trim up to 2 unreadable trailing blocks only when they sit past any ISO/UDF VolumeSpaceSize,
+            // so pressed DAO discs keep every sector and genuine media damage inside the filesystem is never masked.
+            int endLba = track.StartLba + track.SectorCount;
+            for (int trim = 0; trim < 2 && endLba - track.StartLba > 1; trim++)
+            {
+                int candidate = endLba - 1;
+                if (isoVolumeEndLba > track.StartLba && candidate < isoVolumeEndLba)
+                {
+                    break;
+                }
+
+                if (source.Read(candidate, 1, sector) == null)
+                {
+                    break;
+                }
+
+                endLba--;
+            }
+
+            adjusted.Add(track with { SectorCount = endLba - track.StartLba });
+        }
+
+        return adjusted;
+    }
+
+    /// <summary>
+    /// Parses a raw MMC Full TOC (Format 0x02, MSF=1) response into per-track LBA spans bounded by each session's
+    /// Point 0xA2 Lead-Out descriptor so multi-session inter-session gaps are excluded.
+    /// </summary>
+    public static IReadOnlyList<DiscTocTrack> ParseFullToc(byte[] response, int validLength)
+    {
+        if (validLength < 15)
+        {
+            return Array.Empty<DiscTocTrack>();
+        }
+
+        int dataLen = (response[0] << 8) | response[1];
+        int endOffset = Math.Min(validLength, dataLen + 2);
+        if (endOffset < 15)
+        {
+            return Array.Empty<DiscTocTrack>();
+        }
+
+        var sessionLeadOuts = new Dictionary<int, int>();
+        var rawTracks = new List<(int Number, int Session, int StartLba, bool IsData)>();
+
+        for (int off = 4; off + 11 <= endOffset; off += 11)
+        {
+            int session = response[off];
+            int adr = (response[off + 1] >> 4) & 0x0F;
+            int control = response[off + 1] & 0x0F;
+            int point = response[off + 3];
+            if (adr != 1)
+            {
+                continue;
+            }
+
+            int pLba = (response[off + 8] * 60 + response[off + 9]) * 75 + response[off + 10] - 150;
+            if (point == 0xA2)
+            {
+                sessionLeadOuts[session] = pLba;
+            }
+            else if (point is >= 1 and <= 99)
+            {
+                rawTracks.Add((point, session, pLba, (control & 0x04) != 0));
+            }
+        }
+
+        if (rawTracks.Count == 0)
+        {
+            return Array.Empty<DiscTocTrack>();
+        }
+
+        var ordered = rawTracks
+            .GroupBy(t => t.Number)
+            .Select(g => g.First())
+            .OrderBy(t => t.StartLba)
+            .ToList();
+
+        var result = new List<DiscTocTrack>(ordered.Count);
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            var cur = ordered[i];
+            int endLba;
+            if (i + 1 < ordered.Count && ordered[i + 1].Session == cur.Session)
+            {
+                endLba = ordered[i + 1].StartLba;
+            }
+            else if (sessionLeadOuts.TryGetValue(cur.Session, out int leadOutLba))
+            {
+                endLba = leadOutLba;
+            }
+            else if (i + 1 < ordered.Count)
+            {
+                endLba = Math.Max(cur.StartLba, ordered[i + 1].StartLba - 11_400);
+            }
+            else
+            {
+                continue;
+            }
+
+            int count = endLba - cur.StartLba;
             if (count > 0)
             {
-                tracks.Add(new DiscTocTrack(cur.Number, cur.Lba, count, !cur.IsData));
+                result.Add(new DiscTocTrack(cur.Number, cur.StartLba, count, !cur.IsData));
             }
         }
 
-        return tracks;
+        return result;
     }
 
     // READ CD byte 9: bit 4 = user data (all 2352 bytes for CD-DA), bits 2..1 = 01b -> 294-byte C2 error pointer block.
@@ -489,16 +686,37 @@ public static partial class PhysicalSectorReader
         }
 
         using var handle = OpenDevice(volumePath, FileAccess.Read, out _);
-        if (handle == null)
+        if (handle != null)
         {
-            return null;
+            // 1. IOCTL_CDROM_READ_TOC_EX Format 1 (Session Info): Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA
+            byte[] sessionReq = { TocFormatSession, 0, 0, 0 };
+            byte[] session = new byte[16];
+            if (DeviceIoControlBuffer(handle, IOCTL_CDROM_READ_TOC_EX, sessionReq, session, out _) && session[3] > 0)
+            {
+                return session[3];
+            }
+
+            // 2. Legacy IOCTL_CDROM_GET_LAST_SESSION
+            if (DeviceIoControlBuffer(handle, IOCTL_CDROM_GET_LAST_SESSION, Array.Empty<byte>(), session, out _) && session[3] > 0)
+            {
+                return session[3];
+            }
         }
 
-        // CDROM_TOC_SESSION_DATA: Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA
-        byte[] session = new byte[12];
-        return DeviceIoControlBuffer(handle, IOCTL_CDROM_GET_LAST_SESSION, Array.Empty<byte>(), session, out _) && session[3] > 0
-            ? session[3]
-            : null;
+        using var rw = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+        if (rw != null)
+        {
+            using var transport = new Win32ScsiTransport(rw, ownsHandle: false);
+            byte[] response = new byte[16];
+            byte[] cdb = MmcCommandBuilder.BuildReadTocPmaAtipCdb(TocFormatSession, 0, (ushort)response.Length);
+            var result = transport.ExecuteCommand(cdb, response, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(5));
+            if (result.IsSuccess && response[3] > 0)
+            {
+                return response[3];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -526,7 +744,13 @@ public static partial class PhysicalSectorReader
                     uint lastLba = (uint)(data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3]);
                     if (lastLba > 0 && lastLba < int.MaxValue)
                     {
-                        return (int)lastLba + 1;
+                        int count = (int)lastLba + 1;
+                        if (count is > 16 and <= 450_000)
+                        {
+                            count = TrimReadCapacityCdRunOut(transport, count);
+                        }
+
+                        return count;
                     }
                 }
             }
@@ -547,6 +771,64 @@ public static partial class PhysicalSectorReader
         }
 
         return null;
+    }
+
+    private static int TrimReadCapacityCdRunOut(Win32ScsiTransport transport, int count)
+    {
+        // MMC READ CAPACITY (10) on TAO CDs often reports Lead-Out - 1, which includes up to 2 non-user TAO run-out
+        // blocks. Probe the last 2 sectors and trim unreadable run-out blocks only when past ISO VolumeSpaceSize.
+        int lastSessionStartLba = 0;
+        byte[] sessionResp = new byte[12];
+        byte[] sessionCdb = MmcCommandBuilder.BuildReadTocPmaAtipCdb(TocFormatSession, 0, (ushort)sessionResp.Length);
+        var sessionRes = transport.ExecuteCommand(sessionCdb, sessionResp, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(5));
+        if (!sessionRes.IsSuccess || sessionResp[3] == 0 || (sessionResp[5] & 0x04) == 0)
+        {
+            // Audio-only session (Control bit 2 == 0) or unknown session info: never probe with Mode 1 READ(10).
+            return count;
+        }
+
+        int sessLba = (sessionResp[8] << 24) | (sessionResp[9] << 16) | (sessionResp[10] << 8) | sessionResp[11];
+        if (sessLba >= 0 && sessLba + 16 < count)
+        {
+            lastSessionStartLba = sessLba;
+        }
+
+        byte[] sector = new byte[OpticalConstants.DataSectorSize];
+        int isoVolumeEndLba = 0;
+        var pvdRes = transport.ExecuteCommand(
+            BuildRead10Cdb(lastSessionStartLba + 16, 1),
+            sector,
+            ScsiPassThroughNative.SCSI_IOCTL_DATA_IN,
+            TimeSpan.FromSeconds(5));
+        if (pvdRes.IsSuccess &&
+            sector[0] == 0x01 && sector[1] == (byte)'C' && sector[2] == (byte)'D' &&
+            sector[3] == (byte)'0' && sector[4] == (byte)'0' && sector[5] == (byte)'1')
+        {
+            isoVolumeEndLba = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(sector.AsSpan(80, 4));
+        }
+
+        for (int trim = 0; trim < 2 && count > 1; trim++)
+        {
+            int candidate = count - 1;
+            if (isoVolumeEndLba > lastSessionStartLba && candidate < isoVolumeEndLba)
+            {
+                break;
+            }
+
+            var probe = transport.ExecuteCommand(
+                BuildRead10Cdb(candidate, 1),
+                sector,
+                ScsiPassThroughNative.SCSI_IOCTL_DATA_IN,
+                TimeSpan.FromSeconds(5));
+            if (probe.IsSuccess)
+            {
+                break;
+            }
+
+            count--;
+        }
+
+        return count;
     }
 
     #region Sector sources

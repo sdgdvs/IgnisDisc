@@ -23,6 +23,14 @@ public class DataBurnService
         "Confirm that you want to replace them (command line: add --overwrite), or erase the disc first.";
 
     /// <summary>
+    /// Shown when a burn targets a finalized sequential rewritable disc (such as CD-RW or sequential DVD-RW)
+    /// that cannot be overwritten in place and must be erased first.
+    /// </summary>
+    public const string EraseRequiredMessage =
+        "This rewritable disc already has finalized data on it and must be erased before burning again " +
+        "(Drive Utilities -> Erase, or ignisdisc-cli erase --drive <id>).";
+
+    /// <summary>
     /// Gets the underlying burning engine backend.
     /// </summary>
     public IBurnEngineBackend BurnEngine => _burnEngine;
@@ -65,6 +73,11 @@ public class DataBurnService
         if (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable)
         {
             return DataBurnResult.Failed("Mounted media is not writable (disc is finalized or not appendable).");
+        }
+
+        if (mediaStatus.RequiresEraseToWrite)
+        {
+            return DataBurnResult.Failed(EraseRequiredMessage);
         }
 
         // 2. Build ISO image in memory
@@ -191,6 +204,11 @@ public class DataBurnService
         if (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable)
         {
             return DataBurnResult.Failed("Mounted media is not writable (disc is finalized or not appendable).");
+        }
+
+        if (mediaStatus.RequiresEraseToWrite)
+        {
+            return DataBurnResult.Failed(EraseRequiredMessage);
         }
 
         long streamLength = imageStream.CanSeek ? (imageStream.Length - imageStream.Position) : -1;

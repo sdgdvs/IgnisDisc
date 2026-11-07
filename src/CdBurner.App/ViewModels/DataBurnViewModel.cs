@@ -625,7 +625,10 @@ public class DataBurnViewModel : ObservableObject
     {
         bool includeIso = SelectedFileSystemPreset != FileSystemPreset.UdfOnly201;
         bool includeJoliet = SelectedFileSystemPreset == FileSystemPreset.IsoJolietUdf;
-        bool includeUdf = SelectedFileSystemPreset == FileSystemPreset.IsoJolietUdf
+        bool hasLargeFile = Compilation.Root.GetAllFilesRecursive().Any(f => f.SizeBytes > uint.MaxValue);
+        // When leaving a multi-session disc open under the default ISO+Joliet+UDF preset, omit UDF 1.02 unless a >= 4 GiB
+        // file requires it: otherwise Windows mounts Session 1's UDF anchor at LBA 256 and hides later Joliet sessions.
+        bool includeUdf = (SelectedFileSystemPreset == FileSystemPreset.IsoJolietUdf && (CloseDisc || hasLargeFile))
                        || SelectedFileSystemPreset == FileSystemPreset.UdfOnly201
                        || SelectedFileSystemPreset == FileSystemPreset.DvdVideoBridge;
 
@@ -923,7 +926,10 @@ public class DataBurnViewModel : ObservableObject
     {
         bool includeIso = SelectedFileSystemPreset != FileSystemPreset.UdfOnly201;
         bool includeJoliet = SelectedFileSystemPreset == FileSystemPreset.IsoJolietUdf;
-        bool includeUdf = SelectedFileSystemPreset == FileSystemPreset.IsoJolietUdf
+        bool hasLargeFile = Compilation.Root.GetAllFilesRecursive().Any(f => f.SizeBytes > uint.MaxValue);
+        // When leaving a multi-session disc open under the default ISO+Joliet+UDF preset, omit UDF 1.02 unless a >= 4 GiB
+        // file requires it: otherwise Windows mounts Session 1's UDF anchor at LBA 256 and hides later Joliet sessions.
+        bool includeUdf = (SelectedFileSystemPreset == FileSystemPreset.IsoJolietUdf && (CloseDisc || hasLargeFile))
                        || SelectedFileSystemPreset == FileSystemPreset.UdfOnly201
                        || SelectedFileSystemPreset == FileSystemPreset.DvdVideoBridge;
         ushort udfRev = SelectedFileSystemPreset == FileSystemPreset.UdfOnly201 ? (ushort)0x0201 : (ushort)0x0102;

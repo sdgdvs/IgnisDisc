@@ -65,6 +65,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         IDiscRecorder2? comRecorder = null;
         bool createdComRecorder = false;
         bool acquiredLock = false;
+        bool wasCancelled = false;
         var sw = Stopwatch.StartNew();
 
         try
@@ -138,17 +139,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                     // No speed requested: use the fastest speed the drive supports for this media. The list's order
                     // is not guaranteed (on an HL-DT-ST GP60NB50 the last entry was the slowest, so every default
                     // burn ran at 1x: 5 minutes to write 45 MB), so take the maximum value instead of an end.
-                    var supportedSpeeds = formatData.SupportedWriteSpeeds;
-                    if (supportedSpeeds != null)
-                    {
-                        foreach (var speed in supportedSpeeds)
-                        {
-                            if (speed != null)
-                            {
-                                targetSectorsPerSec = Math.Max(targetSectorsPerSec, Convert.ToInt32(speed));
-                            }
-                        }
-                    }
+                    targetSectorsPerSec = SelectMaxSupportedWriteSpeed(formatData.SupportedWriteSpeeds);
                 }
                 catch
                 {
@@ -164,6 +155,21 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                 catch
                 {
                 }
+            }
+
+            int negotiatedSectorsPerSec = targetSectorsPerSec;
+            DiscMediaType physicalMedia = DiscMediaType.CdR;
+            try
+            {
+                physicalMedia = ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(formatData.CurrentPhysicalMediaType);
+                int curSpeed = formatData.CurrentWriteSpeed;
+                if (curSpeed > 0)
+                {
+                    negotiatedSectorsPerSec = curSpeed;
+                }
+            }
+            catch
+            {
             }
 
             // 3. Connect event sink
@@ -223,7 +229,10 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
             long streamLength = imageStream.CanSeek ? imageStream.Length : 0;
             int sectorsWritten = OpticalConstants.BytesToSectors(streamLength, OpticalConstants.DataSectorSize);
-            double speedMultiplier = options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0;
+            int baseRate = WriteSpeedDescriptor.GetBaseRate(physicalMedia, isAudio: false);
+            double speedMultiplier = negotiatedSectorsPerSec > 0 && baseRate > 0
+                ? (double)((long)negotiatedSectorsPerSec * OpticalConstants.DataSectorSize) / baseRate
+                : (options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0);
 
             if (options.EjectWhenDone || options.EjectAfterBurn)
             {
@@ -240,18 +249,23 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         }
         catch (OperationCanceledException oce)
         {
+            wasCancelled = true;
             return BurnOperationResult.CancelledResult(oce.Message);
         }
         catch (COMException cex)
         {
             if (cancellationToken.IsCancellationRequested || (uint)cex.ErrorCode == 0xC0AA0406u)
             {
+                wasCancelled = true;
                 return BurnOperationResult.CancelledResult("Burn operation was cancelled by user.");
             }
-            if ((uint)cex.ErrorCode == 0xC0AA0405u)
+            if ((uint)cex.ErrorCode is 0xC0AA0405u or 0xC0AA0407u or 0xC0AA0206u)
             {
-                // The disc holds data and overwriting it was not allowed (used DVD+RW / DVD-RAM).
-                return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.ReplaceExistingDataMessage, cex);
+                string? friendly = ResolveNonBlankMediaErrorMessage(recorder, (uint)cex.ErrorCode == 0xC0AA0405u);
+                if (friendly != null)
+                {
+                    return BurnOperationResult.Failed(friendly, cex);
+                }
             }
             return BurnOperationResult.Failed($"IMAPIv2 COM error (0x{cex.ErrorCode:X8}): {cex.Message}", cex);
         }
@@ -259,6 +273,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         {
             if (cancellationToken.IsCancellationRequested)
             {
+                wasCancelled = true;
                 return BurnOperationResult.CancelledResult("Burn operation was cancelled.");
             }
             return BurnOperationResult.Failed($"Data burning failed: {ex.Message}", ex);
@@ -281,6 +296,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             if (acquiredLock)
             {
                 try { recorder.ReleaseExclusiveAccess(); } catch { }
+            }
+
+            if (wasCancelled && !recorder.IsVirtual)
+            {
+                PhysicalSectorReader.TrySpinDown(recorder.VolumePath);
             }
         }
     }
@@ -325,6 +345,8 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         IDiscRecorder2? comRecorder = null;
         bool createdComRecorder = false;
         bool acquiredLock = false;
+        bool wasCancelled = false;
+        int negotiatedAudioSectorsPerSec = -1;
         IDiscFormat2TrackAtOnce? tao = null;
         IDiscFormat2RawCD? rawCd = null;
         IRawCDImageCreator? rawCreator = null;
@@ -444,10 +466,28 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
                         try { rawCd.put_RequestedSectorType(resultingSectorType); } catch { }
 
+                        int rawTargetSectorsPerSec = -1;
                         if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0 && options.Speed.Value.BytesPerSecond != int.MaxValue)
                         {
-                            int sectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
-                            try { rawCd.SetWriteSpeed(sectorsPerSec, false); } catch { }
+                            rawTargetSectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
+                        }
+                        else
+                        {
+                            try { rawTargetSectorsPerSec = SelectMaxSupportedWriteSpeed(rawCd.SupportedWriteSpeeds); } catch { }
+                        }
+
+                        if (rawTargetSectorsPerSec > 0)
+                        {
+                            try { rawCd.SetWriteSpeed(rawTargetSectorsPerSec, false); } catch { }
+                            negotiatedAudioSectorsPerSec = rawTargetSectorsPerSec;
+                        }
+                        try
+                        {
+                            int curRawSpeed = rawCd.CurrentWriteSpeed;
+                            if (curRawSpeed > 0) negotiatedAudioSectorsPerSec = curRawSpeed;
+                        }
+                        catch
+                        {
                         }
 
                         CancellationTokenRegistration daoReg = default;
@@ -521,10 +561,28 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
                 try
                 {
+                    int taoTargetSectorsPerSec = -1;
                     if (options.Speed != null && options.Speed.Value.BytesPerSecond > 0 && options.Speed.Value.BytesPerSecond != int.MaxValue)
                     {
-                        int sectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
-                        try { tao.SetWriteSpeed(sectorsPerSec, false); } catch { }
+                        taoTargetSectorsPerSec = Math.Max(1, options.Speed.Value.BytesPerSecond / OpticalConstants.RawSectorSize);
+                    }
+                    else
+                    {
+                        try { taoTargetSectorsPerSec = SelectMaxSupportedWriteSpeed(tao.SupportedWriteSpeeds); } catch { }
+                    }
+
+                    if (taoTargetSectorsPerSec > 0)
+                    {
+                        try { tao.SetWriteSpeed(taoTargetSectorsPerSec, false); } catch { }
+                        negotiatedAudioSectorsPerSec = taoTargetSectorsPerSec;
+                    }
+                    try
+                    {
+                        int curTaoSpeed = tao.CurrentWriteSpeed;
+                        if (curTaoSpeed > 0) negotiatedAudioSectorsPerSec = curTaoSpeed;
+                    }
+                    catch
+                    {
                     }
 
                     CancellationTokenRegistration taoReg = default;
@@ -583,7 +641,9 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
 
             sw.Stop();
-            double speedMultiplier = options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0;
+            double speedMultiplier = negotiatedAudioSectorsPerSec > 0
+                ? (double)((long)negotiatedAudioSectorsPerSec * OpticalConstants.RawSectorSize) / OpticalConstants.CdAudio1XBytesPerSec
+                : (options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0);
 
             if (options.EjectWhenDone)
             {
@@ -605,18 +665,23 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         }
         catch (OperationCanceledException oce)
         {
+            wasCancelled = true;
             return BurnOperationResult.CancelledResult(oce.Message);
         }
         catch (COMException cex)
         {
             if (cancellationToken.IsCancellationRequested || (uint)cex.ErrorCode == 0xC0AA0406u)
             {
+                wasCancelled = true;
                 return BurnOperationResult.CancelledResult("Burn operation was cancelled by user.");
             }
-            if ((uint)cex.ErrorCode == 0xC0AA0405u)
+            if ((uint)cex.ErrorCode is 0xC0AA0405u or 0xC0AA0407u or 0xC0AA0206u)
             {
-                // The disc holds data and overwriting it was not allowed (used DVD+RW / DVD-RAM).
-                return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.ReplaceExistingDataMessage, cex);
+                string? friendly = ResolveNonBlankMediaErrorMessage(recorder, (uint)cex.ErrorCode == 0xC0AA0405u);
+                if (friendly != null)
+                {
+                    return BurnOperationResult.Failed(friendly, cex);
+                }
             }
             return BurnOperationResult.Failed($"IMAPIv2 COM error (0x{cex.ErrorCode:X8}): {cex.Message}", cex);
         }
@@ -624,6 +689,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         {
             if (cancellationToken.IsCancellationRequested)
             {
+                wasCancelled = true;
                 return BurnOperationResult.CancelledResult("Burn operation was cancelled.");
             }
             return BurnOperationResult.Failed($"Audio burning failed: {ex.Message}", ex);
@@ -638,7 +704,52 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             {
                 try { recorder.ReleaseExclusiveAccess(); } catch { }
             }
+            if (wasCancelled && !recorder.IsVirtual)
+            {
+                PhysicalSectorReader.TrySpinDown(recorder.VolumePath);
+            }
         }
+    }
+
+    private static int SelectMaxSupportedWriteSpeed(Array? supportedSpeeds)
+    {
+        int maxSectorsPerSec = -1;
+        if (supportedSpeeds == null) return maxSectorsPerSec;
+
+        foreach (var speed in supportedSpeeds)
+        {
+            if (speed != null)
+            {
+                maxSectorsPerSec = Math.Max(maxSectorsPerSec, Convert.ToInt32(speed));
+            }
+        }
+
+        return maxSectorsPerSec;
+    }
+
+    private static string? ResolveNonBlankMediaErrorMessage(IDiscRecorderBackend recorder, bool isForceOverwriteError)
+    {
+        try
+        {
+            var st = recorder.QueryMediaStatus();
+            if (st.IsRewritable && !st.IsOverwriteOnly)
+            {
+                return CdBurner.Core.Burning.DataBurnService.EraseRequiredMessage;
+            }
+            if (st.IsOverwriteOnly || isForceOverwriteError)
+            {
+                return CdBurner.Core.Burning.DataBurnService.ReplaceExistingDataMessage;
+            }
+        }
+        catch
+        {
+            if (isForceOverwriteError)
+            {
+                return CdBurner.Core.Burning.DataBurnService.ReplaceExistingDataMessage;
+            }
+        }
+
+        return null;
     }
 
     private static (Stream? Stream, bool OwnsStream) OpenAudioTrackStream(AudioTrackSource trk)

@@ -330,24 +330,38 @@ public sealed class BurnTargetDialog : Window
             if (status.MediaPresent && status.MediaType != DiscMediaType.NoMedia)
             {
                 double mb = status.TotalCapacityBytes / (1024.0 * 1024.0);
-                string stateDesc = status.IsBlank ? "Blank / Ready to Burn" : (status.IsAppendable ? "Appendable" : (status.IsRewritable ? "Rewritable" : "Non-Blank"));
+                string stateDesc = status.IsBlank
+                    ? "Blank / Ready to Burn"
+                    : (status.IsAppendable
+                        ? "Appendable"
+                        : (status.RequiresEraseToWrite
+                            ? "Finalized (Erase Required)"
+                            : (status.IsRewritable ? "Rewritable" : "Non-Blank")));
                 _mediaStatusText.Text = $"Inserted Disc: {status.MediaType.GetDisplayName()} — {stateDesc}\nCapacity: {mb:F1} MB ({status.FreeSectors:N0} free sectors)";
 
-                if (status.HasDataThatBurningReplaces)
+                if (status.RequiresEraseToWrite)
+                {
+                    _warningText.Text = $"⚠ The {status.MediaType.GetDisplayName()} in {rec.VolumePath} already has finalized data on it and must be erased before burning again (Drive Utilities -> Erase).";
+                    _warningBorder.Visibility = Visibility.Visible;
+                    _burnButton.IsEnabled = false;
+                }
+                else if (status.HasDataThatBurningReplaces)
                 {
                     _warningText.Text = $"⚠ The {status.MediaType.GetDisplayName()} in {rec.VolumePath} already has files on it. Burning will REPLACE everything on the disc. Click Burn only if you no longer need those files.";
                     _warningBorder.Visibility = Visibility.Visible;
+                    _burnButton.IsEnabled = true;
                 }
                 else if (!status.IsBlank && !status.IsAppendable && !status.IsRewritable)
                 {
                     _warningText.Text = $"⚠ The disc in {rec.VolumePath} does not appear to be blank. Please insert a blank writable disc and click Refresh.";
                     _warningBorder.Visibility = Visibility.Visible;
+                    _burnButton.IsEnabled = false;
                 }
                 else
                 {
                     _warningBorder.Visibility = Visibility.Collapsed;
+                    _burnButton.IsEnabled = true;
                 }
-                _burnButton.IsEnabled = true;
             }
             else
             {

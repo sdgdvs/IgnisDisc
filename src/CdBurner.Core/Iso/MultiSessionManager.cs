@@ -63,29 +63,66 @@ public static class MultiSessionManager
             }
         }
 
-        // Hardware / generic fallback: read sectors starting at sessionStartLba into memory stream
+        // Hardware / generic fallback: read the session's Primary Volume Descriptor first (at +16 sectors)
+        // so we bound the read to the session's exact ISO VolumeSpaceSize and never hit TAO run-out/gap sectors.
         int sessionStartLba = DetermineSessionStartLba(recorder, sessionIndex, status);
-        int remainingSectorsOnDisc = status.UsedSectors > sessionStartLba
-            ? status.UsedSectors - sessionStartLba
-            : 1000;
-        int sectorsToRead = Math.Min(remainingSectorsOnDisc > 0 ? remainingSectorsOnDisc : 512, 2048);
-
         var memoryStream = new MemoryStream();
-        var ripResult = await engine.ReadSectorsAsync(
+
+        const int HeaderSectors = 17;
+        var headerResult = await engine.ReadSectorsAsync(
             recorder,
             startLba: sessionStartLba,
-            sectorCount: sectorsToRead,
+            sectorCount: HeaderSectors,
             raw2352Mode: false,
-            sectorConsumer: async (lba, memory) =>
+            sectorConsumer: async (_, memory) =>
             {
                 await memoryStream.WriteAsync(memory, cancellationToken).ConfigureAwait(false);
             },
             progress: null,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        if (!ripResult.Success)
+        if (!headerResult.Success)
         {
-            throw new InvalidOperationException($"Failed to read sectors from media for session import: {ripResult.ErrorMessage}", ripResult.Exception);
+            throw new InvalidOperationException($"Failed to read session header sectors at LBA {sessionStartLba}: {headerResult.ErrorMessage}", headerResult.Exception);
+        }
+
+        int totalSessionSectors = status.UsedSectors > sessionStartLba ? status.UsedSectors - sessionStartLba : 512;
+        if (memoryStream.Length >= HeaderSectors * OpticalConstants.DataSectorSize)
+        {
+            byte[] pvd = new byte[OpticalConstants.DataSectorSize];
+            memoryStream.Position = 16L * OpticalConstants.DataSectorSize;
+            memoryStream.ReadExactly(pvd);
+            memoryStream.Position = memoryStream.Length;
+
+            if (pvd[0] == 0x01 && System.Text.Encoding.ASCII.GetString(pvd.AsSpan(1, 5)) == "CD001")
+            {
+                int volumeEndLba = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(pvd.AsSpan(80, 4));
+                if (volumeEndLba > sessionStartLba)
+                {
+                    totalSessionSectors = volumeEndLba - sessionStartLba;
+                }
+            }
+        }
+
+        int remainingToRead = Math.Clamp(totalSessionSectors, HeaderSectors, 4096) - HeaderSectors;
+        if (remainingToRead > 0)
+        {
+            var ripResult = await engine.ReadSectorsAsync(
+                recorder,
+                startLba: sessionStartLba + HeaderSectors,
+                sectorCount: remainingToRead,
+                raw2352Mode: false,
+                sectorConsumer: async (_, memory) =>
+                {
+                    await memoryStream.WriteAsync(memory, cancellationToken).ConfigureAwait(false);
+                },
+                progress: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (!ripResult.Success)
+            {
+                throw new InvalidOperationException($"Failed to read sectors from media for session import: {ripResult.ErrorMessage}", ripResult.Exception);
+            }
         }
 
         memoryStream.Position = 0;
@@ -217,6 +254,19 @@ public static class MultiSessionManager
                     {
                         return sLba;
                     }
+                }
+            }
+        }
+
+        if (recorder is IDiscTocProvider tocProvider)
+        {
+            var dataTracks = tocProvider.ReadTableOfContents().Where(t => !t.IsAudio).ToList();
+            if (dataTracks.Count > 0)
+            {
+                int idx = sessionIndex ?? (dataTracks.Count - 1);
+                if (idx >= 0 && idx < dataTracks.Count)
+                {
+                    return Math.Max(0, dataTracks[idx].StartLba);
                 }
             }
         }

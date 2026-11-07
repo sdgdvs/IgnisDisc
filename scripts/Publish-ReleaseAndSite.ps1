@@ -17,14 +17,13 @@
         -SocialUrl "https://linkedin.com/in/yourprofile"
 #>
 param(
-    [string]$Version = "1.07",
+    [string]$Version = "1.08",
     [string]$GitHubRepo = "",
     [string]$FirebaseProjectId = "ignisdisc-studio",
     [string]$EngineerInitials = "DT",
-    [string]$EngineerName = "tetherworks",
-    [string]$EngineerRole = "Forward-Deployed Systems & AI-Augmented Engineering",
+    [string]$EngineerName = "tetherworks Systems",
+    [string]$EngineerRole = "Open-Source Hardware & Software Systems",
     [string]$ContactEmail = "dev@tetherworks.dev",
-    [string]$SocialUrl = "https://github.com",
     [switch]$RebuildBinaries,
     [switch]$SkipGitHubRelease,
     [switch]$SkipFirebaseDeploy
@@ -59,7 +58,7 @@ if (-not [string]::IsNullOrWhiteSpace($GitHubRepo)) {
     $GithubRepoUrl = "https://github.com/$GitHubRepo"
     $SetupUrl      = "$GithubRepoUrl/releases/download/v$Version/IgnisDisc-Setup.exe"
     $PortableUrl   = "$GithubRepoUrl/releases/download/v$Version/IgnisDisc-Portable-win-x64.zip"
-    $MailtoUrl     = "mailto:$ContactEmail?subject=FDE%20%2F%20Systems%20Engineering%20Inquiry%20(via%20IgnisDisc)"
+    $MailtoUrl     = "mailto:$ContactEmail?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Inquiry"
 
     $AppJsPath = Join-Path $RepoRoot "web\public\app.js"
     $AppJs = Get-Content $AppJsPath -Raw
@@ -71,7 +70,6 @@ if (-not [string]::IsNullOrWhiteSpace($GitHubRepo)) {
     $AppJs = $AppJs -replace 'name:\s*"[^"]*"', ("name: `"" + (Escape-JsAndRegexReplacement $EngineerName) + "`"")
     $AppJs = $AppJs -replace 'role:\s*"[^"]*"', ("role: `"" + (Escape-JsAndRegexReplacement $EngineerRole) + "`"")
     $AppJs = $AppJs -replace 'email:\s*"[^"]*"', ("email: `"" + (Escape-JsAndRegexReplacement $MailtoUrl) + "`"")
-    $AppJs = $AppJs -replace 'linkedinUrl:\s*"[^"]*"', ("linkedinUrl: `"" + (Escape-JsAndRegexReplacement $SocialUrl) + "`"")
     Set-Content -Path $AppJsPath -Value $AppJs -Encoding UTF8
     Write-Host "==> Updated web/public/app.js with GitHub release URLs and FDE profile." -ForegroundColor Green
 }
@@ -96,10 +94,11 @@ if (-not $SkipGitHubRelease -and -not [string]::IsNullOrWhiteSpace($GitHubRepo))
 - **Portable Archive (`IgnisDisc-Portable-win-x64.zip`)**: `$PortableHash`
 
 ### Highlights
-- Native .NET 10 (`win-x64`) Windows 10/11 Fluent Desktop Studio + `cdburner-cli.exe`
-- ISO 9660 / Joliet / UDF 2.60, Dual BIOS + UEFI El Torito Boot, Red Book DAO/TAO + Lead-In CD-Text
-- Safe 16x write speed floor for modern optical dye & explicit SCSI `0x1B` (`START_STOP_UNIT`) drive spin-down
-- Verified against 356 automated hardware-free tests via `VirtualDiscBackend`
+- Native .NET 10 (`win-x64`) Windows 10/11 Fluent Desktop Studio (`IgnisDisc.exe`) + `ignisdisc-cli.exe`
+- ISO 9660 / Joliet / UDF 1.02 Bridge, Multi-Session CD/DVD, Dual BIOS + UEFI El Torito Boot, and Red Book DAO/TAO Audio
+- Secure C2 Audio Ripping + AccurateRip + Read-Offset Detection, and Multi-Disc Archive Studio (SHA-256 manifests + PAR2)
+- Max supported write-speed negotiation, finalized CD-RW erase guard, Full TOC (`0x02`) surface scanning & SCSI `0x1B` (`START_STOP_UNIT`) spin-down
+- Verified against 481 automated hardware-free tests via `VirtualDiscBackend` plus physical optical media testing
 "@
     & gh release create "v$Version" $InstallerExe $PortableZip --repo $GitHubRepo --title "IgnisDisc Optical Studio v$Version" --notes $ReleaseNotes
 }

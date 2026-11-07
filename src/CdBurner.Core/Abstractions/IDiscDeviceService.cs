@@ -148,6 +148,12 @@ public class MediaStatusDto
     /// </summary>
     public bool HasDataThatBurningReplaces => MediaPresent && IsOverwriteOnly && !IsBlank;
 
+    /// <summary>
+    /// True when the inserted disc is a sequential rewritable medium (such as CD-RW or sequential DVD-RW)
+    /// that has been finalized or filled and must be erased before it can be written again.
+    /// </summary>
+    public bool RequiresEraseToWrite => MediaPresent && IsRewritable && !IsOverwriteOnly && !IsBlank && !IsAppendable;
+
     public int TotalSectors { get; init; }
     public int FreeSectors { get; init; }
     public int UsedSectors { get; init; }

@@ -786,6 +786,67 @@ public sealed class Phase19_CliIntegrationTests : IDisposable
         public void Dispose() { }
     }
 
+    [Fact]
+    public async Task BurnData_MultiSessionCli_MergesPreviousSessionAndOmitsUdfWhenOpen()
+    {
+        string session1Dir = Path.Combine(_tempDir, "ms_s1");
+        string session2Dir = Path.Combine(_tempDir, "ms_s2");
+        Directory.CreateDirectory(Path.Combine(session1Dir, "Docs"));
+        Directory.CreateDirectory(session2Dir);
+
+        File.WriteAllText(Path.Combine(session1Dir, "Docs", "FirstSession.txt"), "kept across sessions");
+        File.WriteAllText(Path.Combine(session1Dir, "Shared.txt"), "v1");
+        File.WriteAllText(Path.Combine(session2Dir, "Shared.txt"), "v2-updated");
+        File.WriteAllText(Path.Combine(session2Dir, "SecondSession.txt"), "added in session 2");
+
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+
+        // Session 1 (--no-close)
+        var (s1Out, s1Err) = CreateStringWriters();
+        int s1Code = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", session1Dir, "--label", "MS_S1", "--no-close", "--verify", "--json" },
+            s1Out, s1Err, _deviceService, _burnEngine);
+        Assert.Equal(0, s1Code);
+        Assert.False(medium.IsFinalized);
+        Assert.Single(medium.Sessions);
+
+        using (var s1Stream = medium.CreateReadStream())
+        using (var s1Reader = CdBurner.Core.Iso.IsoImageReader.FromStream(s1Stream, leaveOpen: true, sessionStartLba: 0))
+        {
+            Assert.False(s1Reader.HasUdf);
+            Assert.True(s1Reader.HasJoliet);
+        }
+
+        // Session 2 (closes disc, automatically merges Session 1)
+        int s2StartLba = medium.NextWritableLba;
+        var (s2Out, s2Err) = CreateStringWriters();
+        int s2Code = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", session2Dir, "--label", "MS_S2", "--verify", "--json" },
+            s2Out, s2Err, _deviceService, _burnEngine);
+        Assert.Equal(0, s2Code);
+        Assert.True(medium.IsFinalized);
+        Assert.Equal(2, medium.Sessions.Count);
+
+        using (var finalStream = medium.CreateReadStream())
+        using (var s2Reader = CdBurner.Core.Iso.IsoImageReader.FromStream(finalStream, leaveOpen: true, sessionStartLba: s2StartLba))
+        {
+            Assert.NotNull(s2Reader.FindFile("/Docs/FirstSession.txt"));
+            Assert.NotNull(s2Reader.FindFile("/SecondSession.txt"));
+            var shared = s2Reader.FindFile("/Shared.txt");
+            Assert.NotNull(shared);
+            Assert.Equal("v2-updated".Length, shared!.SizeBytes);
+        }
+
+        // Attempting to burn again to finalized CD-RW must require erase even with --overwrite
+        var (failOut, failErr) = CreateStringWriters();
+        int failCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", session2Dir, "--overwrite" },
+            failOut, failErr, _deviceService, _burnEngine);
+        Assert.Equal(1, failCode);
+        Assert.Contains("must be erased", failErr.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class OptionsCapturingEngine : IBurnEngineBackend
     {
         public DataBurnOptions? Options { get; private set; }

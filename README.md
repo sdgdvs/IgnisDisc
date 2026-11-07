@@ -28,10 +28,10 @@ pipeline can be tested without hardware or blank media.
 | Secure audio ripping (C2 error pointers + re-reads) | ✅ | ✅ | Flags suspect sectors; can be slow on badly scratched discs |
 | Archive Studio: span folders across discs | ✅ | ✅ | SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) |
 | Quick / full erase of rewritable media | ✅ | ✅ | |
-| Re-burn a used DVD+RW / DVD-RAM | ✅ | ✅ | Asks before replacing the files on the disc (`--overwrite` on the command line) |
-| Surface scan | ✅ | ✅ | |
-| Append a session (multi-session) | ⚠️ | ✅ | Appended sessions are ISO 9660 + Joliet (no UDF) |
-| Bootable discs (El Torito BIOS + UEFI) | ⚠️ | ✅ | Image creation tested; boot behaviour depends on your loaders |
+| Re-burn a used DVD+RW / DVD-RAM | ✅ | ✅ | Asks before replacing the files on the disc (`--overwrite` on the command line); finalized CD-RW / sequential DVD-RW require `erase` first |
+| Surface scan | ✅ | ✅ | Per-track Full TOC (`0x02`) scan skips unrecorded multi-session gaps and auto-selects 2352B raw mode on audio tracks |
+| Append a session (multi-session) | ✅ | ✅ | Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions |
+| Bootable discs (El Torito BIOS + UEFI) | ✅ | ✅ | Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders |
 | DVD-Video authoring | ⚠️ | ✅ | Requires `ffmpeg.exe`; test on a standalone player before relying on it |
 | CD-Text / ISRC on burned audio CDs | ❌ | ✅ | IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and `.cue` files |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
@@ -63,7 +63,8 @@ ignisdisc-cli <command> [options]
   burn-iso   --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--no-close] [--overwrite]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite]
-  burn-audio --drive <id> --tracks <a.wav,b.wav,...> [--title <album>] [--artist <name>] [--dao]
+  burn-audio --drive <id> --tracks <a.wav,b.flac,...> [--title <album>] [--artist <name>]
+             [--speed <X>] [--dao]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
@@ -84,7 +85,8 @@ shown by `drives`.
 ISO 9660 plus the file systems you name.
 
 `--overwrite`: a used DVD+RW or DVD-RAM is rewritten from the start, so a burn replaces every file on it. Burns refuse
-to do that unless you pass `--overwrite` (or erase the disc first).
+to do that unless you pass `--overwrite`. Sequential rewritable discs (CD-RW, sequential DVD-RW) cannot be overwritten
+in place once finalized—run `ignisdisc-cli erase --drive <id>` before burning them again.
 
 Examples:
 

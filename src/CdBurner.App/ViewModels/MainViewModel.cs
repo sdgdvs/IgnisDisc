@@ -206,6 +206,11 @@ public class MainViewModel : ObservableObject, IDisposable
             catch
             {
             }
+
+            if (!_selectedRecorder.IsVirtual)
+            {
+                CdBurner.Hardware.Scsi.PhysicalSectorReader.TrySpinDown(_selectedRecorder.VolumePath);
+            }
         }
     }
 
