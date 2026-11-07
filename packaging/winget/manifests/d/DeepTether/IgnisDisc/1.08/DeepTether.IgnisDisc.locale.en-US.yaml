@@ -3,10 +3,10 @@
 PackageIdentifier: TetherWorks.IgnisDisc
 PackageVersion: "1.08"
 PackageLocale: en-US
-Publisher: tetherworks Systems
-PublisherUrl: https://ignisdisc-studio.web.app
+Publisher: tetherWorks
+PublisherUrl: https://ignisdisc.tetherworks.dev
 PackageName: IgnisDisc Optical Studio
-PackageUrl: https://ignisdisc-studio.web.app
+PackageUrl: https://ignisdisc.tetherworks.dev
 License: MIT
 LicenseUrl: https://github.com/tether-works/IgnisDisc/blob/master/LICENSE
 ShortDescription: Zero-bloat Windows 10/11 CD, DVD & Blu-ray burning, C2/AccurateRip audio ripping, and multi-disc archival studio.

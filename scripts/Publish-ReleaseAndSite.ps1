@@ -20,10 +20,10 @@ param(
     [string]$Version = "1.08",
     [string]$GitHubRepo = "",
     [string]$FirebaseProjectId = "ignisdisc-studio",
-    [string]$EngineerInitials = "DT",
-    [string]$EngineerName = "tetherworks Systems",
+    [string]$EngineerInitials = "TW",
+    [string]$EngineerName = "tetherWorks",
     [string]$EngineerRole = "Open-Source Hardware & Software Systems",
-    [string]$ContactEmail = "dev@tetherworks.dev",
+    [string]$ContactEmail = "developer@tetherworks.local",
     [switch]$RebuildBinaries,
     [switch]$SkipGitHubRelease,
     [switch]$SkipFirebaseDeploy

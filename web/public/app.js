@@ -8,10 +8,10 @@ const SITE_CONFIG = {
   setupDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Setup.exe",
   portableDownloadUrl: "https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Portable-win-x64.zip",
   engineer: {
-    initials: "DT",
-    name: "tetherworks Systems",
+    initials: "TW",
+    name: "tetherWorks",
     role: "Open-Source Hardware & Software Systems",
-    email: "mailto:dev@tetherworks.dev?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Note"
+    email: "mailto:developer@tetherworks.local?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Note"
   }
 };
 
