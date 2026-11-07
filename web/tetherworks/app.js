@@ -1,7 +1,7 @@
 const SNIPPETS = {
   ignis: {
     badge: "IGNISDISC v1.08 / VERIFICATION",
-    code: `Virtual Suite : 481 / 481 automated tests passing (~6s via VirtualDiscBackend)
+    code: `Virtual Suite : 510 / 510 automated tests passing (~4s + 25 drive/media personas)
 Compiler Gate : .NET 10 Release (win-x64) — 0 Warnings, 0 Errors
 Physical Media: Verified across CD-R, CD-RW, DVD-R, and DVD+RW hardware
 Capabilities  : Multi-session ISO/UDF, Dual BIOS/UEFI boot, C2/AccurateRip, PAR2`,
