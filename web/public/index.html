@@ -26,7 +26,6 @@
       <nav class="main-nav" aria-label="Primary Navigation">
         <a href="#features">/features</a>
         <a href="#cli">/cli</a>
-        <a href="#architecture">/under-the-hood</a>
         <a id="navGithubLink" href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">github ↗</a>
       </nav>
 
@@ -212,38 +211,6 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output "C:\Rips" --format fl
 # 5. Stage a multi-disc archive with 10% PAR2 recovery &amp; verify the burned disc
 PS C:\&gt; ignisdisc-cli.exe archive-stage --input "C:\Photos" --staging "C:\Stage" --media cdr --redundancy 10
 PS C:\&gt; ignisdisc-cli.exe archive-verify --path H:\ --json</code></pre>
-      </div>
-    </section>
-
-    <!-- 03 // UNDER THE HOOD & HOW IT WAS BUILT -->
-    <section class="section" id="architecture">
-      <div class="section-bar">
-        <h2>03 // Under the Hood (Simulator-First &amp; Hardware-Verified)</h2>
-        <span class="section-meta">Architecture &amp; verification notes</span>
-      </div>
-
-      <div class="arch-grid">
-        <div class="arch-box">
-          <h3>Native .NET 10 + MTA COM + SCSI Pass-Through</h3>
-          <p>
-            IgnisDisc avoids third-party C++ wrapper libraries and talks directly to Windows optical primitives:
-          </p>
-          <ul>
-            <li><strong><code>CdBurner.Core</code>:</strong> Pure managed implementation of ISO 9660, Joliet, UDF 1.02 Bridge, El Torito boot catalogs, DVD-Video IFO/BUP sector alignment, CUE/BIN parsing, binary CD-Text pack encoding, AccurateRip v1/v2 CRCs, and multi-disc bin-packing.</li>
-            <li><strong><code>CdBurner.Hardware</code>:</strong> Direct COM vtable bindings for <code>imapi2.dll</code> (<code>IDiscMaster2</code>, <code>IDiscRecorder2</code>, <code>IDiscFormat2Data</code>, <code>IDiscFormat2TrackAtOnce</code>, <code>IDiscFormat2RawCD</code>) executed on dedicated <code>ApartmentState.MTA</code> background workers streaming progress over bounded <code>System.Threading.Channels</code>, paired with Win32 <code>DeviceIoControl(IOCTL_SCSI_PASS_THROUGH_DIRECT)</code> for raw MMC-5 commands.</li>
-          </ul>
-        </div>
-
-        <div class="arch-box">
-          <h3>Simulator-First &amp; Physical Hardware Verification</h3>
-          <p>
-            Every capability in IgnisDisc is verified across two independent layers before release:
-          </p>
-          <ul>
-            <li><strong>Step 1 — Build the Simulator First (<code>VirtualDiscBackend</code>):</strong> An in-memory optical drive simulator modeling 2048/2352-byte sectors, multi-session TOCs, write speed curves, and synthetic C2/L-EC sector errors. All <strong>481 unit and integration tests</strong> run deterministically in ~6 seconds with zero physical hardware.</li>
-            <li><strong>Step 2 — 4-Pass Physical CD-RW Hardware Verification:</strong> After the 481-test virtual suite passed, the release was validated end-to-end against physical CD-RW media: (1) multi-session open burn + Joliet append merge + surface scan, (2) dual BIOS/UEFI El Torito ISO + PAR2 archive burn/verify/rip round-trip, (3) 10x gapless DAO audio burn + real hardware C2 error-pointer recovery (`0` sample mismatches), and (4) quick erase + SCSI `0x1B` spindle spin-down.</li>
-          </ul>
-        </div>
       </div>
     </section>
   </main>

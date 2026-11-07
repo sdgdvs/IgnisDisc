@@ -1,12 +1,10 @@
 const SNIPPETS = {
   ignis: {
     badge: "IGNISDISC v1.08 / VERIFICATION",
-    code: `Virtual Suite  : 481 / 481 automated tests passing (~6s via VirtualDiscBackend)
-Compiler Gate  : .NET 10 Release (win-x64) — 0 Warnings, 0 Errors
-Physical Pass 1: Multi-session CD-RW open burn + Session 2 Joliet merge + surface scan
-Physical Pass 2: Dual BIOS/UEFI El Torito ISO + PAR2 archive burn, verify & rip
-Physical Pass 3: 10x gapless DAO audio burn + hardware C2 error-pointer recovery
-Physical Pass 4: Quick erase + SCSI 0x1B spindle spin-down`,
+    code: `Virtual Suite : 481 / 481 automated tests passing (~6s via VirtualDiscBackend)
+Compiler Gate : .NET 10 Release (win-x64) — 0 Warnings, 0 Errors
+Physical Media: Verified across CD-R, CD-RW, DVD-R, and DVD+RW hardware
+Capabilities  : Multi-session ISO/UDF, Dual BIOS/UEFI boot, C2/AccurateRip, PAR2`,
     footer: "// Verified against both in-memory simulation and physical optical media"
   },
   kilo: {
@@ -15,7 +13,7 @@ Physical Pass 4: Quick erase + SCSI 0x1B spindle spin-down`,
 Target Frame Rate : Locked 60fps across arcade, strategy, and desktop shell
 Security Pipeline : 4-layer security lint, immutability gate & provenance check
 Included Modules  : KChrono, KStarForge, KRogue, KCosmic, KTerm, KNet, KBBS`,
-    footer: "// Live in browser at kiloapps.web.app"
+    footer: "// Live in browser at kilo.tetherworks.dev"
   },
   cli: {
     badge: "POWERSHELL / HEADLESS CLI",
