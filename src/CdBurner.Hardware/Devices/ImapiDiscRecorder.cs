@@ -12,6 +12,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
 {
     private IDiscRecorder2? _recorder;
     private readonly string _uniqueId;
+    private readonly IImapiComProvider _comProvider;
     private string? _exclusiveClient;
     private bool _disposed;
 
@@ -131,13 +132,22 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
     /// Initializes a new physical IMAPIv2 recorder instance for the specified recorder unique identifier.
     /// </summary>
     public ImapiDiscRecorder(string uniqueId)
+        : this(uniqueId, DefaultImapiComProvider.Instance)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new physical IMAPIv2 recorder instance for the specified recorder unique identifier using a custom COM provider.
+    /// </summary>
+    public ImapiDiscRecorder(string uniqueId, IImapiComProvider? comProvider)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(uniqueId);
         _uniqueId = uniqueId;
+        _comProvider = comProvider ?? DefaultImapiComProvider.Instance;
 
         if (OperatingSystem.IsWindows())
         {
-            var recorder = Imapi2ComFactory.CreateDiscRecorder2()
+            var recorder = _comProvider.CreateDiscRecorder2()
                 ?? throw new InvalidOperationException($"Failed to activate MsftDiscRecorder2 COM CoClass for unique ID '{uniqueId}'.");
             recorder.InitializeDiscRecorder(uniqueId);
             _recorder = recorder;
@@ -151,9 +161,10 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
     /// <summary>
     /// Initializes a new physical IMAPIv2 recorder backend wrapping an existing COM instance.
     /// </summary>
-    public ImapiDiscRecorder(IDiscRecorder2 recorder, string? uniqueId = null)
+    public ImapiDiscRecorder(IDiscRecorder2 recorder, string? uniqueId = null, IImapiComProvider? comProvider = null)
     {
         _recorder = recorder ?? throw new ArgumentNullException(nameof(recorder));
+        _comProvider = comProvider ?? DefaultImapiComProvider.Instance;
         if (!string.IsNullOrWhiteSpace(uniqueId))
         {
             _uniqueId = uniqueId;
@@ -238,53 +249,89 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
         {
             if (_recorder != null && OperatingSystem.IsWindows())
             {
-                formatData = Imapi2ComFactory.CreateDiscFormat2Data();
+                formatData = _comProvider.CreateDiscFormat2Data();
                 if (formatData != null)
                 {
+                    bool attached = false;
                     try
                     {
                         formatData.put_Recorder(_recorder);
-
-                        var supportedArray = formatData.SupportedMediaTypes;
-                        if (supportedArray != null)
-                        {
-                            for (int i = 0; i < supportedArray.Length; i++)
-                            {
-                                var item = supportedArray.GetValue(i);
-                                if (item != null)
-                                {
-                                    var phys = (ImapiMediaPhysicalType)Convert.ToInt32(item);
-                                    var mapped = MapPhysicalTypeToDiscMediaType(phys);
-                                    if (mapped != DiscMediaType.Unknown && mapped != DiscMediaType.NoMedia)
-                                    {
-                                        mediaTypes.Add(mapped);
-                                    }
-                                }
-                            }
-                        }
-
-                        if (formatData.IsCurrentMediaSupported(_recorder))
-                        {
-                            var speedsArray = formatData.SupportedWriteSpeeds;
-                            if (speedsArray != null)
-                            {
-                                var physType = formatData.CurrentPhysicalMediaType;
-                                var currentMediaType = MapPhysicalTypeToDiscMediaType(physType);
-                                for (int i = 0; i < speedsArray.Length; i++)
-                                {
-                                    var item = speedsArray.GetValue(i);
-                                    if (item != null)
-                                    {
-                                        int sectorsPerSec = Convert.ToInt32(item);
-                                        int bytesPerSec = sectorsPerSec * OpticalConstants.DataSectorSize;
-                                        writeSpeeds.Add(new WriteSpeedDescriptor(bytesPerSec, currentMediaType));
-                                    }
-                                }
-                            }
-                        }
+                        attached = true;
                     }
                     catch
                     {
+                    }
+
+                    if (attached)
+                    {
+                        try
+                        {
+                            var supportedArray = formatData.SupportedMediaTypes;
+                            if (supportedArray != null)
+                            {
+                                for (int i = 0; i < supportedArray.Length; i++)
+                                {
+                                    var item = supportedArray.GetValue(i);
+                                    if (item != null)
+                                    {
+                                        var phys = (ImapiMediaPhysicalType)Convert.ToInt32(item);
+                                        var mapped = MapPhysicalTypeToDiscMediaType(phys);
+                                        if (mapped != DiscMediaType.Unknown && mapped != DiscMediaType.NoMedia)
+                                        {
+                                            mediaTypes.Add(mapped);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch
+                        {
+                        }
+
+                        try
+                        {
+                            if (formatData.IsCurrentMediaSupported(_recorder))
+                            {
+                                var speedsArray = formatData.SupportedWriteSpeeds;
+                                if (speedsArray != null)
+                                {
+                                    var currentMediaType = DiscMediaType.CdR;
+                                    try
+                                    {
+                                        var physType = formatData.CurrentPhysicalMediaType;
+                                        var mapped = MapPhysicalTypeToDiscMediaType(physType);
+                                        if (mapped != DiscMediaType.Unknown && mapped != DiscMediaType.NoMedia)
+                                        {
+                                            currentMediaType = mapped;
+                                        }
+                                    }
+                                    catch
+                                    {
+                                    }
+
+                                    var seenBytesPerSec = new HashSet<int>();
+                                    for (int i = 0; i < speedsArray.Length; i++)
+                                    {
+                                        var item = speedsArray.GetValue(i);
+                                        if (item != null)
+                                        {
+                                            int sectorsPerSec = Convert.ToInt32(item);
+                                            if (sectorsPerSec > 0)
+                                            {
+                                                int bytesPerSec = sectorsPerSec * OpticalConstants.DataSectorSize;
+                                                if (seenBytesPerSec.Add(bytesPerSec))
+                                                {
+                                                    writeSpeeds.Add(new WriteSpeedDescriptor(bytesPerSec, currentMediaType));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch
+                        {
+                        }
                     }
                 }
             }
@@ -358,7 +405,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
 
         try
         {
-            dataFormat = Imapi2ComFactory.CreateDiscFormat2Data();
+            dataFormat = _comProvider.CreateDiscFormat2Data();
             if (dataFormat != null)
             {
                 bool isRecorderAttached = false;
@@ -386,13 +433,19 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
 
                     if (isMediaSupported)
                     {
-                        var physicalType = dataFormat.CurrentPhysicalMediaType;
+                        var physicalType = ImapiMediaPhysicalType.Unknown;
+                        try { physicalType = dataFormat.CurrentPhysicalMediaType; } catch { }
                         var mediaType = MapPhysicalTypeToDiscMediaType(physicalType);
-                        var mediaState = dataFormat.CurrentMediaStatus;
 
-                        bool isBlank = (mediaState & ImapiFormat2DataMediaState.Blank) != 0 ||
-                                       dataFormat.MediaPhysicallyBlank ||
-                                       dataFormat.MediaHeuristicallyBlank;
+                        var mediaState = ImapiFormat2DataMediaState.Unknown;
+                        try { mediaState = dataFormat.CurrentMediaStatus; } catch { }
+
+                        bool physBlank = false;
+                        bool heurBlank = false;
+                        try { physBlank = dataFormat.MediaPhysicallyBlank; } catch { }
+                        try { heurBlank = dataFormat.MediaHeuristicallyBlank; } catch { }
+
+                        bool isBlank = (mediaState & ImapiFormat2DataMediaState.Blank) != 0 || physBlank || heurBlank;
 
                         bool isRewritable = mediaType.IsRewritable() ||
                                             (mediaState & ImapiFormat2DataMediaState.OverwriteOnly) != 0;
@@ -408,12 +461,10 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                         try { freeSectors = dataFormat.FreeSectorsOnMedia; } catch { }
                         try { nextWritable = dataFormat.NextWritableAddress; } catch { }
 
-                        if (totalSectors == 0)
+                        if (totalSectors <= 0)
                         {
                             totalSectors = mediaType.GetNominalCapacitySectors();
                         }
-
-                        int usedSectors = Math.Max(0, totalSectors - freeSectors);
 
                         // Overwrite-only media (DVD+RW, DVD-RAM, BD-RE, restricted-overwrite DVD-RW) are rewritten from
                         // the start by IDiscFormat2Data.Write, so never lay out an "appended" session on them.
@@ -423,11 +474,25 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                             nextWritable = 0;
                         }
 
+                        // Quirky drives often return 0 for FreeSectorsOnMedia on blank discs or background-formatted
+                        // overwrite-only media (DVD+RW / DVD-RAM / restricted-overwrite DVD-RW).
+                        if ((isBlank || overwriteOnly) && freeSectors <= 0)
+                        {
+                            freeSectors = totalSectors;
+                        }
+
+                        if (isBlank && nextWritable < 0)
+                        {
+                            nextWritable = 0;
+                        }
+
+                        int usedSectors = isBlank ? 0 : Math.Max(0, totalSectors - freeSectors);
+
                         // Size of the recorded area as reported by the drive itself (more accurate than total - free,
                         // and needed for reading back finalized or rewritable discs).
                         if (!isBlank)
                         {
-                            int? readable = Scsi.PhysicalSectorReader.ReadCapacity(VolumePath);
+                            int? readable = _comProvider.ReadCapacity(VolumePath);
                             if (readable is > 0)
                             {
                                 usedSectors = readable.Value;
@@ -435,14 +500,14 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
 
                             // On overwrite-only media READ CAPACITY returns the whole formatted disc (a DVD+RW holding
                             // 60 MB reported 4.38 GB used), so use the mounted file system's size when Windows has one.
-                            if (overwriteOnly && TryGetMountedVolumeSectors(VolumePath) is { } volumeSectors)
+                            if (overwriteOnly && _comProvider.TryGetMountedVolumeSectors(VolumePath) is { } volumeSectors)
                             {
                                 usedSectors = volumeSectors;
                             }
                         }
                         long totalBytes = (long)totalSectors * OpticalConstants.DataSectorSize;
                         long freeBytes = (long)freeSectors * OpticalConstants.DataSectorSize;
-                        int lastRecordedLba = isBlank ? -1 : usedSectors - 1;
+                        int lastRecordedLba = isBlank ? -1 : Math.Max(0, usedSectors - 1);
 
                         int sessionCount = 0;
                         Array? multisession = null;
@@ -451,8 +516,8 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                             // MultisessionInterfaces lists the multisession *write interfaces* the format supports
                             // (e.g. 2 on a blank CD-R), not the sessions on the disc; it is only probed here so the
                             // COM objects are released below. The real count comes from the disc's TOC.
-                            multisession = dataFormat.MultisessionInterfaces;
-                            sessionCount = isBlank ? 0 : (Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1);
+                            try { multisession = dataFormat.MultisessionInterfaces; } catch { }
+                            sessionCount = isBlank ? 0 : (_comProvider.ReadSessionCount(VolumePath) ?? 1);
                         }
                         catch
                         {
@@ -495,7 +560,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                 }
             }
 
-            eraseFormat = Imapi2ComFactory.CreateDiscFormat2Erase();
+            eraseFormat = _comProvider.CreateDiscFormat2Erase();
             if (eraseFormat != null)
             {
                 bool isEraseAttached = false;
@@ -523,15 +588,22 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
 
                     if (isEraseSupported)
                     {
-                        var physicalType = eraseFormat.CurrentPhysicalMediaType;
+                        var physicalType = ImapiMediaPhysicalType.Unknown;
+                        try { physicalType = eraseFormat.CurrentPhysicalMediaType; } catch { }
                         var mediaType = MapPhysicalTypeToDiscMediaType(physicalType);
-                        bool isBlank = eraseFormat.MediaPhysicallyBlank || eraseFormat.MediaHeuristicallyBlank;
+
+                        bool physBlank = false;
+                        bool heurBlank = false;
+                        try { physBlank = eraseFormat.MediaPhysicallyBlank; } catch { }
+                        try { heurBlank = eraseFormat.MediaHeuristicallyBlank; } catch { }
+                        bool isBlank = physBlank || heurBlank;
+
                         int nominalSectors = mediaType.GetNominalCapacitySectors();
                         int recordedSectors = 0;
                         if (!isBlank)
                         {
-                            recordedSectors = Scsi.PhysicalSectorReader.ReadCapacity(VolumePath)
-                                ?? (Scsi.PhysicalSectorReader.ReadTableOfContents(VolumePath) is { Count: > 0 } eraseToc
+                            recordedSectors = _comProvider.ReadCapacity(VolumePath)
+                                ?? (_comProvider.ReadTableOfContents(VolumePath) is { Count: > 0 } eraseToc
                                     ? eraseToc.Max(t => t.StartLba + t.SectorCount)
                                     : nominalSectors);
                         }
@@ -549,7 +621,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                             UsedSectors = recordedSectors,
                             TotalCapacityBytes = nominalBytes,
                             FreeCapacityBytes = isBlank ? nominalBytes : 0,
-                            SessionCount = isBlank ? 0 : (Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1),
+                            SessionCount = isBlank ? 0 : (_comProvider.ReadSessionCount(VolumePath) ?? 1),
                             MediaManufacturerId = null,
                             LastRecordedLba = isBlank ? -1 : recordedSectors - 1
                         };
@@ -570,7 +642,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
         // still be read, ripped, verified and scanned.
         try
         {
-            int? readOnlySectors = Scsi.PhysicalSectorReader.ReadCapacity(VolumePath);
+            int? readOnlySectors = _comProvider.ReadCapacity(VolumePath);
             if (readOnlySectors is > 0)
             {
                 bool isCd = readOnlySectors.Value <= 450_000; // ~ 880 MB: larger than any CD
@@ -587,7 +659,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                     UsedSectors = readOnlySectors.Value,
                     TotalCapacityBytes = bytes,
                     FreeCapacityBytes = 0,
-                    SessionCount = Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1,
+                    SessionCount = _comProvider.ReadSessionCount(VolumePath) ?? 1,
                     MediaManufacturerId = null,
                     LastRecordedLba = readOnlySectors.Value - 1
                 };
@@ -601,7 +673,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
         // length IOCTL fails without a data track, but the TOC is readable through a read-only handle.
         try
         {
-            var toc = Scsi.PhysicalSectorReader.ReadTableOfContents(VolumePath);
+            var toc = _comProvider.ReadTableOfContents(VolumePath);
             if (toc.Count > 0)
             {
                 int sectors = toc.Max(t => t.StartLba + t.SectorCount);
@@ -617,7 +689,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
                     UsedSectors = sectors,
                     TotalCapacityBytes = (long)sectors * OpticalConstants.DataSectorSize,
                     FreeCapacityBytes = 0,
-                    SessionCount = Scsi.PhysicalSectorReader.ReadSessionCount(VolumePath) ?? 1,
+                    SessionCount = _comProvider.ReadSessionCount(VolumePath) ?? 1,
                     MediaManufacturerId = null,
                     LastRecordedLba = sectors - 1
                 };
@@ -790,7 +862,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
     {
         try
         {
-            return Scsi.PhysicalSectorReader.ReadTableOfContents(VolumePath);
+            return _comProvider.ReadTableOfContents(VolumePath);
         }
         catch
         {
@@ -803,7 +875,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
     {
         try
         {
-            return Scsi.PhysicalSectorReader.ReadCdTextPacks(VolumePath);
+            return _comProvider.ReadCdTextPacks(VolumePath);
         }
         catch
         {

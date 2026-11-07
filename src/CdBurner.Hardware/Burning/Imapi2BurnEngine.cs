@@ -17,10 +17,17 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 {
     public const string DefaultClientName = "CdBurner";
 
+    private readonly IImapiComProvider _comProvider;
+
     /// <summary>
     /// Client name used for IMAPIv2 exclusive drive locking.
     /// </summary>
     public string ClientName { get; set; } = DefaultClientName;
+
+    public Imapi2BurnEngine(IImapiComProvider? comProvider = null)
+    {
+        _comProvider = comProvider ?? DefaultImapiComProvider.Instance;
+    }
 
     /// <inheritdoc/>
     public async Task<BurnOperationResult> BurnDataStreamAsync(
@@ -77,7 +84,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
             else
             {
-                comRecorder = Imapi2ComFactory.CreateDiscRecorder2();
+                comRecorder = _comProvider.CreateDiscRecorder2();
                 if (comRecorder == null)
                 {
                     return BurnOperationResult.Failed("Failed to instantiate MsftDiscRecorder2 COM object.");
@@ -87,7 +94,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
 
             // 2. Create and configure MsftDiscFormat2Data
-            formatData = Imapi2ComFactory.CreateDiscFormat2Data();
+            formatData = _comProvider.CreateDiscFormat2Data();
             if (formatData == null)
             {
                 return BurnOperationResult.Failed("Failed to instantiate MsftDiscFormat2Data COM object.");
@@ -300,7 +307,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
             if (wasCancelled && !recorder.IsVirtual)
             {
-                PhysicalSectorReader.TrySpinDown(recorder.VolumePath);
+                _comProvider.TrySpinDown(recorder.VolumePath);
             }
         }
     }
@@ -360,7 +367,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
             else
             {
-                comRecorder = Imapi2ComFactory.CreateDiscRecorder2();
+                comRecorder = _comProvider.CreateDiscRecorder2();
                 if (comRecorder == null)
                 {
                     return BurnOperationResult.Failed("Failed to instantiate MsftDiscRecorder2 COM object.");
@@ -415,8 +422,8 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
             if (options.UseDiscAtOnce)
             {
-                rawCd = Imapi2ComFactory.CreateDiscFormat2RawCD();
-                rawCreator = Imapi2ComFactory.CreateRawCDImageCreator();
+                rawCd = _comProvider.CreateDiscFormat2RawCD();
+                rawCreator = _comProvider.CreateRawCDImageCreator();
 
                 if (rawCd != null && rawCreator != null)
                 {
@@ -545,7 +552,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
             if (!completedViaDao)
             {
-                tao = Imapi2ComFactory.CreateDiscFormat2TrackAtOnce();
+                tao = _comProvider.CreateDiscFormat2TrackAtOnce();
                 if (tao == null)
                 {
                     return BurnOperationResult.Failed("Failed to instantiate MsftDiscFormat2TrackAtOnce COM object.");
@@ -706,7 +713,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
             if (wasCancelled && !recorder.IsVirtual)
             {
-                PhysicalSectorReader.TrySpinDown(recorder.VolumePath);
+                _comProvider.TrySpinDown(recorder.VolumePath);
             }
         }
     }
@@ -798,9 +805,11 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             IDiscFormat2Erase? erase = null;
             IDiscRecorder2? comRecorder = null;
             bool createdComRecorder = false;
+            bool acquiredLock = false;
+            bool wasCancelled = false;
             try
             {
-                erase = Imapi2ComFactory.CreateDiscFormat2Erase();
+                erase = _comProvider.CreateDiscFormat2Erase();
                 if (erase == null)
                 {
                     return BurnOperationResult.Failed("Failed to create MsftDiscFormat2Erase COM object.");
@@ -809,7 +818,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                 comRecorder = (recorder as ImapiDiscRecorder)?.Recorder;
                 if (comRecorder == null)
                 {
-                    comRecorder = Imapi2ComFactory.CreateDiscRecorder2();
+                    comRecorder = _comProvider.CreateDiscRecorder2();
                     if (comRecorder != null)
                     {
                         createdComRecorder = true;
@@ -821,6 +830,8 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                 {
                     return BurnOperationResult.Failed("Failed to resolve physical recorder COM instance.");
                 }
+
+                acquiredLock = recorder.AcquireExclusiveAccess(ClientName);
 
                 erase.put_Recorder(comRecorder);
                 erase.put_ClientName(ClientName);
@@ -855,12 +866,19 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
             catch (OperationCanceledException oce)
             {
+                wasCancelled = true;
                 return BurnOperationResult.CancelledResult(oce.Message);
+            }
+            catch (COMException cex) when (token.IsCancellationRequested || (uint)cex.ErrorCode == 0xC0AA0406u)
+            {
+                wasCancelled = true;
+                return BurnOperationResult.CancelledResult("Erase operation was cancelled by user.");
             }
             catch (Exception ex)
             {
                 if (token.IsCancellationRequested)
                 {
+                    wasCancelled = true;
                     return BurnOperationResult.CancelledResult("Erase operation was cancelled.");
                 }
                 return BurnOperationResult.Failed($"Erase failed: {ex.Message}", ex);
@@ -875,6 +893,16 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                 if (createdComRecorder && comRecorder != null)
                 {
                     Imapi2ComFactory.FinalRelease(ref comRecorder);
+                }
+
+                if (acquiredLock)
+                {
+                    try { recorder.ReleaseExclusiveAccess(); } catch { }
+                }
+
+                if (wasCancelled && !recorder.IsVirtual)
+                {
+                    _comProvider.TrySpinDown(recorder.VolumePath);
                 }
             }
         }, progress, cancellationToken);

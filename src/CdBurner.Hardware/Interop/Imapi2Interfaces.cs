@@ -1233,5 +1233,71 @@ public static class Imapi2ComFactory
     public static int FinalRelease<T>(ref T? comObject) where T : class => ImapiComActivation.FinalRelease(ref comObject);
 }
 
+/// <summary>
+/// Injectable provider for IMAPIv2 COM CoClass instances and low-level volume queries,
+/// enabling deterministic testing of physical recorder and burn engine code paths against
+/// simulated drive firmware and media state quirks.
+/// </summary>
+public interface IImapiComProvider
+{
+    IDiscMaster2? CreateDiscMaster2();
+    IDiscRecorder2? CreateDiscRecorder2();
+    IDiscFormat2Data? CreateDiscFormat2Data();
+    IDiscFormat2TrackAtOnce? CreateDiscFormat2TrackAtOnce();
+    IDiscFormat2RawCD? CreateDiscFormat2RawCD();
+    IDiscFormat2Erase? CreateDiscFormat2Erase();
+    IRawCDImageCreator? CreateRawCDImageCreator();
+    int? ReadCapacity(string volumePath);
+    int? ReadSessionCount(string volumePath);
+    IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContents(string volumePath);
+    byte[]? ReadCdTextPacks(string volumePath);
+    int? TryGetMountedVolumeSectors(string? volumePath);
+    bool TrySpinDown(string? volumePath);
+}
+
+/// <summary>
+/// Production <see cref="IImapiComProvider"/> backed by Windows IMAPIv2 COM activation and <see cref="CdBurner.Hardware.Scsi.PhysicalSectorReader"/>.
+/// </summary>
+public sealed class DefaultImapiComProvider : IImapiComProvider
+{
+    public static DefaultImapiComProvider Instance { get; } = new();
+
+    public IDiscMaster2? CreateDiscMaster2() => Imapi2ComFactory.CreateDiscMaster2();
+    public IDiscRecorder2? CreateDiscRecorder2() => Imapi2ComFactory.CreateDiscRecorder2();
+    public IDiscFormat2Data? CreateDiscFormat2Data() => Imapi2ComFactory.CreateDiscFormat2Data();
+    public IDiscFormat2TrackAtOnce? CreateDiscFormat2TrackAtOnce() => Imapi2ComFactory.CreateDiscFormat2TrackAtOnce();
+    public IDiscFormat2RawCD? CreateDiscFormat2RawCD() => Imapi2ComFactory.CreateDiscFormat2RawCD();
+    public IDiscFormat2Erase? CreateDiscFormat2Erase() => Imapi2ComFactory.CreateDiscFormat2Erase();
+    public IRawCDImageCreator? CreateRawCDImageCreator() => Imapi2ComFactory.CreateRawCDImageCreator();
+    public int? ReadCapacity(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadCapacity(volumePath);
+    public int? ReadSessionCount(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadSessionCount(volumePath);
+    public IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContents(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadTableOfContents(volumePath);
+    public byte[]? ReadCdTextPacks(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadCdTextPacks(volumePath);
+    public bool TrySpinDown(string? volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.TrySpinDown(volumePath);
+
+    public int? TryGetMountedVolumeSectors(string? volumePath)
+    {
+        if (string.IsNullOrWhiteSpace(volumePath) || volumePath.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var drive = new DriveInfo(volumePath);
+            if (!drive.IsReady || drive.TotalSize <= 0)
+            {
+                return null;
+            }
+
+            return (int)Math.Min(int.MaxValue, (drive.TotalSize + CdBurner.Core.Primitives.OpticalConstants.DataSectorSize - 1) / CdBurner.Core.Primitives.OpticalConstants.DataSectorSize);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
+
 #endregion
 

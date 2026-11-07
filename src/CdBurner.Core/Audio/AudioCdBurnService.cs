@@ -78,7 +78,7 @@ public class AudioCdBurnService
             return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.EraseRequiredMessage);
         }
 
-        if (mediaStatus.IsOverwriteOnly)
+        if (mediaStatus.IsOverwriteOnly || mediaStatus.MediaType.IsDvd())
         {
             return BurnOperationResult.Failed("Audio CDs require blank CD-R or CD-RW media.");
         }
