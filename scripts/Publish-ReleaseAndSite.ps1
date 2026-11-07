@@ -58,7 +58,7 @@ if (-not [string]::IsNullOrWhiteSpace($GitHubRepo)) {
     $GithubRepoUrl = "https://github.com/$GitHubRepo"
     $SetupUrl      = "$GithubRepoUrl/releases/download/v$Version/IgnisDisc-Setup.exe"
     $PortableUrl   = "$GithubRepoUrl/releases/download/v$Version/IgnisDisc-Portable-win-x64.zip"
-    $MailtoUrl     = "mailto:$ContactEmail?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Inquiry"
+    $MailtoUrl     = "mailto:${ContactEmail}?subject=IgnisDisc%20%2F%20Systems%20Engineering%20Note"
 
     $AppJsPath = Join-Path $RepoRoot "web\public\app.js"
     $AppJs = Get-Content $AppJsPath -Raw
