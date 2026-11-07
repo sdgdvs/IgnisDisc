@@ -1,38 +1,36 @@
 const SNIPPETS = {
-  protocol: {
-    badge: "AGENT HARNESS / RULES",
-    code: `# Anti-Vibe-Coding Protocol (Enforced Across All Workspaces)
-1. Zero Sycophancy: Never declare a task "Done" because files were edited.
-2. Autonomous Verifiability: Every feature must be proven by a deterministic
-   simulator, automated test suite, or local VLM screenshot check.
-3. Forward-Fixability: Strict modular boundaries so agents can fix issues
-   forward without breaking unrelated systems.
-4. Zero Warnings Gate: Build + full test suite must exit 0 before completion.`,
-    footer: "// Keeps autonomous runs honest without human code review"
+  ignis: {
+    badge: "IGNISDISC v1.08 / VERIFICATION",
+    code: `Virtual Suite  : 481 / 481 automated tests passing (~6s via VirtualDiscBackend)
+Compiler Gate  : .NET 10 Release (win-x64) — 0 Warnings, 0 Errors
+Physical Pass 1: Multi-session CD-RW open burn + Session 2 Joliet merge + surface scan
+Physical Pass 2: Dual BIOS/UEFI El Torito ISO + PAR2 archive burn, verify & rip
+Physical Pass 3: 10x gapless DAO audio burn + hardware C2 error-pointer recovery
+Physical Pass 4: Quick erase + SCSI 0x1B spindle spin-down`,
+    footer: "// Verified against both in-memory simulation and physical optical media"
   },
-  simulator: {
-    badge: "IGNISDISC / 24-PHASE PIPELINE",
-    code: `Phase 01..04 -> Build VirtualDiscBackend (in-memory optical drive simulator)
-Phase 05..18 -> Implement ISO/UDF, El Torito, Audio DSP, Ripper & PAR2 Archiver
-Phase 19..24 -> Wire WPF Desktop Studio, Headless CLI & Single-File Setup.exe
-Verification -> 481 automated tests pass in ~6s + 4-pass physical CD-RW suite`,
-    footer: "// 481 automated tests run in CI with zero physical hardware required"
+  kilo: {
+    badge: "KILOOS v0.4.0 / FLEET SUMMARY",
+    code: `Application Fleet : 95 self-contained web apps, system tools, and games
+Target Frame Rate : Locked 60fps across arcade, strategy, and desktop shell
+Security Pipeline : 4-layer security lint, immutability gate & provenance check
+Included Modules  : KChrono, KStarForge, KRogue, KCosmic, KTerm, KNet, KBBS`,
+    footer: "// Live in browser at kiloapps.web.app"
   },
-  vlm: {
-    badge: "LOCAL VLM / VISUAL QA",
-    code: `{
-  "task": "vision_confirm_pair",
-  "frames": ["capture_t0.jpg", "capture_t1_confirm.jpg"],
-  "fps_budget_met": true,
-  "persistent_visual_issues": [],
-  "verdict": "PASS"
-}`,
-    footer: "// Automated visual inspection catches UI and 3D rendering bugs unattended"
+  cli: {
+    badge: "POWERSHELL / HEADLESS CLI",
+    code: `# Stage a multi-disc archive with 10% PAR2 recovery & verify the burned disc
+PS C:\\> ignisdisc-cli.exe archive-stage --input "C:\\Photos" --staging "C:\\Stage" --media dvd --redundancy 10
+PS C:\\> ignisdisc-cli.exe archive-verify --path D:\\ --json
+
+# Secure-rip an audio CD to FLAC with C2 error pointers & AccurateRip verification
+PS C:\\> ignisdisc-cli.exe rip-audio --drive D: --output "C:\\Music" --format flac --secure --verify-accuraterip`,
+    footer: "// Full GUI + headless CLI included in both Setup.exe and Portable.zip"
   }
 };
 
 function renderSnippet(key) {
-  const item = SNIPPETS[key] || SNIPPETS.protocol;
+  const item = SNIPPETS[key] || SNIPPETS.ignis;
   const badgeEl = document.getElementById("consoleBadge");
   const codeEl = document.getElementById("consoleCode");
   const footerEl = document.getElementById("consoleFooter");
@@ -43,7 +41,7 @@ function renderSnippet(key) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  renderSnippet("protocol");
+  renderSnippet("ignis");
 
   document.querySelectorAll(".console-tab").forEach((btn) => {
     btn.addEventListener("click", () => {

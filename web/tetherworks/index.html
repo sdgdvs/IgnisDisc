@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>tetherworks — Independent Software &amp; Retro Computing Workbench</title>
-  <meta name="description" content="tetherworks: independent open-source software. IgnisDisc, a CD/DVD burner and audio CD ripper for Windows, and KiloOS, a 1999-style desktop in the browser." />
+  <title>tetherWorks — Independent Software &amp; Retro Computing Workbench</title>
+  <meta name="description" content="Independent workbench for open-source utilities, retro computing environments, and simulation-verified software: IgnisDisc Optical Studio and KiloOS." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -12,11 +15,13 @@
     <div class="container header-inner">
       <a href="#top" class="brand">
         <span class="brand-prompt">&gt;_</span>
-        <span class="brand-name">tetherworks<span class="brand-ext">.dev</span></span>
+        <span class="brand-name">tetherWorks<span class="brand-ext">.dev</span></span>
       </a>
 
       <nav class="main-nav" aria-label="Navigation">
         <a href="#projects">/projects</a>
+        <a href="#principles">/principles</a>
+        <a href="#interests">/focus</a>
         <a href="https://github.com/tether-works" target="_blank" rel="noopener">github ↗</a>
       </nav>
 
@@ -31,17 +36,22 @@
   <main id="top" class="container">
     <!-- FACTUAL, UNDERSTATED INTRO -->
     <section class="intro">
+      <div class="status-line">
+        <span class="status-dot"></span>
+        <span>INDEPENDENT WORKBENCH • ZERO TELEMETRY • NO ADS • NOTHING FOR SALE</span>
+      </div>
+
       <h1>Fast, self-contained software and experiments built without bloat.</h1>
 
       <p class="intro-body">
-        <strong>tetherworks</strong> is an independent workbench for open-source desktop utilities and retro computing projects. Everything published here runs without ads, telemetry or tracking scripts.
+        Welcome to <strong>tetherWorks</strong>—an independent workbench for open-source desktop utilities, retro computing environments, and simulation-verified software. Everything published here is built to load fast, run locally without telemetry or tracking scripts, and stay out of your way.
       </p>
     </section>
 
     <!-- LIVE PROJECTS -->
     <section class="section" id="projects">
       <div class="section-bar">
-        <h2>Shipped Projects</h2>
+        <h2>01 // Shipped Projects</h2>
         <span class="section-meta">2 live deployments</span>
       </div>
 
@@ -63,30 +73,31 @@
           </div>
 
           <p class="project-desc">
-            A free, open-source CD and DVD burner and audio CD ripper for Windows 10 and 11. It burns data discs, ISO images and audio CDs, rips audio CDs with AccurateRip verification, and archives large folders across several discs, from a desktop app or a command-line tool.
+            A modern, single-binary Windows 10/11 replacement for aging optical disc tools. IgnisDisc brings data/ISO burning, gapless Audio CD mastering, hardware C2/AccurateRip audio extraction, and multi-disc PAR2 cold-storage archiving into one clean desktop studio and scriptable CLI.
           </p>
 
           <div class="project-specs">
             <div class="spec-col">
               <strong>Key capabilities</strong>
               <ul>
-                <li>Data disc, ISO and audio CD burning, with verify after burn</li>
-                <li>Secure audio CD ripping to FLAC/WAV with AccurateRip and MusicBrainz lookup</li>
-                <li>Multi-disc archives with SHA-256 manifests and optional PAR2 recovery data</li>
+                <li>1-click Data, ISO/UDF, Audio CD, and DVD-Video burning</li>
+                <li>Secure audio CD ripping to FLAC/WAV with AccurateRip &amp; MusicBrainz lookup</li>
+                <li>Multi-disc cold storage archiver with SHA-256 manifests + PAR2 recovery</li>
               </ul>
             </div>
             <div class="spec-col">
-              <strong>How it's built and tested</strong>
+              <strong>Verification &amp; stack</strong>
               <ul>
-                <li>.NET 10; burns through Windows' built-in burning service (IMAPIv2) and reads discs directly from the drive</li>
-                <li>Automated tests run against a built-in virtual drive</li>
-                <li>Tested on real CD-R, CD-RW, DVD-R and DVD+RW media</li>
+                <li>Native .NET 10 over Windows <code>imapi2.dll</code> COM and direct <code>SCSI MMC-5</code> pass-through</li>
+                <li>481 automated CI tests running against an in-memory virtual optical drive in ~6s</li>
+                <li>Validated end-to-end across physical CD-RW media (multi-session, boot ISO, PAR2, C2 audio)</li>
               </ul>
             </div>
           </div>
 
           <div class="project-install">
-            <span class="install-hint">Download the installer or portable ZIP from the project page or GitHub Releases.</span>
+            <code>winget install TetherWorks.IgnisDisc</code>
+            <span class="install-hint">or download Setup.exe / Portable.zip on the project page</span>
           </div>
         </article>
 
@@ -96,30 +107,107 @@
             <div class="project-title-group">
               <div class="project-glyph">K//99</div>
               <div>
-                <div class="project-kicker">BROWSER DESKTOP ENVIRONMENT • 104 APPS &amp; GAMES</div>
-                <h3><a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener">KiloOS: A Return to 1999 (v0.4.38)</a></h3>
+                <div class="project-kicker">BROWSER DESKTOP ENVIRONMENT • 95 APPS &amp; GAMES</div>
+                <h3><a href="https://kiloapps.web.app" target="_blank" rel="noopener">KiloOS: A Return to 1999 (v0.4.0)</a></h3>
               </div>
             </div>
             <div class="project-links">
-              <a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener" class="btn btn-primary">kilo.tetherworks.dev ↗</a>
+              <a href="https://kiloapps.web.app" target="_blank" rel="noopener" class="btn btn-primary">Launch KiloOS in Browser ↗</a>
             </div>
           </div>
 
           <p class="project-desc">
-            An exploration of 1999-era software minimalism. KiloOS is a retro desktop environment that runs in the browser, with <strong>104 small applications, system utilities and games</strong>.
+            An exploration of 1999-era software minimalism. KiloOS is a self-contained retro desktop environment running directly in the browser—housing a fleet of <strong>95 lightweight applications, system utilities, and arcade/strategy games</strong> designed to load instantaneously and run at a locked 60fps.
           </p>
 
           <div class="project-specs">
             <div class="spec-col">
-              <strong>Inside (104 apps)</strong>
+              <strong>Inside the OS fleet (95 apps)</strong>
               <ul>
                 <li><strong>Games:</strong> <code>KChrono</code> (tri-epoch time-travel puzzler), <code>KStarForge</code>, <code>KRogue</code>, <code>KCosmic</code>, <code>KFortress</code>, <code>KCyber</code>, <code>KMech</code></li>
                 <li><strong>System &amp; Productivity:</strong> <code>KTerm</code>, <code>KSys</code>, <code>KTask</code>, <code>KScript</code>, <code>KAudio</code>, <code>KFont</code>, <code>KDB</code></li>
                 <li><strong>Virtual 1999 Web:</strong> <code>KNet</code> browser &amp; <code>KBBS</code> bulletin board system</li>
               </ul>
             </div>
+            <div class="spec-col">
+              <strong>Quality &amp; runtime guarantees</strong>
+              <ul>
+                <li>Zero bloated dependencies; instant cold start across the entire 95-app fleet</li>
+                <li>4-layer security linter, immutability gate, and provenance attestation</li>
+                <li>Automated 60fps benchmark suite and HiDPI responsive verification</li>
+              </ul>
+            </div>
           </div>
         </article>
+      </div>
+    </section>
+
+    <!-- DESIGN PRINCIPLES -->
+    <section class="section" id="principles">
+      <div class="section-bar">
+        <h2>02 // Design Principles</h2>
+        <span class="section-meta">How projects are built &amp; tested</span>
+      </div>
+
+      <div class="notes-grid">
+        <div class="note-box">
+          <div class="note-idx">PRINCIPLE 01</div>
+          <h3>Simulator-First Verification</h3>
+          <p>
+            Reliable software shouldn't depend on manual guesswork. Every project here is paired with a deterministic simulation harness—from an in-memory optical drive simulator (<code>VirtualDiscBackend</code>) that tests sector-level corruption in milliseconds, to automated 60fps visual and frame-budget verification suites.
+          </p>
+        </div>
+
+        <div class="note-box">
+          <div class="note-idx">PRINCIPLE 02</div>
+          <h3>1999 Efficiency, Modern Reliability</h3>
+          <p>
+            Software should open immediately, do its job cleanly, and respect the machine it runs on. Projects published under tetherWorks ship as self-contained binaries or instant-loading web environments with zero telemetry, zero ads, and no account requirements.
+          </p>
+        </div>
+      </div>
+
+      <!-- Interactive Technical Specs -->
+      <div class="console-card">
+        <div class="console-header">
+          <div class="console-tabs" role="tablist">
+            <button class="console-tab active" data-tab="ignis" type="button">ignisdisc_verification.txt</button>
+            <button class="console-tab" data-tab="kilo" type="button">kiloos_fleet_metrics.txt</button>
+            <button class="console-tab" data-tab="cli" type="button">ignisdisc_cli_sample.ps1</button>
+          </div>
+          <span class="console-badge" id="consoleBadge">VERIFICATION SUMMARY</span>
+        </div>
+        <div class="console-body">
+          <pre class="console-code" id="consoleCode"></pre>
+          <div class="console-footer" id="consoleFooter"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOCUS AREAS -->
+    <section class="section" id="interests">
+      <div class="section-bar">
+        <h2>03 // Areas of Focus</h2>
+        <span class="section-meta">Ongoing work</span>
+      </div>
+
+      <div class="interest-grid">
+        <div class="interest-item">
+          <h4>💿 Self-Contained Desktop Utilities</h4>
+          <p>Replacing aging, ad-bundled Windows utilities with clean, standalone tools for optical media, archival, and local file workflows.</p>
+        </div>
+        <div class="interest-item">
+          <h4>🖥️ Retro Computing &amp; Minimalist Web</h4>
+          <p>1999-inspired desktop environments, bulletin board systems, and compact games that load instantaneously in any browser.</p>
+        </div>
+        <div class="interest-item">
+          <h4>🥽 VR &amp; Spatial Simulation</h4>
+          <p>Immersive VR environments, interactive physics/clockwork worlds, and automated visual regression testing across recorded 3D routes.</p>
+        </div>
+        <div class="interest-item">
+          <h4>🎵 Audio Tooling &amp; Procedural Worlds</h4>
+          <p>Bit-perfect audio extraction, parity-protected cold storage, generative soundtrack pipelines, and deterministic game mechanics.</p>
+        </div>
       </div>
     </section>
   </main>
@@ -127,11 +215,11 @@
   <footer class="site-footer">
     <div class="container footer-inner">
       <div>
-        <strong>tetherworks</strong> — independent software workbench • no cookies, no trackers, no ads
+        <strong>tetherWorks</strong> — independent software workbench • no cookies, no trackers, nothing for sale
       </div>
       <div class="footer-links">
         <a href="https://ignisdisc.tetherworks.dev">IgnisDisc</a>
-        <a href="https://kilo.tetherworks.dev">KiloOS</a>
+        <a href="https://kiloapps.web.app">KiloOS</a>
         <a href="https://github.com/tether-works" target="_blank" rel="noopener">github.com/tether-works</a>
       </div>
     </div>
