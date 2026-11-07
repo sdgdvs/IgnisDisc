@@ -27,7 +27,7 @@ public sealed class MusicBrainzClient
             .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
             .FirstOrDefault()?.InformationalVersion;
         version = version?.Split('+')[0]; // drop the "+commit" suffix the SDK appends
-        return $"IgnisDisc/{(string.IsNullOrWhiteSpace(version) ? "dev" : version)} ( https://ignisdisc-studio.web.app )";
+        return $"IgnisDisc/{(string.IsNullOrWhiteSpace(version) ? "dev" : version)} ( https://ignisdisc.tetherworks.dev )";
     }
 
     private readonly HttpClient _httpClient;
