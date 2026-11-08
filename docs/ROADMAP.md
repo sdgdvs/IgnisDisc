@@ -27,25 +27,27 @@ Last reviewed: 2026-11-08 (v1.08 pre-release audit, `f4dff8d`).
       the sites only once `winget show --id TetherWorks.IgnisDisc` works. *(low)* **[owner: watch the PR]**
 - [x] Installer/WinGet publisher "Ignis Optical Engineering" → "tetherworks". 2026-11-08 (`4bd267e`)
 - [x] WinGet `FileExtensions` removed: the installer registers no file types. 2026-11-08 (`4bd267e`)
-- [ ] Code signing, so SmartScreen stops warning: SignPath Foundation (free for OSS) or Azure Artifact Signing
-      (~$10/month; check eligibility). *(low)* **[owner: account setup]**
-- [ ] Installer is 149 MB but the portable zip is 70 MB. Cause (found 2026-11-08): the setup program is a WPF app
-      published self-contained, so it carries its own ~80 MB .NET runtime in addition to the zip, which already
-      contains one. WPF can't be trimmed; fix by rewriting the setup UI as a small native/AOT bootstrapper (or a
-      standard installer tool) that unpacks the app zip. *(med)*
+- [ ] Code signing, so SmartScreen stops warning: SignPath Foundation (free for OSS; signs builds made by CI, which
+      now exists) or Azure Artifact Signing (~$10/month; check eligibility). *(low)* **[owner: apply / account setup]**
+- [x] Installer 149.2 MB → 71.2 MB with the same wizard: a .NET Framework 4.8 launcher (built into Windows) unpacks the
+      app and runs the wizard on the app's own runtime; the installed uninstaller is 331 KB instead of a 149 MB copy.
+      Uninstall now removes the folder completely and only touches its own shortcuts / Apps & Features entry.
+      2026-11-08 (`cdefdea`), ships in v1.10.
 
 ### Single source of truth for facts
 - [x] README lists the v1.09 features and the CLI accepts legacy images / `.cue` / playlists. 2026-11-08 (`4bd267e`)
-- [ ] Generate volatile facts (version, sizes, SHA-256 hashes, support table) from the release script into the README
-      and both sites, instead of typing them by hand in four places. *(low)*
+- [ ] Generate volatile facts from the release script instead of typing them by hand. Done: version, sizes and
+      SHA-256 hashes on the site and in WinGet (`Update-Version.ps1`). Remaining: the support table is still kept by
+      hand in both the README and the site. *(low)*
 - [x] Sites: aligned landing page strictly with v1.09 physical hardware test matrix, replaced static UI mockups with
       live build screenshots, self-hosted fonts, and enforced a strict Content-Security-Policy. Deployed 2026-11-08.
 
 ### GitHub (tether-works)
-- [ ] CI: a GitHub Actions workflow on `windows-latest` that builds Release and runs all tests on every push and PR.
-      Only then can "CI tests" be claimed anywhere. *(low)*
-- [ ] Turn on Dependabot alerts and secret scanning (free for public repos). *(low)* **[owner: settings]**
-- [ ] Add SECURITY.md, CONTRIBUTING.md and issue templates (bug report; drive compatibility report). *(low)*
+- [x] CI: `.github/workflows/ci.yml` builds Release (warnings as errors) and runs every test on `windows-latest` for
+      each push and PR. 2026-11-08 (`673a27f`)
+- [x] Dependabot alerts and security fixes, secret scanning with push protection, and private vulnerability
+      reporting turned on. 2026-11-08
+- [x] SECURITY.md, CONTRIBUTING.md, issue forms (bug report; drive compatibility report). 2026-11-08 (`673a27f`)
 
 ---
 
@@ -126,13 +128,13 @@ so every phase is tested without hardware before it touches a real disc.
 
 ## P3 — Known technical debt (from the v1.08 audit)
 
-- [ ] WAV conversion still uses linear interpolation (aliases on 88.2/96/192 kHz WAVs). Route `WavFileCodec`'s
-      general path through `RedBookPcmConverter` like FLAC. *(low)*
-- [ ] Add TPDF dither when reducing 24-bit audio to 16-bit. *(low)*
+- [x] WAV conversion streams through `RedBookPcmConverter` (band-limited, surround downmix) like FLAC.
+      2026-11-08 (`3d91df2`), ships in v1.10.
+- [x] TPDF dither when reducing to 16-bit; exact 16-bit audio and digital silence stay bit-exact, mono stays mono.
+      2026-11-08 (`3d91df2`), ships in v1.10.
 - [ ] `SingleFileAlbumSource` keeps the decoded album (up to ~800 MB) in memory for as long as its tracks are in the
       compilation. Release it after burning, or decode slices on demand. *(med)*
-- [ ] Audio preview decodes on the UI thread (a long single-file album freezes the window), and `IsPreviewPlaying`
-      never resets when the 30-second clip ends. *(low)*
+- [x] Audio preview decodes on a background thread and resets when the clip ends. 2026-11-08 (`3d91df2`), ships in v1.10.
 - [ ] `AudioCdTrackItem.DurationFrames` can decode a whole album synchronously when the duration is unknown. *(low)*
 - [ ] Check the FLAC test encoder and the Nero pre-gap detection against files made by real tools (`flac.exe`, Nero).
       Our tests encode our own reading of those formats. *(low)*
@@ -148,3 +150,4 @@ so every phase is tested without hardware before it touches a real disc.
 | 2026-11-08 | No more slipstreaming: every rebuild gets a new version number. |
 | 2026-11-08 | Direct drive writing will be opt-in and default off; IMAPIv2 stays the default and the fallback. |
 | 2026-11-08 | v1.09 released as a new version rather than replacing v1.08's files. |
+| 2026-11-08 | Installer shrink keeps the existing wizard (launcher + shared runtime) rather than switching to Inno Setup. |
