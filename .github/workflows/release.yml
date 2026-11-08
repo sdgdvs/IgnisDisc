@@ -1,0 +1,103 @@
+name: Release Build and Sign
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, test and package (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      setup-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
+      portable-artifact-id: ${{ steps.upload-portable.outputs.artifact-id }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build (Release, warnings as errors)
+        run: dotnet build CdBurner.sln --configuration Release -warnaserror
+
+      - name: Test against virtual drive
+        run: dotnet test CdBurner.sln --configuration Release --no-build
+
+      - name: Package installer and portable zip
+        shell: pwsh
+        run: ./scripts/Build-Installer.ps1 -Configuration Release -Runtime win-x64
+
+      - name: Compute unsigned SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-FileHash artifacts/installer/IgnisDisc-Setup.exe, artifacts/installer/IgnisDisc-Portable-win-x64.zip -Algorithm SHA256 | Format-Table -AutoSize
+
+      - name: Upload installer artifact for SignPath
+        id: upload-setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: IgnisDisc-Setup-unsigned
+          path: artifacts/installer/IgnisDisc-Setup.exe
+          if-no-files-found: error
+
+      - name: Upload portable archive artifact for SignPath
+        id: upload-portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: IgnisDisc-Portable-win-x64-unsigned
+          path: artifacts/installer/IgnisDisc-Portable-win-x64.zip
+          if-no-files-found: error
+
+  sign:
+    name: Sign release artifacts (SignPath Foundation)
+    needs: build
+    if: ${{ vars.SIGNPATH_ORG_ID != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Sign IgnisDisc-Setup.exe
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'ignisdisc' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ needs.build.outputs.setup-artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed/installer
+
+      - name: Sign IgnisDisc-Portable-win-x64.zip
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'ignisdisc' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ needs.build.outputs.portable-artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed/portable
+
+      - name: Compute signed SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path signed -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize
+
+      - name: Upload signed release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: IgnisDisc-signed-release
+          path: |
+            signed/installer/*
+            signed/portable/*
+          if-no-files-found: error

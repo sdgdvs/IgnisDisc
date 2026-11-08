@@ -28,8 +28,10 @@ Last reviewed: 2026-11-08 (v1.08 pre-release audit, `f4dff8d`).
       the sites only once `winget show --id TetherWorks.IgnisDisc` works. *(low)* **[owner: watch the PR]**
 - [x] Installer/WinGet publisher "Ignis Optical Engineering" → "tetherworks". 2026-11-08 (`4bd267e`)
 - [x] WinGet `FileExtensions` removed: the installer registers no file types. 2026-11-08 (`4bd267e`)
-- [ ] Code signing, so SmartScreen stops warning: SignPath Foundation (free for OSS; signs builds made by CI, which
-      now exists) or Azure Artifact Signing (~$10/month; check eligibility). *(low)* **[owner: apply / account setup]**
+- [ ] Code signing, so SmartScreen stops warning: repo policy (`SECURITY.md`) and GitHub-hosted release/signing workflow
+      (`.github/workflows/release.yml`) prepared for [SignPath Foundation](https://signpath.org) (free for OSS; signs
+      builds made by GitHub Actions once `SIGNPATH_ORG_ID` and `SIGNPATH_API_TOKEN` are configured). *(low)*
+      **[owner: submit SignPath Foundation application & add repo secrets]**
 - [x] Installer 149.2 MB → 71.2 MB with the same wizard: a .NET Framework 4.8 launcher (built into Windows) unpacks the
       app and runs the wizard on the app's own runtime; the installed uninstaller is 331 KB instead of a 149 MB copy.
       Uninstall now removes the folder completely and only touches its own shortcuts / Apps & Features entry.

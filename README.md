@@ -51,7 +51,10 @@ Reading from physical drives uses SCSI pass-through when Windows allows it and f
 ## Install
 
 Download `IgnisDisc-Setup.exe` (per-user install, no admin rights) or the portable `.zip` from the Releases page.
-The builds are currently unsigned, so Windows SmartScreen may show a warning on first run.
+The builds are currently unsigned while [SignPath Foundation](https://signpath.org) certificate provisioning is in
+progress, so Windows SmartScreen may show a warning on first run. See [SECURITY.md](SECURITY.md) for SHA-256
+verification, our code-signing policy, and our privacy policy (no telemetry; network requests occur only when you
+explicitly trigger MusicBrainz or AccurateRip lookups).
 
 ---
 
