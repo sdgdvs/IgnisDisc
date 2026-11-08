@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    IgnisDisc-Setup.exe: a small launcher that runs on the .NET Framework 4.8 built into Windows 10 (2004+) and 11.
+    It carries the app (payload.zip, which includes the setup wizard), unpacks it to a temporary folder and runs the
+    wizard from there, so the wizard shares the app's own .NET runtime instead of shipping a second copy.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>IgnisDisc-Setup</AssemblyName>
+    <RootNamespace>CdBurner.SetupBootstrapper</RootNamespace>
+    <Product>IgnisDisc Optical Studio</Product>
+    <Title>IgnisDisc Optical Studio Setup</Title>
+    <ApplicationIcon>..\CdBurner.Setup\IgnisDisc.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <DebugType>embedded</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="payload.zip" LogicalName="IgnisDisc.Payload.zip" Condition="Exists('payload.zip')" />
+  </ItemGroup>
+
+</Project>

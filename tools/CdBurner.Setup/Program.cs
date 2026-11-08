@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
-using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -264,24 +262,19 @@ internal static class Program
         return true;
     }
 
-    public static Stream OpenPayloadStream()
+    /// <summary>
+    /// The folder holding the files to install: the folder this wizard runs from. IgnisDisc-Setup.exe unpacks the full
+    /// app (including this wizard) into a temporary folder and starts the wizard there.
+    /// </summary>
+    public static string GetPayloadDirectory()
     {
-        var asm = Assembly.GetExecutingAssembly();
-        var stream = asm.GetManifestResourceStream("IgnisDisc.Payload.zip")
-                     ?? asm.GetManifestResourceStream("CdBurner.Payload.zip");
-        if (stream != null)
+        string dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
+        if (!File.Exists(Path.Combine(dir, "IgnisDisc.exe")))
         {
-            return stream;
+            throw new FileNotFoundException("The IgnisDisc files to install were not found next to the setup wizard. Run IgnisDisc-Setup.exe.");
         }
 
-        string exeDir = AppContext.BaseDirectory;
-        string fallbackZip = Path.Combine(exeDir, "IgnisDisc-Portable-win-x64.zip");
-        if (File.Exists(fallbackZip))
-        {
-            return File.OpenRead(fallbackZip);
-        }
-
-        throw new FileNotFoundException("Embedded installer payload (IgnisDisc.Payload.zip) was not found.");
+        return dir;
     }
 
     public static void InstallPayload(
@@ -306,40 +299,69 @@ internal static class Program
 
         progress?.Report((5, $"Preparing target directory: {installDir}"));
 
-        var installedFiles = new List<string>();
-
-        using (Stream payloadStream = OpenPayloadStream())
-        using (var archive = new ZipArchive(payloadStream, ZipArchiveMode.Read))
+        string payloadDir = GetPayloadDirectory();
+        if (string.Equals(payloadDir, installDir, StringComparison.OrdinalIgnoreCase))
         {
-            int totalEntries = Math.Max(1, archive.Entries.Count);
-            int processed = 0;
+            throw new InvalidOperationException("IgnisDisc is already installed in this folder. Run IgnisDisc-Setup.exe to install or update it.");
+        }
 
-            foreach (var entry in archive.Entries)
+        // Files an earlier version installed, used below to remove ones this version no longer ships.
+        string manifestPath = Path.Combine(installDir, ManifestFileName);
+        string[] previousFiles = Array.Empty<string>();
+        try
+        {
+            if (File.Exists(manifestPath)) previousFiles = File.ReadAllLines(manifestPath);
+        }
+        catch
+        {
+        }
+
+        var installedFiles = new List<string>();
+        string[] sourceFiles = Directory.GetFiles(payloadDir, "*", SearchOption.AllDirectories);
+        int total = Math.Max(1, sourceFiles.Length);
+        int processed = 0;
+
+        foreach (string sourcePath in sourceFiles)
+        {
+            processed++;
+            string relative = Path.GetRelativePath(payloadDir, sourcePath);
+            string destinationPath = Path.GetFullPath(Path.Combine(installDir, relative));
+            if (!destinationPath.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase))
             {
-                processed++;
-                string destinationPath = Path.GetFullPath(Path.Combine(installDir, entry.FullName));
-                if (!destinationPath.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase))
+                continue;
+            }
+
+            string? parentDir = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(parentDir))
+            {
+                Directory.CreateDirectory(parentDir);
+            }
+
+            File.Copy(sourcePath, destinationPath, overwrite: true);
+            installedFiles.Add(relative);
+
+            if (processed % 8 == 0 || processed == total)
+            {
+                double pct = 5.0 + (processed * 80.0 / total);
+                progress?.Report((pct, $"Copying ({processed}/{total}): {Path.GetFileName(sourcePath)}"));
+            }
+        }
+
+        // Remove files from the previous version that this version no longer includes (only files it recorded).
+        var current = new HashSet<string>(installedFiles, StringComparer.OrdinalIgnoreCase) { ManifestFileName };
+        foreach (string old in previousFiles)
+        {
+            if (string.IsNullOrWhiteSpace(old) || current.Contains(old.Trim())) continue;
+            try
+            {
+                string candidate = Path.GetFullPath(Path.Combine(installDir, old.Trim()));
+                if (candidate.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase) && File.Exists(candidate))
                 {
-                    continue;
+                    File.Delete(candidate);
                 }
-
-                if (string.IsNullOrEmpty(entry.Name))
-                {
-                    Directory.CreateDirectory(destinationPath);
-                    continue;
-                }
-
-                string? parentDir = Path.GetDirectoryName(destinationPath);
-                if (!string.IsNullOrEmpty(parentDir))
-                {
-                    Directory.CreateDirectory(parentDir);
-                }
-
-                entry.ExtractToFile(destinationPath, overwrite: true);
-                installedFiles.Add(Path.GetRelativePath(installDir, destinationPath));
-
-                double pct = 5.0 + (processed * 80.0 / totalEntries);
-                progress?.Report((pct, $"Extracting ({processed}/{totalEntries}): {entry.Name}"));
+            }
+            catch
+            {
             }
         }
 
@@ -348,22 +370,6 @@ internal static class Program
 
         try
         {
-            string? currentProcessPath = Environment.ProcessPath;
-            if (!string.IsNullOrEmpty(currentProcessPath) &&
-                File.Exists(currentProcessPath) &&
-                !string.Equals(Path.GetFullPath(currentProcessPath), Path.GetFullPath(uninstallerPath), StringComparison.OrdinalIgnoreCase))
-            {
-                File.Copy(currentProcessPath, uninstallerPath, overwrite: true);
-            }
-            installedFiles.Add("Uninstall-IgnisDisc.exe");
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            string manifestPath = Path.Combine(installDir, ManifestFileName);
             installedFiles.Add(ManifestFileName);
             File.WriteAllLines(manifestPath, installedFiles.Distinct(StringComparer.OrdinalIgnoreCase));
         }
@@ -503,6 +509,169 @@ internal static class Program
         }
     }
 
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// True when the Apps &amp; Features entry was registered for <paramref name="installDir"/>.
+    /// </summary>
+    internal static bool RegistryEntryBelongsTo(string installDir)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(UninstallRegKeyPath);
+            if (key?.GetValue("InstallLocation") is not string location || string.IsNullOrWhiteSpace(location))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(location)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir)),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True when the shortcut at <paramref name="shortcutPath"/> exists and targets a file inside the install folder.
+    /// </summary>
+    internal static bool ShortcutPointsInto(string shortcutPath, string installDirWithSep)
+    {
+        if (!File.Exists(shortcutPath)) return false;
+        try
+        {
+            Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null) return false;
+            dynamic? shell = Activator.CreateInstance(shellType);
+            if (shell == null) return false;
+            dynamic shortcut = shell.CreateShortcut(shortcutPath);
+            string target = (string)shortcut.TargetPath;
+            return !string.IsNullOrWhiteSpace(target) &&
+                   Path.GetFullPath(target).StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Files this installation owns: those listed in its install manifest, or (for very old installs without a manifest)
+    /// files that are unmistakably IgnisDisc's.
+    /// </summary>
+    private static List<string> CollectInstalledFiles(string installDir, string installDirWithSep)
+    {
+        var files = new List<string>();
+        string manifestPath = Path.Combine(installDir, ManifestFileName);
+
+        if (File.Exists(manifestPath))
+        {
+            string[] relativePaths = Array.Empty<string>();
+            try { relativePaths = File.ReadAllLines(manifestPath); } catch { }
+
+            foreach (string rel in relativePaths)
+            {
+                if (string.IsNullOrWhiteSpace(rel)) continue;
+                try
+                {
+                    string candidate = Path.GetFullPath(Path.Combine(installDir, rel.Trim()));
+                    if (candidate.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase) && File.Exists(candidate))
+                    {
+                        files.Add(candidate);
+                    }
+                }
+                catch { }
+            }
+
+            files.Add(manifestPath);
+            return files.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        // No install manifest: generic patterns such as *.dll / *.json are only used when the folder clearly is an
+        // IgnisDisc install folder, so that an install into a shared folder (e.g. Downloads) never loses unrelated files.
+        bool looksLikeDedicatedInstall =
+            File.Exists(Path.Combine(installDir, "IgnisDisc.exe")) &&
+            File.Exists(Path.Combine(installDir, "IgnisDisc.dll")) &&
+            File.Exists(Path.Combine(installDir, "CdBurner.Core.dll")) &&
+            string.Equals(Path.GetFileName(installDir), "IgnisDisc", StringComparison.OrdinalIgnoreCase);
+
+        string[] knownPatterns = looksLikeDedicatedInstall
+            ? new[] { "IgnisDisc.*", "ignisdisc-cli.*", "CdBurner.*", "cdburner-cli.*", "Uninstall-IgnisDisc.*", "*.dll", "*.json", "*.pdb", "ffmpeg.exe" }
+            : new[] { "IgnisDisc.*", "ignisdisc-cli.*", "CdBurner.*", "cdburner-cli.*", "Uninstall-IgnisDisc.*" };
+
+        foreach (string pattern in knownPatterns)
+        {
+            foreach (string file in Directory.GetFiles(installDir, pattern, SearchOption.TopDirectoryOnly))
+            {
+                files.Add(Path.GetFullPath(file));
+            }
+        }
+
+        return files.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// Removes <paramref name="files"/> (and then empty folders up to <paramref name="installDir"/>) after this process
+    /// exits, using a hidden Windows PowerShell script that deletes itself. Nothing outside the install folder is touched.
+    /// </summary>
+    internal static bool ScheduleDeferredCleanup(string installDir, IReadOnlyCollection<string> files)
+    {
+        if (files.Count == 0) return true;
+
+        try
+        {
+            static string Quote(string s) => "'" + s.Replace("'", "''") + "'";
+
+            string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+            string rootWithSep = root + Path.DirectorySeparatorChar;
+            var safeFiles = files.Where(f => Path.GetFullPath(f).StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (safeFiles.Count == 0) return true;
+
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"ignisdisc-uninstall-{Guid.NewGuid():N}.ps1");
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("$ErrorActionPreference = 'SilentlyContinue'");
+            sb.AppendLine($"Wait-Process -Id {Environment.ProcessId} -Timeout 300");
+            sb.AppendLine("Start-Sleep -Milliseconds 500");
+            sb.AppendLine("$files = @(");
+            sb.AppendLine(string.Join(",\n", safeFiles.Select(Quote)));
+            sb.AppendLine(")");
+            sb.AppendLine("foreach ($f in $files) { for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $f); $i++) { Remove-Item -LiteralPath $f -Force; if (Test-Path -LiteralPath $f) { Start-Sleep -Milliseconds 500 } } }");
+            sb.AppendLine($"$root = {Quote(root)}");
+            sb.AppendLine("if (Test-Path -LiteralPath $root) {");
+            sb.AppendLine("  Get-ChildItem -LiteralPath $root -Directory -Recurse -Force | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object { if (-not (Get-ChildItem -LiteralPath $_.FullName -Force)) { Remove-Item -LiteralPath $_.FullName -Force } }");
+            sb.AppendLine("  if (-not (Get-ChildItem -LiteralPath $root -Force)) { Remove-Item -LiteralPath $root -Force }");
+            sb.AppendLine("}");
+            sb.AppendLine("Remove-Item -LiteralPath $PSCommandPath -Force");
+            File.WriteAllText(scriptPath, sb.ToString(), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+            using var cleanup = Process.Start(new ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetTempPath()
+            });
+            return cleanup != null;
+        }
+        catch
+        {
+            return false; // e.g. Windows PowerShell removed by policy
+        }
+    }
+
     private static int RunUninstall(string installDir, bool silent)
     {
         try
@@ -528,103 +697,47 @@ internal static class Program
                 return 1;
             }
 
+            // Only remove shortcuts and the Apps & Features entry that belong to THIS install folder, so uninstalling one
+            // copy (or a test install in another folder) never touches a different IgnisDisc installation.
             string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"{AppTitle}.lnk");
-            if (File.Exists(desktopLink)) File.Delete(desktopLink);
+            if (ShortcutPointsInto(desktopLink, installDirWithSep)) TryDeleteFile(desktopLink);
 
             string startMenuFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), AppTitle);
-            if (Directory.Exists(startMenuFolder)) Directory.Delete(startMenuFolder, recursive: true);
+            string startMenuLink = Path.Combine(startMenuFolder, $"{AppTitle}.lnk");
+            if (ShortcutPointsInto(startMenuLink, installDirWithSep))
+            {
+                TryDeleteFile(startMenuLink);
+                try
+                {
+                    if (Directory.Exists(startMenuFolder) && !Directory.EnumerateFileSystemEntries(startMenuFolder).Any())
+                    {
+                        Directory.Delete(startMenuFolder);
+                    }
+                }
+                catch { }
+            }
 
-            Registry.CurrentUser.DeleteSubKeyTree(UninstallRegKeyPath, throwOnMissingSubKey: false);
+            if (RegistryEntryBelongsTo(installDir))
+            {
+                Registry.CurrentUser.DeleteSubKeyTree(UninstallRegKeyPath, throwOnMissingSubKey: false);
+            }
+
             RemoveDirectoryFromUserPath(installDir);
 
             if (Directory.Exists(installDir))
             {
+                // This uninstaller runs from the install folder and shares its .NET runtime, so it must not delete those
+                // files while running (doing so can crash it mid-way). Collect the files to remove and delete them all
+                // after this process exits.
+                var toDelete = CollectInstalledFiles(installDir, installDirWithSep);
+                bool scheduled = ScheduleDeferredCleanup(installDir, toDelete);
+
                 string currentExe = Path.GetFullPath(Environment.ProcessPath ?? string.Empty);
-                string manifestPath = Path.Combine(installDir, ManifestFileName);
-
-                if (File.Exists(manifestPath))
+                bool runningFromInstallDir = currentExe.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase);
+                if (!scheduled && !runningFromInstallDir)
                 {
-                    string[] relativePaths = Array.Empty<string>();
-                    try { relativePaths = File.ReadAllLines(manifestPath); } catch { }
-
-                    foreach (string rel in relativePaths)
-                    {
-                        if (string.IsNullOrWhiteSpace(rel)) continue;
-                        try
-                        {
-                            string candidate = Path.GetFullPath(Path.Combine(installDir, rel.Trim()));
-                            if (candidate.StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase) &&
-                                File.Exists(candidate) &&
-                                !string.Equals(candidate, currentExe, StringComparison.OrdinalIgnoreCase))
-                            {
-                                File.Delete(candidate);
-                            }
-                        }
-                        catch { }
-                    }
-
-                    try { if (File.Exists(manifestPath)) File.Delete(manifestPath); } catch { }
+                    foreach (string file in toDelete) TryDeleteFile(file);
                 }
-                else
-                {
-                    // No install manifest: only remove files that are unmistakably ours. Generic patterns such as
-                    // *.dll / *.json are only used when the folder clearly is an IgnisDisc install folder, so that an
-                    // install into a shared folder (e.g. Downloads) can never delete unrelated files.
-                    bool looksLikeDedicatedInstall =
-                        File.Exists(Path.Combine(installDir, "IgnisDisc.exe")) &&
-                        File.Exists(Path.Combine(installDir, "IgnisDisc.dll")) &&
-                        File.Exists(Path.Combine(installDir, "CdBurner.Core.dll")) &&
-                        string.Equals(Path.GetFileName(installDir), "IgnisDisc", StringComparison.OrdinalIgnoreCase);
-
-                    string[] knownPatterns = looksLikeDedicatedInstall
-                        ? new[]
-                        {
-                            "IgnisDisc.*", "ignisdisc-cli.*", "CdBurner.*", "cdburner-cli.*",
-                            "*.dll", "*.json", "*.pdb", "ffmpeg.exe", "Uninstall-IgnisDisc.exe"
-                        }
-                        : new[]
-                        {
-                            "IgnisDisc.*", "ignisdisc-cli.*", "CdBurner.*", "cdburner-cli.*", "Uninstall-IgnisDisc.exe"
-                        };
-
-                    foreach (string pattern in knownPatterns)
-                    {
-                        foreach (string file in Directory.GetFiles(installDir, pattern, SearchOption.TopDirectoryOnly))
-                        {
-                            try
-                            {
-                                if (!string.Equals(Path.GetFullPath(file), currentExe, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    File.Delete(file);
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-
-                // Clean up any empty subdirectories and the install directory itself if empty
-                try
-                {
-                    foreach (string subDir in Directory.GetDirectories(installDir, "*", SearchOption.AllDirectories)
-                                                       .OrderByDescending(d => d.Length))
-                    {
-                        try
-                        {
-                            if (!Directory.EnumerateFileSystemEntries(subDir).Any())
-                            {
-                                Directory.Delete(subDir, recursive: false);
-                            }
-                        }
-                        catch { }
-                    }
-
-                    if (!Directory.EnumerateFileSystemEntries(installDir).Any())
-                    {
-                        Directory.Delete(installDir, recursive: false);
-                    }
-                }
-                catch { }
             }
 
             if (!silent)
@@ -759,15 +872,16 @@ internal sealed class SetupWizardWindow : Window
         };
         browseBtn.Click += (_, _) =>
         {
-            using var dlg = new System.Windows.Forms.FolderBrowserDialog
+            var dlg = new Microsoft.Win32.OpenFolderDialog
             {
-                Description = "Select installation folder for IgnisDisc Optical Studio",
-                SelectedPath = _installDirBox.Text,
-                ShowNewFolderButton = true
+                Title = "Select installation folder for IgnisDisc Optical Studio",
+                InitialDirectory = Directory.Exists(_installDirBox.Text)
+                    ? _installDirBox.Text
+                    : Path.GetDirectoryName(_installDirBox.Text) ?? string.Empty
             };
-            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+            if (dlg.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dlg.FolderName))
             {
-                string selected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dlg.SelectedPath));
+                string selected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dlg.FolderName));
                 string leafName = Path.GetFileName(selected);
                 if (!string.Equals(leafName, "IgnisDisc", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(leafName, "CdBurner", StringComparison.OrdinalIgnoreCase))

@@ -10,7 +10,8 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $PublishDir = Join-Path $RepoRoot "artifacts\publish\$Runtime"
 $InstallerDir = Join-Path $RepoRoot "artifacts\installer"
 $SetupProjectDir = Join-Path $RepoRoot "tools\CdBurner.Setup"
-$PayloadZipPath = Join-Path $SetupProjectDir "payload.zip"
+$BootstrapperProjectDir = Join-Path $RepoRoot "tools\CdBurner.SetupBootstrapper"
+$PayloadZipPath = Join-Path $BootstrapperProjectDir "payload.zip"
 $PortableZipPath = Join-Path $InstallerDir "IgnisDisc-Portable-$Runtime.zip"
 
 Write-Host "=== Step 1: Publishing Self-Contained IgnisDisc (GUI & CLI, $Runtime) ===" -ForegroundColor Cyan
@@ -38,6 +39,16 @@ dotnet publish (Join-Path $RepoRoot "src\CdBurner.Cli\CdBurner.Cli.csproj") `
     -p:PublishSingleFile=false `
     -o $PublishDir
 if ($LASTEXITCODE -ne 0) { throw "Failed to publish CLI" }
+
+# The setup wizard / uninstaller (Uninstall-IgnisDisc.exe) is published into the same folder so it shares the app's
+# .NET runtime instead of carrying its own copy.
+dotnet publish (Join-Path $SetupProjectDir "CdBurner.Setup.csproj") `
+    -c $Configuration `
+    -r $Runtime `
+    --self-contained true `
+    -p:PublishSingleFile=false `
+    -o $PublishDir
+if ($LASTEXITCODE -ne 0) { throw "Failed to publish the setup wizard" }
 
 # Provide convenience launcher aliases so both IgnisDisc.exe / CdBurner.App.exe and ignisdisc-cli.exe / cdburner-cli.exe work seamlessly
 $IgnisGuiExe = Join-Path $PublishDir "IgnisDisc.exe"
@@ -78,20 +89,18 @@ Write-Host "=== Step 2: Packaging Portable Archive & Setup Payload ===" -Foregro
 if (Test-Path $PortableZipPath) { Remove-Item $PortableZipPath -Force }
 if (Test-Path $PayloadZipPath) { Remove-Item $PayloadZipPath -Force }
 
-Compress-Archive -Path "$PublishDir\*" -DestinationPath $PortableZipPath -CompressionLevel Optimal -Force
-Copy-Item -Path $PortableZipPath -Destination $PayloadZipPath -Force
+# Portable zip: the app and CLI without the installer's wizard/uninstaller.
+$portableItems = Get-ChildItem -LiteralPath $PublishDir | Where-Object { $_.Name -notlike "Uninstall-IgnisDisc*" }
+Compress-Archive -LiteralPath $portableItems.FullName -DestinationPath $PortableZipPath -CompressionLevel Optimal -Force
 
-Write-Host "=== Step 3: Building Standalone Single-File Setup Wizard (IgnisDisc-Setup.exe) ===" -ForegroundColor Cyan
+# Installer payload: everything, including the wizard that installs it.
+Compress-Archive -Path "$PublishDir\*" -DestinationPath $PayloadZipPath -CompressionLevel Optimal -Force
+
+Write-Host "=== Step 3: Building the Setup Launcher (IgnisDisc-Setup.exe, .NET Framework 4.8 built into Windows) ===" -ForegroundColor Cyan
 try {
-    dotnet publish (Join-Path $SetupProjectDir "CdBurner.Setup.csproj") `
-        -c $Configuration `
-        -r $Runtime `
-        --self-contained true `
-        -p:PublishSingleFile=true `
-        -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:EnableCompressionInSingleFile=true `
-        -o $InstallerDir
-    if ($LASTEXITCODE -ne 0) { throw "Failed to publish IgnisDisc-Setup" }
+    dotnet build (Join-Path $BootstrapperProjectDir "CdBurner.SetupBootstrapper.csproj") -c $Configuration
+    if ($LASTEXITCODE -ne 0) { throw "Failed to build IgnisDisc-Setup launcher" }
+    Copy-Item -Path (Join-Path $BootstrapperProjectDir "bin\$Configuration\net48\IgnisDisc-Setup.exe") -Destination $InstallerDir -Force
 }
 finally {
     if (Test-Path $PayloadZipPath) {
