@@ -11,6 +11,7 @@ namespace CdBurner.Integration.Tests;
 /// Regression tests verifying WPF ViewModel fixes (CRIT-02 physical drive list reload on DeviceChangeType.Added,
 /// DvdVideoViewModel & ImageStudioViewModel CancelCommand and SelectedWriteSpeed propagation).
 /// </summary>
+[Collection(WpfApplicationCollection.Name)]
 public sealed class AppSecurityAndBugRegressionTests
 {
     private sealed class DynamicFakeDeviceService : IDiscDeviceService

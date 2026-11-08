@@ -27,6 +27,7 @@ namespace CdBurner.Integration.Tests;
 /// 3. VIDEO_TS DVD-Video layout (32 KB ECC separation between .IFO and .BUP, virtual DVD-R burn, surface defect scanning).
 /// 4. Optical media erasing on virtual CD-RW (quick and full erase, blank state restoration verification).
 /// </summary>
+[Collection(WpfApplicationCollection.Name)]
 public sealed class Phase24_FullSystemAcceptanceTests : IDisposable
 {
     private readonly string _testTempDir;
