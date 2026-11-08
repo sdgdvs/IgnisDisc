@@ -1,3 +1,4 @@
+using CdBurner.App.Mvvm;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
@@ -56,41 +57,41 @@ public sealed class AppSecurityAndBugRegressionTests
     }
 
     [Fact]
-    public void MainViewModel_OnDeviceChanged_WithApplicationWhoseUiThreadHasExited_StillReloadsRecorders()
+    public void UiDispatch_NeverMarshalsToADispatcherWhoseThreadHasExited()
     {
-        // Reproduce the state another test leaves behind: a WPF Application created on an STA thread that has exited.
-        // Its dispatcher never runs again, so marshalling the refresh there would drop it forever.
-        if (System.Windows.Application.Current == null)
+        // A dispatcher created on a thread that has since exited (what a WPF test leaves behind) never runs again:
+        // marshalling a drive-list refresh to it would drop the refresh forever.
+        System.Windows.Threading.Dispatcher? deadDispatcher = null;
+        var shortLived = new Thread(() => deadDispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher);
+        shortLived.Start();
+        shortLived.Join();
+        Assert.False(UiDispatch.ShouldMarshalTo(deadDispatcher));
+
+        // No dispatcher, or already on the dispatcher's own thread: run inline.
+        Assert.False(UiDispatch.ShouldMarshalTo(null));
+        Assert.False(UiDispatch.ShouldMarshalTo(System.Windows.Threading.Dispatcher.CurrentDispatcher));
+
+        // A live UI thread on another thread: marshal.
+        System.Windows.Threading.Dispatcher? liveDispatcher = null;
+        using var ready = new ManualResetEventSlim();
+        var uiThread = new Thread(() =>
         {
-            var sta = new Thread(() =>
-            {
-                if (System.Windows.Application.Current == null)
-                {
-                    // Same setup as the WPF acceptance test (one Application per process, with the app's resources).
-                    var app = new CdBurner.App.App();
-                    app.InitializeComponent();
-                }
-            });
-            sta.SetApartmentState(ApartmentState.STA);
-            sta.Start();
-            sta.Join();
-        }
-
-        var dispatcher = System.Windows.Application.Current!.Dispatcher;
-        if (dispatcher.Thread.IsAlive)
+            liveDispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            ready.Set();
+            System.Windows.Threading.Dispatcher.Run();
+        });
+        uiThread.SetApartmentState(ApartmentState.STA);
+        uiThread.Start();
+        ready.Wait();
+        try
         {
-            return; // a live UI thread exists in this test run; the dead-thread case cannot be staged here
+            Assert.True(UiDispatch.ShouldMarshalTo(liveDispatcher));
         }
-
-        var fakeService = new DynamicFakeDeviceService();
-        using var virtualDrive = new VirtualDiscRecorder("VDRV-01", @"V:\");
-        fakeService.AddRecorder(virtualDrive);
-        using var mainVm = new MainViewModel(fakeService, new VirtualBurnEngine());
-
-        using var secondDrive = new VirtualDiscRecorder("PHYS-02", @"F:\");
-        fakeService.AddRecorder(secondDrive, eventUniqueId: string.Empty);
-
-        Assert.Equal(2, mainVm.AvailableRecorders.Count); // refreshed immediately, not queued to a dead thread
+        finally
+        {
+            liveDispatcher!.InvokeShutdown();
+            uiThread.Join();
+        }
     }
 
     [Fact]

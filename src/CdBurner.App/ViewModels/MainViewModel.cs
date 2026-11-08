@@ -1102,11 +1102,10 @@ public class MainViewModel : ObservableObject, IDisposable
 
         // Marshal to the UI thread only when one is actually running. An Application whose UI thread has exited (or is
         // shutting down) would queue the update forever and the drive list would silently never refresh.
-        if (System.Windows.Application.Current?.Dispatcher is { HasShutdownStarted: false } dispatcher &&
-            dispatcher.Thread.IsAlive &&
-            !dispatcher.CheckAccess())
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (UiDispatch.ShouldMarshalTo(dispatcher))
         {
-            dispatcher.BeginInvoke(Action);
+            dispatcher!.BeginInvoke(Action);
         }
         else
         {
