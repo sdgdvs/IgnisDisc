@@ -67,6 +67,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     private string? _lastExportedCoverHtmlPath;
     private System.Media.SoundPlayer? _soundPlayer;
     private MemoryStream? _previewWavStream;
+    private CancellationTokenSource? _previewCts;
     private MsfAddress _totalDuration = new(0, 0, 0);
     private double _discUsagePercent;
     private string _ripOutputFolder = string.Empty;
@@ -1257,7 +1258,14 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Decodes and plays a Red Book audio preview of the specified or currently selected track.
     /// </summary>
-    public void PreviewTrack(AudioTrackRowViewModel? track = null)
+    public void PreviewTrack(AudioTrackRowViewModel? track = null) => _ = PreviewTrackAsync(track);
+
+    /// <summary>
+    /// Decodes the first 30 seconds of a track on a background thread (a single-file album or a long hi-res FLAC can take
+    /// seconds to decode, which used to freeze the window), then plays it. <see cref="IsPreviewPlaying"/> returns to false
+    /// when the clip finishes on its own, when <see cref="StopPreview"/> is called, or when another preview starts.
+    /// </summary>
+    public async Task PreviewTrackAsync(AudioTrackRowViewModel? track = null)
     {
         var target = track ?? SelectedTrack ?? Tracks.FirstOrDefault();
         if (target == null)
@@ -1268,69 +1276,115 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
         StopPreview();
 
+        bool hasSource = target.CustomPcmStreamFactory != null ||
+                         (!string.IsNullOrWhiteSpace(target.SourceFilePath) && File.Exists(target.SourceFilePath));
+        if (!hasSource)
+        {
+            PreviewStatusText = $"Cannot preview Track {target.TrackNumber}: source file not found.";
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _previewCts = cts;
+        PreviewStatusText = $"Preparing preview of Track {target.TrackNumber:D2}…";
+
+        bool leveling = UseRmsLoudnessLeveling;
+        bool normalize = NormalizeAllTracks || target.NormalizeAudio;
+
         try
         {
-            Stream pcmStream;
-            if (target.CustomPcmStreamFactory != null)
+            byte[] pcmBytes = await Task.Run(() => DecodePreviewPcm(target, leveling, normalize, cts.Token), cts.Token);
+            if (cts.IsCancellationRequested || !ReferenceEquals(_previewCts, cts))
             {
-                pcmStream = target.CustomPcmStreamFactory();
-            }
-            else if (!string.IsNullOrWhiteSpace(target.SourceFilePath) && File.Exists(target.SourceFilePath))
-            {
-                pcmStream = _audioDecoder.OpenRedBookPcmStream(target.SourceFilePath);
-            }
-            else
-            {
-                PreviewStatusText = $"Cannot preview Track {target.TrackNumber}: source file not found.";
-                return;
+                return; // superseded by StopPreview or a newer preview
             }
 
-            using (pcmStream)
+            _previewWavStream = new MemoryStream(44 + pcmBytes.Length);
+            WavFileCodec.WriteWavHeader(_previewWavStream, pcmBytes.Length);
+            _previewWavStream.Write(pcmBytes, 0, pcmBytes.Length);
+            _previewWavStream.Position = 0;
+
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
-                // Cap preview buffer to first 30 seconds (5.29 MB) for snappy playback
-                const int maxPreviewBytes = 30 * OpticalConstants.CdAudioSampleRate * OpticalConstants.CdAudioBytesPerSample;
-                using var cappedPcm = new MemoryStream();
-                byte[] buf = new byte[16384];
-                int remaining = maxPreviewBytes;
-                while (remaining > 0)
-                {
-                    int r = pcmStream.Read(buf, 0, Math.Min(buf.Length, remaining));
-                    if (r <= 0) break;
-                    cappedPcm.Write(buf, 0, r);
-                    remaining -= r;
-                }
-
-                byte[] pcmBytes = cappedPcm.ToArray();
-                if (UseRmsLoudnessLeveling)
-                {
-                    pcmBytes = RedBookPcmDspProcessor.NormalizeRmsLoudness(pcmBytes);
-                }
-                else if (NormalizeAllTracks || target.NormalizeAudio)
-                {
-                    pcmBytes = RedBookPcmDspProcessor.NormalizePcm(pcmBytes);
-                }
-
-                _previewWavStream = new MemoryStream(44 + pcmBytes.Length);
-                WavFileCodec.WriteWavHeader(_previewWavStream, pcmBytes.Length);
-                _previewWavStream.Write(pcmBytes, 0, pcmBytes.Length);
-                _previewWavStream.Position = 0;
-
-                if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
-                {
-                    _soundPlayer = new System.Media.SoundPlayer(_previewWavStream);
-                    _soundPlayer.Play();
-                }
-
-                IsPreviewPlaying = true;
-                PreviewStatusText = $"🔊 Playing Track {target.TrackNumber:D2}: {target.Title} ({target.FormatSummary})";
-                StatusMessage = PreviewStatusText;
+                _soundPlayer = new System.Media.SoundPlayer(_previewWavStream);
+                _soundPlayer.Play();
             }
+
+            IsPreviewPlaying = true;
+            PreviewStatusText = $"🔊 Playing Track {target.TrackNumber:D2}: {target.Title} ({target.FormatSummary})";
+            StatusMessage = PreviewStatusText;
+
+            double clipSeconds = (double)pcmBytes.Length / (OpticalConstants.CdAudioSampleRate * OpticalConstants.CdAudioBytesPerSample);
+            _ = ResetPreviewWhenClipEndsAsync(TimeSpan.FromSeconds(clipSeconds), cts);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
+            if (ReferenceEquals(_previewCts, cts))
+            {
+                IsPreviewPlaying = false;
+                PreviewStatusText = $"Preview failed: {ex.Message}";
+                StatusMessage = PreviewStatusText;
+            }
+        }
+    }
+
+    private byte[] DecodePreviewPcm(AudioTrackRowViewModel target, bool leveling, bool normalize, CancellationToken ct)
+    {
+        Stream pcmStream = target.CustomPcmStreamFactory != null
+            ? target.CustomPcmStreamFactory()
+            : _audioDecoder.OpenRedBookPcmStream(target.SourceFilePath);
+
+        using (pcmStream)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // Cap preview buffer to first 30 seconds (5.29 MB) for snappy playback
+            const int maxPreviewBytes = 30 * OpticalConstants.CdAudioSampleRate * OpticalConstants.CdAudioBytesPerSample;
+            using var cappedPcm = new MemoryStream();
+            byte[] buf = new byte[16384];
+            int remaining = maxPreviewBytes;
+            while (remaining > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                int r = pcmStream.Read(buf, 0, Math.Min(buf.Length, remaining));
+                if (r <= 0) break;
+                cappedPcm.Write(buf, 0, r);
+                remaining -= r;
+            }
+
+            byte[] pcmBytes = cappedPcm.ToArray();
+            if (leveling)
+            {
+                pcmBytes = RedBookPcmDspProcessor.NormalizeRmsLoudness(pcmBytes);
+            }
+            else if (normalize)
+            {
+                pcmBytes = RedBookPcmDspProcessor.NormalizePcm(pcmBytes);
+            }
+
+            return pcmBytes;
+        }
+    }
+
+    private async Task ResetPreviewWhenClipEndsAsync(TimeSpan clipLength, CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(clipLength + TimeSpan.FromMilliseconds(250), cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(_previewCts, cts) && IsPreviewPlaying)
+        {
+            ReleasePreviewPlayer();
             IsPreviewPlaying = false;
-            PreviewStatusText = $"Preview failed: {ex.Message}";
-            StatusMessage = PreviewStatusText;
+            PreviewStatusText = "Preview finished.";
         }
     }
 
@@ -1338,6 +1392,27 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     /// Stops any active audio track preview playback.
     /// </summary>
     public void StopPreview()
+    {
+        try
+        {
+            _previewCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        _previewCts = null;
+
+        ReleasePreviewPlayer();
+
+        if (IsPreviewPlaying)
+        {
+            IsPreviewPlaying = false;
+            PreviewStatusText = "Preview stopped.";
+            StatusMessage = "Audio preview stopped.";
+        }
+    }
+
+    private void ReleasePreviewPlayer()
     {
         try
         {
@@ -1362,13 +1437,6 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         finally
         {
             _previewWavStream = null;
-        }
-
-        if (IsPreviewPlaying)
-        {
-            IsPreviewPlaying = false;
-            PreviewStatusText = "Preview stopped.";
-            StatusMessage = "Audio preview stopped.";
         }
     }
 

@@ -216,7 +216,23 @@ public static class WavFileCodec
             stream.Position = parsed.DataOffset;
         }
 
-        byte[] rawAudioBytes = reader.ReadBytes((int)parsed.DataSize);
+        bool isRedBookStereo = parsed.SampleRate == OpticalConstants.CdAudioSampleRate &&
+                               parsed.Channels == OpticalConstants.CdAudioChannels &&
+                               parsed.BitsPerSample == OpticalConstants.CdAudioBitsPerSample &&
+                               !parsed.IsFloat;
+        bool isRedBookMono = parsed.SampleRate == OpticalConstants.CdAudioSampleRate &&
+                             parsed.Channels == 1 &&
+                             parsed.BitsPerSample == 16 &&
+                             !parsed.IsFloat;
+
+        // Everything that needs resampling, re-quantizing or downmixing streams through the shared band-limited
+        // converter (same quality as FLAC, no whole-file float copies, no 2 GB limit).
+        if (!isRedBookStereo && !isRedBookMono)
+        {
+            return ConvertViaRedBookConverter(stream, parsed);
+        }
+
+        byte[] rawAudioBytes = reader.ReadBytes((int)Math.Min(parsed.DataSize, int.MaxValue));
 
         int bytesPerSample = parsed.BitsPerSample / 8;
         int bytesPerInputFrame = parsed.Channels * bytesPerSample;
@@ -261,197 +277,100 @@ public static class WavFileCodec
             return stereoBytes;
         }
 
-        long targetFramesLong = (long)Math.Round((double)inputFrames * OpticalConstants.CdAudioSampleRate / parsed.SampleRate);
-        if (targetFramesLong <= 0 || targetFramesLong > 200_000_000)
-        {
-            throw new InvalidDataException($"Decoded audio frame count ({targetFramesLong}) is invalid or exceeds maximum supported Red Book CD-DA length.");
-        }
-
-        // General conversion: Extract normalized floating-point channels [-1.0f .. +1.0f]
-        float[] leftChannel = new float[inputFrames];
-        float[] rightChannel = new float[inputFrames];
-
-        ExtractFloatingChannels(
-            rawAudioBytes,
-            parsed.Channels,
-            parsed.BitsPerSample,
-            parsed.IsFloat,
-            inputFrames,
-            leftChannel,
-            rightChannel);
-
-        // Resample to 44,100 Hz if needed
-        float[] outLeft;
-        float[] outRight;
-        int outputFrames;
-
-        if (parsed.SampleRate == OpticalConstants.CdAudioSampleRate)
-        {
-            outLeft = leftChannel;
-            outRight = rightChannel;
-            outputFrames = inputFrames;
-        }
-        else
-        {
-            outputFrames = (int)targetFramesLong;
-            outLeft = new float[outputFrames];
-            outRight = new float[outputFrames];
-
-            ResampleStereo(
-                leftChannel,
-                rightChannel,
-                parsed.SampleRate,
-                OpticalConstants.CdAudioSampleRate,
-                outLeft,
-                outRight);
-        }
-
-        // Convert normalized float samples to 16-bit signed LE Stereo PCM
-        byte[] result = new byte[outputFrames * OpticalConstants.CdAudioBytesPerSample];
-        Span<byte> destSpan = result;
-
-        for (int i = 0; i < outputFrames; i++)
-        {
-            short sL = (short)Math.Clamp(Math.Round(outLeft[i] * 32767.0f), short.MinValue, short.MaxValue);
-            short sR = (short)Math.Clamp(Math.Round(outRight[i] * 32767.0f), short.MinValue, short.MaxValue);
-
-            BinaryPrimitives.WriteInt16LittleEndian(destSpan.Slice(i * 4, 2), sL);
-            BinaryPrimitives.WriteInt16LittleEndian(destSpan.Slice(i * 4 + 2, 2), sR);
-        }
-
-        return result;
-    }
-
-    private static void ExtractFloatingChannels(
-        byte[] rawBytes,
-        int channels,
-        int bitsPerSample,
-        bool isFloat,
-        int frameCount,
-        float[] left,
-        float[] right)
-    {
-        ReadOnlySpan<byte> span = rawBytes;
-        int bytesPerSample = bitsPerSample / 8;
-        int frameBytes = channels * bytesPerSample;
-
-        for (int i = 0; i < frameCount; i++)
-        {
-            int frameOffset = i * frameBytes;
-
-            float sampleL;
-            float sampleR;
-
-            if (bitsPerSample == 8)
-            {
-                // 8-bit unsigned PCM: 0..255, center 128
-                sampleL = (span[frameOffset] - 128) / 128.0f;
-                sampleR = channels > 1 ? (span[frameOffset + 1] - 128) / 128.0f : sampleL;
-            }
-            else if (bitsPerSample == 16)
-            {
-                // 16-bit signed LE PCM
-                short s0 = BinaryPrimitives.ReadInt16LittleEndian(span.Slice(frameOffset, 2));
-                sampleL = s0 / 32768.0f;
-                if (channels > 1)
-                {
-                    short s1 = BinaryPrimitives.ReadInt16LittleEndian(span.Slice(frameOffset + 2, 2));
-                    sampleR = s1 / 32768.0f;
-                }
-                else
-                {
-                    sampleR = sampleL;
-                }
-            }
-            else if (bitsPerSample == 24)
-            {
-                // 24-bit signed LE PCM
-                int s0 = span[frameOffset] | (span[frameOffset + 1] << 8) | (span[frameOffset + 2] << 16);
-                if ((s0 & 0x800000) != 0) s0 |= unchecked((int)0xFF000000);
-                sampleL = s0 / 8388608.0f;
-
-                if (channels > 1)
-                {
-                    int s1 = span[frameOffset + 3] | (span[frameOffset + 4] << 8) | (span[frameOffset + 5] << 16);
-                    if ((s1 & 0x800000) != 0) s1 |= unchecked((int)0xFF000000);
-                    sampleR = s1 / 8388608.0f;
-                }
-                else
-                {
-                    sampleR = sampleL;
-                }
-            }
-            else if (bitsPerSample == 32)
-            {
-                if (isFloat)
-                {
-                    // 32-bit IEEE float LE
-                    sampleL = BinaryPrimitives.ReadSingleLittleEndian(span.Slice(frameOffset, 4));
-                    sampleR = channels > 1
-                        ? BinaryPrimitives.ReadSingleLittleEndian(span.Slice(frameOffset + 4, 4))
-                        : sampleL;
-                }
-                else
-                {
-                    // 32-bit signed integer LE
-                    int s0 = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(frameOffset, 4));
-                    sampleL = (float)(s0 / 2147483648.0);
-                    if (channels > 1)
-                    {
-                        int s1 = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(frameOffset + 4, 4));
-                        sampleR = (float)(s1 / 2147483648.0);
-                    }
-                    else
-                    {
-                        sampleR = sampleL;
-                    }
-                }
-            }
-            else
-            {
-                throw new NotSupportedException($"WAV bit depth {bitsPerSample} is not supported.");
-            }
-
-            left[i] = sampleL;
-            right[i] = sampleR;
-        }
+        // Unreachable: only the two Red Book fast paths above reach this point.
+        throw new InvalidOperationException("Unexpected WAV layout after fast-path selection.");
     }
 
     /// <summary>
-    /// Resamples stereo audio channels to the target sample rate using band-limited / linear interpolation.
+    /// Streams the data chunk through <see cref="RedBookPcmConverter"/> in fixed-size blocks: band-limited resampling,
+    /// multichannel downmix and dithered re-quantization, using memory proportional to the Red Book output only.
     /// </summary>
-    private static void ResampleStereo(
-        float[] inLeft,
-        float[] inRight,
-        int inRate,
-        int outRate,
-        float[] outLeft,
-        float[] outRight)
+    private static byte[] ConvertViaRedBookConverter(Stream stream, ParsedWavInfo parsed)
     {
-        int inCount = inLeft.Length;
-        int outCount = outLeft.Length;
-        if (inCount == 0 || outCount == 0) return;
-
-        double step = (double)inRate / outRate;
-
-        for (int i = 0; i < outCount; i++)
+        int bytesPerSample = parsed.BitsPerSample / 8;
+        int channels = parsed.Channels;
+        if (channels is < 1 or > 8)
         {
-            double pos = i * step;
-            int idx = (int)pos;
-            float frac = (float)(pos - idx);
+            throw new NotSupportedException($"WAV files with {channels} channels are not supported (1 to 8).");
+        }
 
-            if (idx >= inCount - 1)
+        if (parsed.IsFloat ? parsed.BitsPerSample != 32 : bytesPerSample is < 1 or > 4 || parsed.BitsPerSample % 8 != 0)
+        {
+            throw new NotSupportedException($"WAV bit depth {parsed.BitsPerSample}{(parsed.IsFloat ? " (float)" : string.Empty)} is not supported.");
+        }
+
+        int frameBytes = channels * bytesPerSample;
+        long totalFrames = parsed.DataSize / frameBytes;
+        if (totalFrames <= 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        if (RedBookPcmConverter.ExpectedOutputFrames(totalFrames, parsed.SampleRate) > RedBookPcmConverter.MaxOutputFrames)
+        {
+            throw new InvalidDataException("WAV audio is longer than any Red Book Audio CD can hold.");
+        }
+
+        // 32-bit float is mapped onto the full signed 32-bit integer range.
+        int sourceBits = parsed.IsFloat ? 32 : parsed.BitsPerSample;
+        var converter = new RedBookPcmConverter(parsed.SampleRate, totalFrames);
+
+        const int blockFrames = 16384;
+        byte[] buffer = new byte[blockFrames * frameBytes];
+        var samples = new int[channels][];
+        for (int c = 0; c < channels; c++) samples[c] = new int[blockFrames];
+
+        long remaining = totalFrames;
+        while (remaining > 0)
+        {
+            int want = (int)Math.Min(blockFrames, remaining);
+            int gotBytes = 0;
+            int wantBytes = want * frameBytes;
+            while (gotBytes < wantBytes)
             {
-                outLeft[i] = inLeft[inCount - 1];
-                outRight[i] = inRight[inCount - 1];
+                int r = stream.Read(buffer, gotBytes, wantBytes - gotBytes);
+                if (r <= 0) break;
+                gotBytes += r;
             }
-            else
+
+            int got = gotBytes / frameBytes;
+            if (got == 0) break;
+
+            ReadOnlySpan<byte> span = buffer;
+            for (int i = 0; i < got; i++)
             {
-                outLeft[i] = (1.0f - frac) * inLeft[idx] + frac * inLeft[idx + 1];
-                outRight[i] = (1.0f - frac) * inRight[idx] + frac * inRight[idx + 1];
+                int frameOffset = i * frameBytes;
+                for (int c = 0; c < channels; c++)
+                {
+                    int o = frameOffset + (c * bytesPerSample);
+                    samples[c][i] = bytesPerSample switch
+                    {
+                        1 => span[o] - 128, // 8-bit WAV is unsigned
+                        2 => BinaryPrimitives.ReadInt16LittleEndian(span.Slice(o, 2)),
+                        3 => (span[o] | (span[o + 1] << 8) | (span[o + 2] << 16)) << 8 >> 8, // sign-extend 24-bit
+                        _ => parsed.IsFloat
+                            ? FloatToInt32(BinaryPrimitives.ReadSingleLittleEndian(span.Slice(o, 4)))
+                            : BinaryPrimitives.ReadInt32LittleEndian(span.Slice(o, 4))
+                    };
+                }
             }
+
+            converter.WriteBlock(samples, channels, sourceBits, got);
+            remaining -= got;
+            if (got < want) break;
+        }
+
+        return converter.Finish();
+
+        static int FloatToInt32(float f)
+        {
+            if (float.IsNaN(f)) return 0;
+            // ±1.0 is full scale; the 2^31 scale keeps -1.0 exact (int.MinValue) and clamps +1.0 to int.MaxValue.
+            double scaled = Math.Round(Math.Clamp(f, -1.0f, 1.0f) * 2147483648.0);
+            return (int)Math.Clamp(scaled, int.MinValue, int.MaxValue);
         }
     }
+
 
     private sealed class ParsedWavInfo
     {

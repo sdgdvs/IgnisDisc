@@ -578,7 +578,7 @@ public sealed class Phase22_AudioAndImageViewModelTests : IDisposable
 
         // Act 2: Built-in Audio Track Preview Player
         vm.SelectedTrack = vm.Tracks[0];
-        vm.PreviewSelectedTrackCommand.Execute(null);
+        await vm.PreviewTrackAsync(); // the preview command runs this in the background
         Assert.True(vm.IsPreviewPlaying);
         Assert.Contains("Playing Track 01: Dawn Chorus", vm.PreviewStatusText);
 

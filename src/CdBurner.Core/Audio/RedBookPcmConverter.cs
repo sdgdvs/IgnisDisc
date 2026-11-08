@@ -32,6 +32,7 @@ public sealed class RedBookPcmConverter
     private float[] _scratchLeft = Array.Empty<float>();
     private float[] _scratchRight = Array.Empty<float>();
     private bool _finished;
+    private uint _ditherState = 0x9E3779B9; // fixed seed: identical input always produces identical output
 
     /// <summary>
     /// Creates a converter for a source stream at <paramref name="sourceSampleRate"/> Hz.
@@ -104,8 +105,11 @@ public sealed class RedBookPcmConverter
             Span<byte> dest = _output.AsSpan((int)_outputBytes, count * OpticalConstants.CdAudioBytesPerSample);
             for (int i = 0; i < count; i++)
             {
-                BinaryPrimitives.WriteInt16LittleEndian(dest.Slice(i * 4, 2), RequantizeTo16(l[i], bitsPerSample));
-                BinaryPrimitives.WriteInt16LittleEndian(dest.Slice(i * 4 + 2, 2), RequantizeTo16(r[i], bitsPerSample));
+                // Identical channels (mono, or dual-mono material) get one quantized value so they stay identical.
+                short ql = RequantizeTo16(l[i], bitsPerSample);
+                short qr = r[i] == l[i] ? ql : RequantizeTo16(r[i], bitsPerSample);
+                BinaryPrimitives.WriteInt16LittleEndian(dest.Slice(i * 4, 2), ql);
+                BinaryPrimitives.WriteInt16LittleEndian(dest.Slice(i * 4 + 2, 2), qr);
             }
 
             _outputBytes += (long)count * OpticalConstants.CdAudioBytesPerSample;
@@ -192,8 +196,10 @@ public sealed class RedBookPcmConverter
     {
         EnsureOutputCapacity(1);
         Span<byte> dest = _output.AsSpan((int)_outputBytes, 4);
-        BinaryPrimitives.WriteInt16LittleEndian(dest, FloatTo16(left));
-        BinaryPrimitives.WriteInt16LittleEndian(dest.Slice(2), FloatTo16(right));
+        short ql = FloatTo16(left);
+        short qr = right == left ? ql : FloatTo16(right); // keep mono / centre-only material exactly mono
+        BinaryPrimitives.WriteInt16LittleEndian(dest, ql);
+        BinaryPrimitives.WriteInt16LittleEndian(dest.Slice(2), qr);
         _outputBytes += 4;
     }
 
@@ -228,22 +234,54 @@ public sealed class RedBookPcmConverter
     }
 
     /// <summary>
-    /// Re-quantizes a signed integer sample of <paramref name="bits"/> significant bits to 16 bits (round-half-up, clamped).
+    /// Re-quantizes a signed integer sample of <paramref name="bits"/> significant bits to 16 bits. Sources of 16 bits or
+    /// fewer are exact. Deeper sources get TPDF dither whenever the discarded low bits are non-zero, which turns
+    /// truncation distortion on quiet passages into a constant, inaudible noise floor.
     /// </summary>
-    internal static short RequantizeTo16(int sample, int bits)
+    private short RequantizeTo16(int sample, int bits)
     {
         if (bits == 16) return (short)Math.Clamp(sample, short.MinValue, short.MaxValue);
         if (bits < 16) return (short)Math.Clamp(sample << (16 - bits), short.MinValue, short.MaxValue);
 
         int shift = bits - 16;
-        long rounded = ((long)sample + (1L << (shift - 1))) >> shift;
-        return (short)Math.Clamp(rounded, short.MinValue, short.MaxValue);
+        long lowMask = (1L << shift) - 1;
+        if ((sample & lowMask) == 0)
+        {
+            return (short)Math.Clamp((long)sample >> shift, short.MinValue, short.MaxValue); // already exact
+        }
+
+        double scaled = (double)sample / (1L << shift);
+        return (short)Math.Clamp(Math.Round(scaled + NextTpdf()), short.MinValue, short.MaxValue);
     }
 
-    private static short FloatTo16(float x)
+    private short FloatTo16(float x)
     {
-        double scaled = Math.Round(x * 32768.0);
-        return (short)Math.Clamp(scaled, short.MinValue, short.MaxValue);
+        double scaled = x * 32768.0;
+        double nearest = Math.Round(scaled);
+        if (Math.Abs(scaled - nearest) > 1e-9)
+        {
+            nearest = Math.Round(scaled + NextTpdf()); // dither only when information below 16 bits exists
+        }
+
+        return (short)Math.Clamp(nearest, short.MinValue, short.MaxValue);
+    }
+
+    /// <summary>
+    /// Triangular (TPDF) dither in (-1, +1) LSB: the difference of two uniform values from a xorshift32 generator.
+    /// </summary>
+    private double NextTpdf()
+    {
+        return NextUniform() - NextUniform();
+
+        double NextUniform()
+        {
+            uint x = _ditherState;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            _ditherState = x;
+            return x / 4294967296.0;
+        }
     }
 
     /// <summary>

@@ -76,7 +76,9 @@ public sealed class V108_AuditRegressionTests : IDisposable
         byte[] flac = FlacTestEncoder.Encode(44100, 24, new[] { left, right }, blockSize: 4096, assignment, sub);
         byte[] pcm = FlacFileCodec.DecodeToRedBookPcm(new MemoryStream(flac));
 
-        Assert.Equal(ExpectedRedBook(left, right, 24), pcm);
+        // 24 → 16-bit adds TPDF dither, so each sample may differ from plain rounding by one step. A decorrelation or
+        // overflow bug would be off by thousands, so this still proves the 25-bit side channel decodes correctly.
+        AssertWithinOneLsb(ExpectedRedBook(left, right, 24), pcm);
     }
 
     [Fact]
@@ -196,7 +198,8 @@ public sealed class V108_AuditRegressionTests : IDisposable
 
         Assert.Equal(44100 * 4, pcm.Length);
         var (l, r) = SplitStereo(pcm);
-        Assert.Equal(l, r); // centre folds equally into both sides
+        // Centre folds equally into both sides (each side gets its own dither, hence the 2-step tolerance).
+        Assert.All(Enumerable.Range(0, l.Length), i => Assert.InRange(l[i] - r[i], -2, 2));
         Assert.True(Rms(l, 4410, 39690) > 1000, "Centre (dialogue/vocal) channel must not be dropped by the stereo fold-down.");
     }
 
@@ -584,7 +587,133 @@ public sealed class V108_AuditRegressionTests : IDisposable
 
     #endregion
 
+    #region v1.10: dither and WAV through the shared converter
+
+    [Fact]
+    public void Dither_KeepsDetailBelow16Bits_InsteadOfTruncatingItToSilence()
+    {
+        // A 1 kHz tone at a quarter of one 16-bit step: plain rounding turns it into pure digital silence.
+        const int n = 44100;
+        var tone = new int[n];
+        for (int i = 0; i < n; i++) tone[i] = (int)Math.Round(64 * Math.Sin(2 * Math.PI * 1000 * i / 44100.0)); // 24-bit units
+        var conv = new RedBookPcmConverter(44100, n);
+        conv.WriteBlock(new[] { tone, tone }, 2, 24, n);
+        var (l, _) = SplitStereo(conv.Finish());
+
+        Assert.Contains(l, s => s != 0);
+        Assert.All(l, s => Assert.InRange(s, -2, 2));
+
+        // The dithered output still carries the tone: it correlates positively with the input.
+        double correlation = 0;
+        for (int i = 0; i < n; i++) correlation += l[i] * Math.Sin(2 * Math.PI * 1000 * i / 44100.0);
+        Assert.True(correlation > 0.1 * n * 0.25, $"Tone lost under dither (correlation {correlation:F0}).");
+    }
+
+    [Fact]
+    public void Dither_LeavesExactSamplesAndDigitalSilenceUntouched_AndIsDeterministic()
+    {
+        const int n = 4096;
+        var exact = Enumerable.Range(0, n).Select(i => ((i % 200) - 100) << 8).ToArray(); // 24-bit with zero low byte
+        var silence = new int[n];
+
+        var c1 = new RedBookPcmConverter(44100);
+        c1.WriteBlock(new[] { exact, silence }, 2, 24, n);
+        var (l, r) = SplitStereo(c1.Finish());
+        Assert.Equal(exact.Select(v => (short)(v >> 8)), l);
+        Assert.All(r, s => Assert.Equal(0, s));
+
+        var noisy = Enumerable.Range(0, n).Select(i => (i * 7919) % 100_000 - 50_000).ToArray();
+        byte[] Run()
+        {
+            var c = new RedBookPcmConverter(48000);
+            c.WriteBlock(new[] { noisy, noisy }, 2, 24, n);
+            return c.Finish();
+        }
+        Assert.Equal(Run(), Run());
+    }
+
+    [Fact]
+    public void Wav96k24Bit_UsesBandLimitedConversion_NotLinearInterpolation()
+    {
+        string path = Path.Combine(_dir, "hires.wav");
+        int n = 96000;
+        byte[] data = new byte[n * 2 * 3];
+        for (int i = 0; i < n; i++)
+        {
+            int v = (int)(0.5 * 8_388_607 * Math.Sin(2 * Math.PI * 30000 * i / 96000.0)); // ultrasonic
+            for (int c = 0; c < 2; c++)
+            {
+                int o = (i * 2 + c) * 3;
+                data[o] = (byte)v; data[o + 1] = (byte)(v >> 8); data[o + 2] = (byte)(v >> 16);
+            }
+        }
+        WavFileCodec.WriteWavFile(path, data, 96000, 2, 24);
+
+        var (l, _) = SplitStereo(WavFileCodec.DecodeToRedBookPcm(path));
+
+        Assert.Equal(44100, l.Length);
+        double inputRms = 0.5 * 32768 / Math.Sqrt(2);
+        Assert.True(Rms(l, 4410, l.Length - 4410) < inputRms * 0.01, "30 kHz content aliased into the audible band.");
+    }
+
+    [Fact]
+    public void WavSixChannel_KeepsTheCentreChannel()
+    {
+        string path = Path.Combine(_dir, "surround.wav");
+        int n = 48000;
+        byte[] data = new byte[n * 6 * 2];
+        for (int i = 0; i < n; i++)
+        {
+            short v = (short)(0.5 * 32767 * Math.Sin(2 * Math.PI * 1000 * i / 48000.0));
+            BinaryPrimitives.WriteInt16LittleEndian(data.AsSpan(((i * 6) + 2) * 2), v); // centre only
+        }
+        WavFileCodec.WriteWavFile(path, data, 48000, 6, 16);
+
+        var (l, r) = SplitStereo(WavFileCodec.DecodeToRedBookPcm(path));
+
+        Assert.Equal(44100, l.Length);
+        Assert.True(Rms(l, 4410, 39690) > 1000 && Rms(r, 4410, 39690) > 1000, "Centre channel was dropped.");
+    }
+
+    [Fact]
+    public void WavFloat32_44k_DecodesToFullScaleWithoutWrapping()
+    {
+        string path = Path.Combine(_dir, "float.wav");
+        int n = 1000;
+        byte[] data = new byte[n * 2 * 4];
+        for (int i = 0; i < n * 2; i++)
+        {
+            float f = i % 4 < 2 ? 1.5f : -1.0f; // includes an out-of-range +1.5 that must clamp, not wrap
+            BinaryPrimitives.WriteSingleLittleEndian(data.AsSpan(i * 4), f);
+        }
+        byte[] header = WavFileCodec.CreateWavHeader(data.Length, 44100, 2, 32);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(20, 2), 3); // WAVE_FORMAT_IEEE_FLOAT
+        File.WriteAllBytes(path, header.Concat(data).ToArray());
+
+        var (l, r) = SplitStereo(WavFileCodec.DecodeToRedBookPcm(path));
+
+        Assert.Equal(n, l.Length);
+        Assert.All(l.Where((_, i) => i % 2 == 0), s => Assert.Equal(short.MaxValue, s));
+        Assert.All(l.Where((_, i) => i % 2 == 1), s => Assert.Equal(short.MinValue, s));
+    }
+
+    #endregion
+
     #region Helpers
+
+    private static void AssertWithinOneLsb(byte[] expected, byte[] actual)
+    {
+        Assert.Equal(expected.Length, actual.Length);
+        for (int i = 0; i < expected.Length; i += 2)
+        {
+            int e = BinaryPrimitives.ReadInt16LittleEndian(expected.AsSpan(i));
+            int a = BinaryPrimitives.ReadInt16LittleEndian(actual.AsSpan(i));
+            if (Math.Abs(e - a) > 1)
+            {
+                Assert.Fail($"Sample {i / 2}: expected {e} ±1, got {a}.");
+            }
+        }
+    }
 
     private static (int[] L, int[] R) MakeStereoSignal(int n, int bits, int seed)
     {

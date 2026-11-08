@@ -68,20 +68,63 @@ public sealed class V108_AuditViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Dispose_WhilePreviewIsPlaying_StopsPreview()
+    public async Task Dispose_WhilePreviewIsPlaying_StopsPreview()
     {
         string flac = Path.Combine(_dir, "preview.flac");
         FlacFileCodec.WriteFlacFile(flac, new byte[30 * OpticalConstants.RawSectorSize]);
 
         var vm = new AudioBurnViewModel(_devices, _engine);
         vm.AddAudioFiles(new[] { flac });
-        vm.PreviewTrack();
+        await vm.PreviewTrackAsync();
         Assert.True(vm.IsPreviewPlaying);
 
         vm.Dispose();
 
         Assert.False(vm.IsPreviewPlaying);
         vm.Dispose(); // idempotent
+    }
+
+    [Fact]
+    public async Task Preview_ResetsPlayingStateWhenTheClipEnds()
+    {
+        string flac = Path.Combine(_dir, "short.flac");
+        FlacFileCodec.WriteFlacFile(flac, new byte[30 * OpticalConstants.RawSectorSize]); // 0.4 s clip
+
+        var vm = new AudioBurnViewModel(_devices, _engine);
+        vm.AddAudioFiles(new[] { flac });
+        await vm.PreviewTrackAsync();
+        Assert.True(vm.IsPreviewPlaying);
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        Assert.False(vm.IsPreviewPlaying);
+        Assert.Equal("Preview finished.", vm.PreviewStatusText);
+    }
+
+    [Fact]
+    public async Task Preview_DecodesOffTheCallingThread()
+    {
+        int callerThread = Environment.CurrentManagedThreadId;
+        int? decodeThread = null;
+        var vm = new AudioBurnViewModel(_devices, _engine);
+        vm.Tracks.Add(new AudioTrackRowViewModel
+        {
+            TrackNumber = 1,
+            Title = "Slow source",
+            CustomPcmStreamFactory = () =>
+            {
+                decodeThread = Environment.CurrentManagedThreadId;
+                return new MemoryStream(new byte[10 * OpticalConstants.RawSectorSize]);
+            }
+        });
+
+        Task preview = vm.PreviewTrackAsync(vm.Tracks[0]);
+        await preview;
+
+        Assert.NotNull(decodeThread);
+        Assert.NotEqual(callerThread, decodeThread.Value);
+        Assert.True(vm.IsPreviewPlaying);
+        vm.StopPreview();
     }
 
     #endregion
