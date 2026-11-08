@@ -60,6 +60,36 @@ public record AudioFormatMetadata
     /// Optional embedded artist or performer.
     /// </summary>
     public string? Artist { get; init; }
+
+    /// <summary>
+    /// Optional embedded album title.
+    /// </summary>
+    public string? Album { get; init; }
+
+    /// <summary>
+    /// Optional embedded album artist / performer.
+    /// </summary>
+    public string? AlbumArtist { get; init; }
+
+    /// <summary>
+    /// Optional embedded songwriter / lyricist.
+    /// </summary>
+    public string? Songwriter { get; init; }
+
+    /// <summary>
+    /// Optional embedded composer.
+    /// </summary>
+    public string? Composer { get; init; }
+
+    /// <summary>
+    /// Optional embedded International Standard Recording Code (ISRC).
+    /// </summary>
+    public string? Isrc { get; init; }
+
+    /// <summary>
+    /// Optional embedded 1-based track number.
+    /// </summary>
+    public int? TrackNumber { get; init; }
 }
 
 /// <summary>

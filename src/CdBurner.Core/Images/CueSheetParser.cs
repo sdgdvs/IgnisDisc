@@ -182,9 +182,17 @@ public static class CueSheetParser
                     break;
 
                 case "FILE":
-                    FinishCurrentFile();
-                    var (fileName, fileType) = ParseFileTokens(tokens);
-                    currentFile = new CueFileEntryBuilder(fileName, fileType);
+                    {
+                        // EAC "gaps appended to previous track" layout: TRACK n+1 opens (with only INDEX 00) inside
+                        // FILE n and its INDEX 01 follows the next FILE line. Carry that still-open track into the new
+                        // FILE so INDEX 01 is not dropped. Its INDEX 00 offsets refer to the previous file, whose tail
+                        // (the gap audio) stays with the previous track, so they are discarded here.
+                        var carried = TakeTrackAwaitingIndex01(ref currentTrack);
+                        FinishCurrentFile();
+                        var (fileName, fileType) = ParseFileTokens(tokens);
+                        currentFile = new CueFileEntryBuilder(fileName, fileType);
+                        currentTrack = carried;
+                    }
                     break;
 
                 case "TRACK":
@@ -357,9 +365,17 @@ public static class CueSheetParser
                     break;
 
                 case "FILE":
-                    FinishCurrentFile();
-                    var (fileName, fileType) = ParseFileTokens(tokens);
-                    currentFile = new CueFileEntryBuilder(fileName, fileType);
+                    {
+                        // EAC "gaps appended to previous track" layout: TRACK n+1 opens (with only INDEX 00) inside
+                        // FILE n and its INDEX 01 follows the next FILE line. Carry that still-open track into the new
+                        // FILE so INDEX 01 is not dropped. Its INDEX 00 offsets refer to the previous file, whose tail
+                        // (the gap audio) stays with the previous track, so they are discarded here.
+                        var carried = TakeTrackAwaitingIndex01(ref currentTrack);
+                        FinishCurrentFile();
+                        var (fileName, fileType) = ParseFileTokens(tokens);
+                        currentFile = new CueFileEntryBuilder(fileName, fileType);
+                        currentTrack = carried;
+                    }
                     break;
 
                 case "TRACK":
@@ -516,6 +532,19 @@ public static class CueSheetParser
             }
         }
         return tokens;
+    }
+
+    private static CueTrackBuilder? TakeTrackAwaitingIndex01(ref CueTrackBuilder? currentTrack)
+    {
+        if (currentTrack == null || currentTrack.Indices.Any(i => i.IndexNumber >= 1))
+        {
+            return null;
+        }
+
+        var carried = currentTrack;
+        currentTrack = null;
+        carried.Indices.Clear();
+        return carried;
     }
 
     private sealed class CueFileEntryBuilder(string fileName, string fileType)

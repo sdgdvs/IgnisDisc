@@ -137,10 +137,30 @@
                                              VerticalAlignment="Center"
                                              Margin="0,0,16,0" />
 
-                                <CheckBox Content="Normalize Peaks (DSP)"
+                                <CheckBox Content="Normalize Peaks"
                                           IsChecked="{Binding NormalizeAllTracks}"
-                                          ToolTip="Apply 0 dBFS peak normalization across all audio tracks"
-                                          VerticalAlignment="Center" />
+                                          ToolTip="Apply -0.1 dBFS peak normalization across all audio tracks"
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0" />
+
+                                <CheckBox Content="Level Loudness (RMS)"
+                                          IsChecked="{Binding UseRmsLoudnessLeveling}"
+                                          ToolTip="ReplayGain / EBU-style perceptual RMS loudness leveling (-14 dBFS) across all tracks"
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0" />
+
+                                <TextBlock Text="Crossfade (s):"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,6,0" />
+                                <TextBox Width="42"
+                                         Text="{Binding CrossfadeSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="4,2"
+                                         TextAlignment="Center"
+                                         ToolTip="Equal-power crossfade duration in seconds between adjacent tracks (0 = off)"
+                                         Background="{DynamicResource ControlBackgroundBrush}"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         BorderBrush="{DynamicResource ControlBorderBrush}" />
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -199,10 +219,19 @@
                             </Grid.ColumnDefinitions>
 
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                <Button Content="🎵+ Add Audio Files..."
+                                <Button Content="🎵+ Add Audio / FLAC / CUE / Playlist..."
                                         Command="{Binding AddAudioFilesCommand}"
-                                        ToolTip="Add WAV, MP3, FLAC, or OGG tracks to compilation"
+                                        ToolTip="Add FLAC, WAV, MP3, M4A/AAC, OGG, WMA, CUE sheets, or M3U/M3U8/PLS playlists"
                                         Margin="0,0,6,0" />
+                                <Button Content="▶️ Preview"
+                                        Command="{Binding PreviewSelectedTrackCommand}"
+                                        ToolTip="Listen to a Red Book preview of the selected track"
+                                        Margin="0,0,4,0" />
+                                <Button Content="⏹️ Stop"
+                                        Command="{Binding StopPreviewCommand}"
+                                        Visibility="{Binding IsPreviewPlaying, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="Stop audio preview playback"
+                                        Margin="0,0,8,0" />
                                 <Button Content="❌ Remove"
                                         Command="{Binding RemoveTrackCommand}"
                                         ToolTip="Remove selected audio track"
@@ -210,19 +239,22 @@
                                 <Button Content="🗑️ Clear All"
                                         Command="{Binding ClearAllTracksCommand}"
                                         ToolTip="Remove all tracks from compilation"
-                                        Margin="0,0,12,0" />
-                                <Button Content="⬆️ Move Up"
+                                        Margin="0,0,10,0" />
+                                <Button Content="⬆️"
                                         Command="{Binding MoveTrackUpCommand}"
                                         ToolTip="Move selected track earlier in sequence"
-                                        Margin="0,0,6,0" />
-                                <Button Content="⬇️ Move Down"
+                                        Margin="0,0,4,0" />
+                                <Button Content="⬇️"
                                         Command="{Binding MoveTrackDownCommand}"
                                         ToolTip="Move selected track later in sequence"
-                                        Margin="0,0,12,0" />
+                                        Margin="0,0,10,0" />
+                                <Button Content="🖨️ Export Cover &amp; Tracklist..."
+                                        Command="{Binding ExportCoverSheetCommand}"
+                                        ToolTip="Generate a printable 120mm x 120mm CD Jewel Case Front Booklet, 150mm x 118mm Rear Tray Inlay, and Track Sheet" />
                             </StackPanel>
 
                             <TextBlock Grid.Column="1"
-                                       Text="Red Book CD-DA: 44.1 kHz, 16-bit Stereo PCM"
+                                       Text="FLAC, WAV, MP3, M4A, OGG, CUE, M3U/M3U8/PLS  →  Red Book CD-DA"
                                        FontStyle="Italic"
                                        FontSize="11"
                                        Foreground="{DynamicResource TextMutedBrush}"
@@ -236,47 +268,74 @@
                             Background="{DynamicResource SurfaceBackgroundBrush}"
                             BorderBrush="{DynamicResource CardBorderBrush}"
                             BorderThickness="1">
-                        <DataGrid ItemsSource="{Binding Tracks}"
-                                  SelectedItem="{Binding SelectedTrack}"
-                                  AllowDrop="True"
-                                  PreviewDragOver="OnPreviewDragOver"
-                                  Drop="OnDrop"
-                                  AutoGenerateColumns="False"
-                                  CanUserAddRows="False"
-                                  CanUserDeleteRows="False"
-                                  GridLinesVisibility="Horizontal"
-                                  HorizontalGridLinesBrush="{DynamicResource CardBorderBrush}"
-                                  Background="Transparent"
-                                  RowBackground="Transparent"
-                                  AlternatingRowBackground="{DynamicResource CardBackgroundBrush}">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="#"
-                                                    Binding="{Binding TrackNumber}"
-                                                    Width="45"
-                                                    IsReadOnly="True" />
-                                <DataGridTextColumn Header="Title"
-                                                    Binding="{Binding Title}"
-                                                    Width="*" />
-                                <DataGridTextColumn Header="Performer / Artist"
-                                                    Binding="{Binding Performer}"
-                                                    Width="180" />
-                                <DataGridTextColumn Header="Pre-Gap"
-                                                    Binding="{Binding PreGapText}"
-                                                    Width="90"
-                                                    IsReadOnly="True" />
-                                <DataGridTextColumn Header="Duration"
-                                                    Binding="{Binding DurationText}"
-                                                    Width="100"
-                                                    IsReadOnly="True" />
-                                <DataGridTextColumn Header="Size"
-                                                    Binding="{Binding FileSizeFormatted}"
-                                                    Width="90"
-                                                    IsReadOnly="True" />
-                                <DataGridCheckBoxColumn Header="Normalize"
-                                                        Binding="{Binding NormalizeAudio}"
-                                                        Width="75" />
-                            </DataGrid.Columns>
-                        </DataGrid>
+                        <Grid>
+                            <DataGrid ItemsSource="{Binding Tracks}"
+                                      SelectedItem="{Binding SelectedTrack}"
+                                      AllowDrop="True"
+                                      PreviewDragOver="OnPreviewDragOver"
+                                      Drop="OnDrop"
+                                      AutoGenerateColumns="False"
+                                      CanUserAddRows="False"
+                                      CanUserDeleteRows="False"
+                                      GridLinesVisibility="Horizontal"
+                                      HorizontalGridLinesBrush="{DynamicResource CardBorderBrush}"
+                                      Background="Transparent"
+                                      RowBackground="Transparent"
+                                      AlternatingRowBackground="{DynamicResource CardBackgroundBrush}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="#"
+                                                        Binding="{Binding TrackNumber}"
+                                                        Width="45"
+                                                        IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Title"
+                                                        Binding="{Binding Title}"
+                                                        Width="*" />
+                                    <DataGridTextColumn Header="Performer / Artist"
+                                                        Binding="{Binding Performer}"
+                                                        Width="170" />
+                                    <DataGridTextColumn Header="Format"
+                                                        Binding="{Binding FormatSummary}"
+                                                        Width="145"
+                                                        IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Pre-Gap"
+                                                        Binding="{Binding PreGapText}"
+                                                        Width="85"
+                                                        IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Duration"
+                                                        Binding="{Binding DurationText}"
+                                                        Width="95"
+                                                        IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Size"
+                                                        Binding="{Binding FileSizeFormatted}"
+                                                        Width="85"
+                                                        IsReadOnly="True" />
+                                    <DataGridCheckBoxColumn Header="Normalize"
+                                                            Binding="{Binding NormalizeAudio}"
+                                                            Width="75" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <!-- Empty-state overlay when no tracks are added -->
+                            <StackPanel VerticalAlignment="Center"
+                                        HorizontalAlignment="Center"
+                                        IsHitTestVisible="False"
+                                        Margin="24"
+                                        Visibility="{Binding HasTracks, Converter={StaticResource InverseBoolToVis}}">
+                                <TextBlock Text="Drop FLAC, WAV, MP3, M4A, OGG, WMA, or CUE files here"
+                                           FontSize="15"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="Supports 16/24/32-bit lossless FLAC (44.1–192 kHz), single-file FLAC + CUE albums, Vorbis Comment tags, and folders — automatically decoded to Red Book 44.1 kHz 16-bit Stereo CD-DA."
+                                           FontSize="12"
+                                           TextWrapping="Wrap"
+                                           TextAlignment="Center"
+                                           MaxWidth="640"
+                                           Foreground="{DynamicResource TextMutedBrush}"
+                                           HorizontalAlignment="Center"
+                                           Margin="0,6,0,0" />
+                            </StackPanel>
+                        </Grid>
                     </Border>
 
                     <!-- ROW 4: BOTTOM BURN & STATUS BAR -->

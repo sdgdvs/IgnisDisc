@@ -19,8 +19,32 @@ namespace CdBurner.App.ViewModels;
 /// View model orchestrating Red Book Audio CD mastering, CD-Text album and track metadata editing,
 /// TAO vs gapless DAO recording modes, DSP peak normalization, duration/capacity tracking, and Digital Audio Extraction (ripper).
 /// </summary>
-public class AudioBurnViewModel : ObservableObject
+public class AudioBurnViewModel : ObservableObject, IDisposable
 {
+    private bool _disposed;
+
+    /// <summary>
+    /// Stops any playing preview (releasing the SoundPlayer and its WAV buffer) and cancels an in-flight burn or rip.
+    /// Called when the main window closes so preview audio never keeps playing after shutdown.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        StopPreview();
+
+        try
+        {
+            _activeBurnCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
     private readonly IDiscDeviceService _deviceService;
     private readonly IBurnEngineBackend _burnEngine;
     private readonly IAudioDecoder _audioDecoder;
@@ -34,8 +58,15 @@ public class AudioBurnViewModel : ObservableObject
     private string? _upcEanCode;
     private AudioRecordingMode _recordingMode = AudioRecordingMode.DiscAtOnceGapless;
     private bool _normalizeAllTracks = false;
+    private bool _useRmsLoudnessLeveling = false;
+    private double _crossfadeSeconds = 0.0;
     private int _defaultPreGapFrames = OpticalConstants.CdLeadInFrames; // 150 frames = 2.0s
     private bool _includeCdText = true;
+    private bool _isPreviewPlaying;
+    private string _previewStatusText = "Select a track to preview";
+    private string? _lastExportedCoverHtmlPath;
+    private System.Media.SoundPlayer? _soundPlayer;
+    private MemoryStream? _previewWavStream;
     private MsfAddress _totalDuration = new(0, 0, 0);
     private double _discUsagePercent;
     private string _ripOutputFolder = string.Empty;
@@ -149,6 +180,58 @@ public class AudioBurnViewModel : ObservableObject
     }
 
     /// <summary>
+    /// When true, perceptual RMS / ReplayGain-style loudness leveling (-14 dBFS) is applied across all tracks.
+    /// </summary>
+    public bool UseRmsLoudnessLeveling
+    {
+        get => _useRmsLoudnessLeveling;
+        set => SetProperty(ref _useRmsLoudnessLeveling, value);
+    }
+
+    /// <summary>
+    /// Equal-power crossfade duration in seconds between adjacent tracks (0.0 = disabled, max 10.0s).
+    /// </summary>
+    public double CrossfadeSeconds
+    {
+        get => _crossfadeSeconds;
+        set => SetProperty(ref _crossfadeSeconds, Math.Clamp(value, 0.0, 10.0));
+    }
+
+    /// <summary>
+    /// Indicates whether the built-in audio track preview player is currently playing.
+    /// </summary>
+    public bool IsPreviewPlaying
+    {
+        get => _isPreviewPlaying;
+        set
+        {
+            if (SetProperty(ref _isPreviewPlaying, value))
+            {
+                PreviewSelectedTrackCommand?.RaiseCanExecuteChanged();
+                StopPreviewCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Status text for the built-in audio track preview player.
+    /// </summary>
+    public string PreviewStatusText
+    {
+        get => _previewStatusText;
+        set => SetProperty(ref _previewStatusText, value);
+    }
+
+    /// <summary>
+    /// Path to the most recently exported printable CD Jewel Case Cover &amp; Tracklist HTML file.
+    /// </summary>
+    public string? LastExportedCoverHtmlPath
+    {
+        get => _lastExportedCoverHtmlPath;
+        set => SetProperty(ref _lastExportedCoverHtmlPath, value);
+    }
+
+    /// <summary>
     /// Default pre-gap in 75 fps frames assigned to new tracks (default 150 frames = 2.0 seconds).
     /// </summary>
     public int DefaultPreGapFrames
@@ -172,6 +255,11 @@ public class AudioBurnViewModel : ObservableObject
     public ObservableCollection<AudioTrackRowViewModel> Tracks { get; } = new();
 
     /// <summary>
+    /// Indicates whether the compilation currently contains at least one audio track.
+    /// </summary>
+    public bool HasTracks => Tracks.Count > 0;
+
+    /// <summary>
     /// Currently selected track in the track table.
     /// </summary>
     public AudioTrackRowViewModel? SelectedTrack
@@ -184,6 +272,7 @@ public class AudioBurnViewModel : ObservableObject
                 MoveTrackUpCommand.RaiseCanExecuteChanged();
                 MoveTrackDownCommand.RaiseCanExecuteChanged();
                 RemoveTrackCommand.RaiseCanExecuteChanged();
+                PreviewSelectedTrackCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -469,6 +558,21 @@ public class AudioBurnViewModel : ObservableObject
     /// </summary>
     public RelayCommand BrowseRipOutputFolderCommand { get; }
 
+    /// <summary>
+    /// Decodes and plays a Red Book audio preview of the currently selected track.
+    /// </summary>
+    public RelayCommand PreviewSelectedTrackCommand { get; }
+
+    /// <summary>
+    /// Stops any active audio track preview playback.
+    /// </summary>
+    public RelayCommand StopPreviewCommand { get; }
+
+    /// <summary>
+    /// Generates and exports a printable CD Jewel Case Front Booklet, Rear Tray Inlay, and Tracklist HTML sheet.
+    /// </summary>
+    public RelayCommand ExportCoverSheetCommand { get; }
+
     #endregion
 
     /// <summary>
@@ -536,6 +640,9 @@ public class AudioBurnViewModel : ObservableObject
         RipAudioCdCommand = new AsyncRelayCommand(async p => await RipAudioCdAsync(p as string), _ => !IsBusy);
         DetectReadOffsetCommand = new AsyncRelayCommand(DetectReadOffsetAsync, () => !IsBusy);
         BrowseRipOutputFolderCommand = new RelayCommand(BrowseRipOutputFolder);
+        PreviewSelectedTrackCommand = new RelayCommand(p => PreviewTrack(p as AudioTrackRowViewModel), _ => SelectedTrack != null || Tracks.Count > 0);
+        StopPreviewCommand = new RelayCommand(_ => StopPreview(), _ => IsPreviewPlaying);
+        ExportCoverSheetCommand = new RelayCommand(p => ExportJewelCaseCoverHtml(p as string), _ => Tracks.Count > 0);
 
         foreach (var r in _deviceService.GetRecorders())
         {
@@ -560,26 +667,264 @@ public class AudioBurnViewModel : ObservableObject
         AddAudioFiles(new[] { filePath });
     }
 
+    private static readonly HashSet<string> SupportedAudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".flac", ".fla", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".wma", ".m4p", ".raw", ".pcm"
+    };
+
+    private static List<string> ExpandAudioPaths(IEnumerable<string> rawPaths)
+    {
+        var result = new List<string>();
+        foreach (var raw in rawPaths)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+
+            if (File.Exists(raw))
+            {
+                result.Add(raw);
+            }
+            else if (Directory.Exists(raw))
+            {
+                try
+                {
+                    var dirFiles = Directory.EnumerateFiles(raw, "*.*", SearchOption.AllDirectories)
+                        .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    var audioInDir = dirFiles.Where(f => SupportedAudioExtensions.Contains(Path.GetExtension(f))).ToList();
+                    var cuesInDir = dirFiles.Where(f => string.Equals(Path.GetExtension(f), ".cue", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    // If a folder is a single-file album rip (1 audio file + 1 .cue sheet), import via the .cue sheet so tracks are split by INDEX 01
+                    if (audioInDir.Count == 1 && cuesInDir.Count == 1)
+                    {
+                        result.Add(cuesInDir[0]);
+                    }
+                    else if (audioInDir.Count > 0)
+                    {
+                        result.AddRange(audioInDir);
+                    }
+                    else if (cuesInDir.Count > 0)
+                    {
+                        result.AddRange(cuesInDir);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+        return result;
+    }
+
     /// <summary>
-    /// Adds multiple physical audio files to the compilation, skipping and reporting any DRM-protected or unreadable files.
+    /// Adds multiple physical audio files (or folders / CUE sheets) to the compilation, skipping and reporting any DRM-protected or unreadable files.
     /// </summary>
     public void AddAudioFiles(IEnumerable<string> filePaths)
     {
         ArgumentNullException.ThrowIfNull(filePaths);
 
-        var pathList = filePaths.Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p)).ToList();
+        // One shared context for the whole drop, including files pulled in through playlists, so that tracks are
+        // re-indexed once, every skipped file lands in a single report, and the final status counts everything.
+        var ctx = new AddFilesContext();
+        AddAudioFilesCore(filePaths, ctx, depth: 0);
+        ReportAddResults(ctx);
+    }
+
+    private sealed class AddFilesContext
+    {
+        public List<string> DrmProtectedFiles { get; } = new();
+        public List<(string FilePath, string Reason)> UnreadableFiles { get; } = new();
+        public HashSet<string> VisitedPlaylists { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public int AddedCount { get; set; }
+        public bool TrackLimitReached { get; set; }
+    }
+
+    private const int MaxPlaylistNesting = 4;
+
+    private void AddAudioFilesCore(IEnumerable<string> filePaths, AddFilesContext ctx, int depth)
+    {
+        var pathList = ExpandAudioPaths(filePaths);
         if (pathList.Count == 0) return;
 
-        var drmProtectedFiles = new List<string>();
-        var unreadableFiles = new List<(string FilePath, string Reason)>();
-        int addedCount = 0;
+        var drmProtectedFiles = ctx.DrmProtectedFiles;
+        var unreadableFiles = ctx.UnreadableFiles;
 
         foreach (var path in pathList)
         {
             if (Tracks.Count >= AudioCdCompilation.MaxTracks)
             {
-                StatusMessage = $"Audio CD compilation has reached the Red Book limit of {AudioCdCompilation.MaxTracks} tracks.";
+                ctx.TrackLimitReached = true;
                 break;
+            }
+
+            // Support M3U / M3U8 / PLS Playlists (.m3u, .m3u8, .pls)
+            if (AudioPlaylistParser.IsPlaylistFile(path))
+            {
+                // Guard against playlists that include themselves (directly or via another playlist).
+                string fullPlaylistPath;
+                try { fullPlaylistPath = Path.GetFullPath(path); } catch { fullPlaylistPath = path; }
+                if (depth >= MaxPlaylistNesting || !ctx.VisitedPlaylists.Add(fullPlaylistPath))
+                {
+                    unreadableFiles.Add((path, "Playlist is nested too deeply or includes itself; skipped."));
+                    continue;
+                }
+
+                try
+                {
+                    var playlistEntries = AudioPlaylistParser.ParseFile(path);
+                    if (playlistEntries.Count == 0)
+                    {
+                        unreadableFiles.Add((path, "Playlist contains no valid local audio tracks."));
+                        continue;
+                    }
+
+                    foreach (var plEntry in playlistEntries)
+                    {
+                        if (Tracks.Count >= AudioCdCompilation.MaxTracks) break;
+                        if (!File.Exists(plEntry.FilePath))
+                        {
+                            unreadableFiles.Add((plEntry.FilePath, $"Referenced in playlist '{Path.GetFileName(path)}' but file not found."));
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(plEntry.Album) &&
+                            (string.IsNullOrWhiteSpace(AlbumTitle) || AlbumTitle == "Untitled Album"))
+                        {
+                            AlbumTitle = plEntry.Album;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(plEntry.Performer) &&
+                            (string.IsNullOrWhiteSpace(AlbumPerformer) || AlbumPerformer == "Various Artists"))
+                        {
+                            AlbumPerformer = plEntry.Performer;
+                        }
+
+                        int countBefore = Tracks.Count;
+                        AddAudioFilesCore(new[] { plEntry.FilePath }, ctx, depth + 1); // counts & reports via ctx
+                        if (Tracks.Count == countBefore + 1)
+                        {
+                            var lastRow = Tracks[^1];
+                            if (!string.IsNullOrWhiteSpace(plEntry.Title) &&
+                                (string.IsNullOrWhiteSpace(lastRow.Title) || lastRow.Title == Path.GetFileNameWithoutExtension(plEntry.FilePath)))
+                            {
+                                lastRow.Title = plEntry.Title;
+                            }
+                            if (!string.IsNullOrWhiteSpace(plEntry.Performer) &&
+                                (string.IsNullOrWhiteSpace(lastRow.Performer) || lastRow.Performer == "Various Artists"))
+                            {
+                                lastRow.Performer = plEntry.Performer;
+                            }
+                        }
+                    }
+                }
+                catch (Exception plEx)
+                {
+                    unreadableFiles.Add((path, plEx.Message));
+                }
+                continue;
+            }
+
+            // Support CUE sheets (.cue) referencing .flac, .wav, .mp3, or single-file album images
+            if (string.Equals(Path.GetExtension(path), ".cue", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var tempComp = new AudioCdCompilation
+                    {
+                        AlbumTitle = AlbumTitle,
+                        AlbumPerformer = AlbumPerformer,
+                        Songwriter = AlbumSongwriter,
+                        UpcEan = UpcEanCode,
+                        DefaultPreGapFrames = DefaultPreGapFrames
+                    };
+
+                    int cueAdded = tempComp.ImportCueSheet(path, _audioDecoder);
+                    if (cueAdded == 0)
+                    {
+                        unreadableFiles.Add((path, "CUE sheet contains no Red Book AUDIO tracks."));
+                        continue;
+                    }
+
+                    if ((string.IsNullOrWhiteSpace(AlbumTitle) || AlbumTitle == "Untitled Album") &&
+                        !string.IsNullOrWhiteSpace(tempComp.AlbumTitle) && tempComp.AlbumTitle != "Untitled Album")
+                    {
+                        AlbumTitle = tempComp.AlbumTitle;
+                    }
+
+                    if ((string.IsNullOrWhiteSpace(AlbumPerformer) || AlbumPerformer == "Various Artists") &&
+                        !string.IsNullOrWhiteSpace(tempComp.AlbumPerformer) && tempComp.AlbumPerformer != "Various Artists")
+                    {
+                        AlbumPerformer = tempComp.AlbumPerformer;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(AlbumSongwriter) && !string.IsNullOrWhiteSpace(tempComp.Songwriter))
+                    {
+                        AlbumSongwriter = tempComp.Songwriter;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(UpcEanCode) && !string.IsNullOrWhiteSpace(tempComp.UpcEan))
+                    {
+                        UpcEanCode = tempComp.UpcEan;
+                    }
+
+                    foreach (var cueTrk in tempComp.Tracks)
+                    {
+                        if (Tracks.Count >= AudioCdCompilation.MaxTracks) break;
+
+                        long trkSize = 0;
+                        string trkFormat = Path.GetExtension(cueTrk.SourceFilePath).TrimStart('.').ToUpperInvariant();
+                        int trkRate = OpticalConstants.CdAudioSampleRate;
+                        int trkBps = OpticalConstants.CdAudioBitsPerSample;
+                        int trkCh = OpticalConstants.CdAudioChannels;
+
+                        if (File.Exists(cueTrk.SourceFilePath))
+                        {
+                            try
+                            {
+                                trkSize = new FileInfo(cueTrk.SourceFilePath).Length;
+                                var m = _audioDecoder.ProbeAudioFile(cueTrk.SourceFilePath);
+                                if (!string.IsNullOrWhiteSpace(m.FormatName)) trkFormat = m.FormatName;
+                                if (m.SampleRate > 0) trkRate = m.SampleRate;
+                                if (m.BitsPerSample > 0) trkBps = m.BitsPerSample;
+                                if (m.Channels > 0) trkCh = m.Channels;
+                            }
+                            catch
+                            {
+                            }
+                        }
+
+                        int nextNum = Tracks.Count + 1;
+                        var cueRow = new AudioTrackRowViewModel
+                        {
+                            TrackNumber = nextNum,
+                            SourceFilePath = cueTrk.SourceFilePath,
+                            Title = cueTrk.Title,
+                            Performer = cueTrk.Performer,
+                            Songwriter = cueTrk.Songwriter ?? AlbumSongwriter,
+                            Composer = cueTrk.Composer,
+                            Isrc = cueTrk.Isrc,
+                            PreGapFrames = nextNum == 1 && cueTrk.PreGapFrames == 0 ? DefaultPreGapFrames : cueTrk.PreGapFrames,
+                            DurationFrames = cueTrk.DurationFrames,
+                            FileSizeBytes = trkSize,
+                            FormatName = trkFormat,
+                            SampleRate = trkRate,
+                            BitsPerSample = trkBps,
+                            Channels = trkCh,
+                            CustomPcmStreamFactory = cueTrk.CustomPcmStreamFactory,
+                            SourceStartFrame = cueTrk.SourceStartFrame,
+                            SourceFrameCount = cueTrk.SourceFrameCount
+                        };
+
+                        Tracks.Add(cueRow);
+                        SelectedTrack = cueRow;
+                        ctx.AddedCount++;
+                    }
+                }
+                catch (Exception cueEx)
+                {
+                    unreadableFiles.Add((path, cueEx.Message));
+                }
+                continue;
             }
 
             // 1. Explicit DRM check (.m4p, FairPlay atoms, ASF DRM)
@@ -599,6 +944,13 @@ public class AudioBurnViewModel : ObservableObject
             string fileName = Path.GetFileNameWithoutExtension(path);
             string title = fileName;
             string performer = AlbumPerformer;
+            string? songwriter = AlbumSongwriter;
+            string? composer = null;
+            string? isrc = null;
+            string formatName = Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
+            int sampleRate = OpticalConstants.CdAudioSampleRate;
+            int bitsPerSample = OpticalConstants.CdAudioBitsPerSample;
+            int channels = OpticalConstants.CdAudioChannels;
             int durationFrames = 0;
 
             try
@@ -606,6 +958,26 @@ public class AudioBurnViewModel : ObservableObject
                 var meta = _audioDecoder.ProbeAudioFile(path);
                 if (!string.IsNullOrWhiteSpace(meta.Title)) title = meta.Title;
                 if (!string.IsNullOrWhiteSpace(meta.Artist)) performer = meta.Artist;
+                if (!string.IsNullOrWhiteSpace(meta.Songwriter)) songwriter = meta.Songwriter;
+                if (!string.IsNullOrWhiteSpace(meta.Composer)) composer = meta.Composer;
+                if (!string.IsNullOrWhiteSpace(meta.Isrc)) isrc = meta.Isrc;
+                if (!string.IsNullOrWhiteSpace(meta.FormatName)) formatName = meta.FormatName;
+                if (meta.SampleRate > 0) sampleRate = meta.SampleRate;
+                if (meta.BitsPerSample > 0) bitsPerSample = meta.BitsPerSample;
+                if (meta.Channels > 0) channels = meta.Channels;
+
+                if ((string.IsNullOrWhiteSpace(AlbumTitle) || AlbumTitle == "Untitled Album") &&
+                    !string.IsNullOrWhiteSpace(meta.Album))
+                {
+                    AlbumTitle = meta.Album;
+                }
+
+                string? albumArtistCandidate = !string.IsNullOrWhiteSpace(meta.AlbumArtist) ? meta.AlbumArtist : meta.Artist;
+                if ((string.IsNullOrWhiteSpace(AlbumPerformer) || AlbumPerformer == "Various Artists") &&
+                    !string.IsNullOrWhiteSpace(albumArtistCandidate))
+                {
+                    AlbumPerformer = albumArtistCandidate;
+                }
 
                 if (meta.TotalRedBookBytes > 0)
                 {
@@ -648,20 +1020,48 @@ public class AudioBurnViewModel : ObservableObject
                 SourceFilePath = path,
                 Title = title,
                 Performer = performer,
-                Songwriter = AlbumSongwriter,
+                Songwriter = songwriter,
+                Composer = composer,
+                Isrc = isrc,
                 PreGapFrames = trackNum == 1 ? DefaultPreGapFrames : 0,
                 DurationFrames = durationFrames,
-                FileSizeBytes = fileSize
+                FileSizeBytes = fileSize,
+                FormatName = formatName,
+                SampleRate = sampleRate,
+                BitsPerSample = bitsPerSample,
+                Channels = channels
             };
 
             Tracks.Add(row);
             SelectedTrack = row;
-            addedCount++;
+            ctx.AddedCount++;
         }
+    }
+
+    /// <summary>
+    /// Re-indexes once and publishes a single status line / dialog for everything a drop added or skipped.
+    /// </summary>
+    private void ReportAddResults(AddFilesContext ctx)
+    {
+        var drmProtectedFiles = ctx.DrmProtectedFiles;
+        var unreadableFiles = ctx.UnreadableFiles;
+        int addedCount = ctx.AddedCount;
 
         if (addedCount > 0)
         {
             ReindexTracks();
+        }
+
+        // The status line always reports what was added AND what was skipped, so a playlist with
+        // 10 good tracks and 1 missing file reads "Added 10 ... Skipped 1 ..." rather than only the failure.
+        var parts = new List<string>();
+        if (addedCount > 0) parts.Add($"Added {addedCount} audio track(s). Total: {Tracks.Count}.");
+        if (drmProtectedFiles.Count > 0) parts.Add($"Skipped {drmProtectedFiles.Count} DRM-protected Apple Music file(s). Use DRM-free tracks.");
+        if (unreadableFiles.Count > 0) parts.Add($"Skipped {unreadableFiles.Count} unsupported, missing or corrupt audio file(s).");
+        if (ctx.TrackLimitReached) parts.Add($"Audio CD compilation has reached the Red Book limit of {AudioCdCompilation.MaxTracks} tracks.");
+        if (parts.Count > 0)
+        {
+            StatusMessage = string.Join(" ", parts);
         }
 
         // Inform user about skipped DRM or corrupted files
@@ -678,8 +1078,6 @@ public class AudioBurnViewModel : ObservableObject
                              "Why: Apple Music subscription downloads are encrypted by Apple to prevent copying to physical media.\n\n" +
                              "To burn an Audio CD, please use DRM-free audio formats such as WAV, MP3, FLAC, M4A, OGG, or WMA (including DRM-free purchases from iTunes Store).";
 
-            StatusMessage = $"Skipped {drmProtectedFiles.Count} DRM-protected Apple Music file(s). Use DRM-free tracks.";
-
             if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
                 System.Windows.MessageBox.Show(
@@ -689,7 +1087,8 @@ public class AudioBurnViewModel : ObservableObject
                     System.Windows.MessageBoxImage.Warning);
             }
         }
-        else if (unreadableFiles.Count > 0)
+
+        if (unreadableFiles.Count > 0)
         {
             string failList = string.Join("\n", unreadableFiles.Take(6).Select(f => $"  • {Path.GetFileName(f.FilePath)}: {f.Reason}"));
             if (unreadableFiles.Count > 6)
@@ -697,8 +1096,8 @@ public class AudioBurnViewModel : ObservableObject
                 failList += $"\n  ...and {unreadableFiles.Count - 6} more file(s)";
             }
 
-            string errorMsg = $"The following {unreadableFiles.Count} file(s) could not be read or are unsupported:\n\n{failList}";
-            StatusMessage = $"Skipped {unreadableFiles.Count} unsupported or corrupt audio file(s).";
+            string addedNote = addedCount > 0 ? $"{addedCount} track(s) were added. " : string.Empty;
+            string errorMsg = $"{addedNote}The following {unreadableFiles.Count} file(s) could not be read or are unsupported:\n\n{failList}";
 
             if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
@@ -708,10 +1107,6 @@ public class AudioBurnViewModel : ObservableObject
                     System.Windows.MessageBoxButton.OK,
                     System.Windows.MessageBoxImage.Error);
             }
-        }
-        else if (addedCount > 0)
-        {
-            StatusMessage = $"Added {addedCount} audio track(s). Total: {Tracks.Count}.";
         }
     }
 
@@ -817,6 +1212,8 @@ public class AudioBurnViewModel : ObservableObject
         RemoveTrackCommand.RaiseCanExecuteChanged();
         ClearAllTracksCommand.RaiseCanExecuteChanged();
         StartAudioBurnCommand.RaiseCanExecuteChanged();
+        PreviewSelectedTrackCommand?.RaiseCanExecuteChanged();
+        ExportCoverSheetCommand?.RaiseCanExecuteChanged();
     }
 
     /// <summary>
@@ -839,14 +1236,15 @@ public class AudioBurnViewModel : ObservableObject
         OnPropertyChanged(nameof(TotalDurationText));
         OnPropertyChanged(nameof(DiscUsageText));
         OnPropertyChanged(nameof(TotalTracksText));
+        OnPropertyChanged(nameof(HasTracks));
     }
 
     private void BrowseAndAddFiles()
     {
         var dlg = new OpenFileDialog
         {
-            Title = "Add Audio Tracks to Audio CD Compilation",
-            Filter = "Supported Audio Files (*.wav;*.mp3;*.flac;*.ogg;*.wma;*.m4a;*.aac)|*.wav;*.mp3;*.flac;*.ogg;*.wma;*.m4a;*.aac|WAV Audio (*.wav)|*.wav|MP3 Audio (*.mp3)|*.mp3|FLAC Audio (*.flac)|*.flac|AAC / M4A Audio (*.m4a;*.aac)|*.m4a;*.aac|All Files (*.*)|*.*",
+            Title = "Add Audio Tracks, Playlists, or CUE Sheets to Audio CD Compilation",
+            Filter = "Supported Audio, Playlists & CUE (*.flac;*.wav;*.mp3;*.m4a;*.aac;*.ogg;*.wma;*.cue;*.m3u;*.m3u8;*.pls)|*.flac;*.fla;*.wav;*.mp3;*.m4a;*.aac;*.ogg;*.wma;*.cue;*.m3u;*.m3u8;*.pls|FLAC Lossless Audio (*.flac;*.fla)|*.flac;*.fla|WAV Audio (*.wav)|*.wav|MP3 Audio (*.mp3)|*.mp3|Playlists (*.m3u;*.m3u8;*.pls)|*.m3u;*.m3u8;*.pls|CUE Sheet (*.cue)|*.cue|All Files (*.*)|*.*",
             Multiselect = true
         };
 
@@ -854,6 +1252,220 @@ public class AudioBurnViewModel : ObservableObject
         {
             AddAudioFiles(dlg.FileNames);
         }
+    }
+
+    /// <summary>
+    /// Decodes and plays a Red Book audio preview of the specified or currently selected track.
+    /// </summary>
+    public void PreviewTrack(AudioTrackRowViewModel? track = null)
+    {
+        var target = track ?? SelectedTrack ?? Tracks.FirstOrDefault();
+        if (target == null)
+        {
+            PreviewStatusText = "No track selected to preview.";
+            return;
+        }
+
+        StopPreview();
+
+        try
+        {
+            Stream pcmStream;
+            if (target.CustomPcmStreamFactory != null)
+            {
+                pcmStream = target.CustomPcmStreamFactory();
+            }
+            else if (!string.IsNullOrWhiteSpace(target.SourceFilePath) && File.Exists(target.SourceFilePath))
+            {
+                pcmStream = _audioDecoder.OpenRedBookPcmStream(target.SourceFilePath);
+            }
+            else
+            {
+                PreviewStatusText = $"Cannot preview Track {target.TrackNumber}: source file not found.";
+                return;
+            }
+
+            using (pcmStream)
+            {
+                // Cap preview buffer to first 30 seconds (5.29 MB) for snappy playback
+                const int maxPreviewBytes = 30 * OpticalConstants.CdAudioSampleRate * OpticalConstants.CdAudioBytesPerSample;
+                using var cappedPcm = new MemoryStream();
+                byte[] buf = new byte[16384];
+                int remaining = maxPreviewBytes;
+                while (remaining > 0)
+                {
+                    int r = pcmStream.Read(buf, 0, Math.Min(buf.Length, remaining));
+                    if (r <= 0) break;
+                    cappedPcm.Write(buf, 0, r);
+                    remaining -= r;
+                }
+
+                byte[] pcmBytes = cappedPcm.ToArray();
+                if (UseRmsLoudnessLeveling)
+                {
+                    pcmBytes = RedBookPcmDspProcessor.NormalizeRmsLoudness(pcmBytes);
+                }
+                else if (NormalizeAllTracks || target.NormalizeAudio)
+                {
+                    pcmBytes = RedBookPcmDspProcessor.NormalizePcm(pcmBytes);
+                }
+
+                _previewWavStream = new MemoryStream(44 + pcmBytes.Length);
+                WavFileCodec.WriteWavHeader(_previewWavStream, pcmBytes.Length);
+                _previewWavStream.Write(pcmBytes, 0, pcmBytes.Length);
+                _previewWavStream.Position = 0;
+
+                if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+                {
+                    _soundPlayer = new System.Media.SoundPlayer(_previewWavStream);
+                    _soundPlayer.Play();
+                }
+
+                IsPreviewPlaying = true;
+                PreviewStatusText = $"🔊 Playing Track {target.TrackNumber:D2}: {target.Title} ({target.FormatSummary})";
+                StatusMessage = PreviewStatusText;
+            }
+        }
+        catch (Exception ex)
+        {
+            IsPreviewPlaying = false;
+            PreviewStatusText = $"Preview failed: {ex.Message}";
+            StatusMessage = PreviewStatusText;
+        }
+    }
+
+    /// <summary>
+    /// Stops any active audio track preview playback.
+    /// </summary>
+    public void StopPreview()
+    {
+        try
+        {
+            _soundPlayer?.Stop();
+            _soundPlayer?.Dispose();
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _soundPlayer = null;
+        }
+
+        try
+        {
+            _previewWavStream?.Dispose();
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _previewWavStream = null;
+        }
+
+        if (IsPreviewPlaying)
+        {
+            IsPreviewPlaying = false;
+            PreviewStatusText = "Preview stopped.";
+            StatusMessage = "Audio preview stopped.";
+        }
+    }
+
+    /// <summary>
+    /// Builds an <see cref="AudioCdCompilation"/> snapshot from the current tracks and CD-Text settings.
+    /// </summary>
+    public AudioCdCompilation BuildCurrentCompilation()
+    {
+        var compilation = new AudioCdCompilation
+        {
+            AlbumTitle = AlbumTitle,
+            AlbumPerformer = AlbumPerformer,
+            Songwriter = AlbumSongwriter,
+            UpcEan = UpcEanCode,
+            RecordingMode = RecordingMode,
+            NormalizeAllTracks = NormalizeAllTracks,
+            UseRmsLoudnessLeveling = UseRmsLoudnessLeveling,
+            CrossfadeSeconds = CrossfadeSeconds,
+            DefaultPreGapFrames = DefaultPreGapFrames,
+            IncludeCdText = IncludeCdText
+        };
+
+        for (int i = 0; i < Tracks.Count; i++)
+        {
+            var row = Tracks[i];
+            compilation.AddTrack(new AudioCdTrackItem(
+                TrackNumber: row.TrackNumber,
+                SourceFilePath: row.SourceFilePath,
+                Title: row.Title,
+                Performer: !string.IsNullOrEmpty(row.Performer) ? row.Performer : AlbumPerformer,
+                Isrc: row.Isrc,
+                PreGapFrames: row.PreGapFrames,
+                NormalizeAudio: row.NormalizeAudio,
+                CustomPcmStreamFactory: row.CustomPcmStreamFactory
+            )
+            {
+                Songwriter = row.Songwriter ?? AlbumSongwriter,
+                Composer = row.Composer,
+                DurationFrames = row.DurationFrames,
+                SourceStartFrame = row.SourceStartFrame,
+                SourceFrameCount = row.SourceFrameCount
+            });
+        }
+
+        return compilation;
+    }
+
+    /// <summary>
+    /// Generates and saves a printable CD Jewel Case Booklet, Rear Tray Inlay, and Tracklist HTML file.
+    /// </summary>
+    public string? ExportJewelCaseCoverHtml(string? outputHtmlPath = null)
+    {
+        if (Tracks.Count == 0)
+        {
+            StatusMessage = "Add at least one track before exporting a printable CD cover.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputHtmlPath))
+        {
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                var sfd = new SaveFileDialog
+                {
+                    Title = "Export Printable CD Jewel Case Cover & Tracklist",
+                    Filter = "Printable HTML Cover & Tracklist (*.html)|*.html",
+                    FileName = $"{SanitizeFilePart(AlbumTitle)}_JewelCaseCover.html"
+                };
+                if (sfd.ShowDialog() != true || string.IsNullOrWhiteSpace(sfd.FileName))
+                {
+                    return null;
+                }
+                outputHtmlPath = sfd.FileName;
+            }
+            else
+            {
+                outputHtmlPath = Path.Combine(Path.GetTempPath(), $"{SanitizeFilePart(AlbumTitle)}_JewelCaseCover.html");
+            }
+        }
+
+        var compilation = BuildCurrentCompilation();
+        JewelCaseCoverGenerator.SavePrintableCoverHtml(compilation, outputHtmlPath);
+        LastExportedCoverHtmlPath = outputHtmlPath;
+        StatusMessage = $"Exported printable CD jewel case cover & tracklist to '{Path.GetFileName(outputHtmlPath)}'.";
+        return outputHtmlPath;
+    }
+
+    private static string SanitizeFilePart(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return "AudioCD";
+        char[] invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(input.Length);
+        foreach (char c in input)
+        {
+            sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+        }
+        return sb.ToString().Trim();
     }
 
     private void BrowseRipOutputFolder()
@@ -938,35 +1550,8 @@ public class AudioBurnViewModel : ObservableObject
 
         try
         {
-            var compilation = new AudioCdCompilation
-            {
-                AlbumTitle = AlbumTitle,
-                AlbumPerformer = AlbumPerformer,
-                Songwriter = AlbumSongwriter,
-                UpcEan = UpcEanCode,
-                RecordingMode = RecordingMode,
-                NormalizeAllTracks = NormalizeAllTracks,
-                DefaultPreGapFrames = DefaultPreGapFrames,
-                IncludeCdText = IncludeCdText
-            };
-
-            for (int i = 0; i < Tracks.Count; i++)
-            {
-                var row = Tracks[i];
-                compilation.AddTrack(new AudioCdTrackItem(
-                    TrackNumber: row.TrackNumber,
-                    SourceFilePath: row.SourceFilePath,
-                    Title: row.Title,
-                    Performer: !string.IsNullOrEmpty(row.Performer) ? row.Performer : AlbumPerformer,
-                    Isrc: row.Isrc,
-                    PreGapFrames: row.PreGapFrames,
-                    NormalizeAudio: row.NormalizeAudio
-                )
-                {
-                    Songwriter = row.Songwriter ?? AlbumSongwriter,
-                    Composer = row.Composer
-                });
-            }
+            StopPreview();
+            var compilation = BuildCurrentCompilation();
 
             var progress = new Progress<BurnProgressSnapshot>(p =>
             {

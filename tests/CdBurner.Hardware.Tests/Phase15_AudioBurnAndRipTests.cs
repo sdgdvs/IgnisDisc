@@ -513,4 +513,200 @@ public class Phase15_AudioBurnAndRipTests : IDisposable
         Assert.Equal(0, compilation.TrackCount);
         Assert.Equal(0, compilation.TotalFrames);
     }
+
+    [Fact]
+    public async Task BurnAndRip_FlacFiles_16Bit24BitAndId3Prefixed_ProducesExactRedBookAudioCd()
+    {
+        // Track 1: 16-bit / 44.1 kHz FLAC with Vorbis Comments
+        const int track1Frames = 40;
+        byte[] track1Pcm = GenerateSineWavePcm(440.0, track1Frames);
+        string flac1 = Path.Combine(_tempDir, "01_vorbis_tagged.flac");
+        FlacFileCodec.WriteFlacFile(
+            flac1,
+            track1Pcm,
+            sampleRate: 44100,
+            channels: 2,
+            bitsPerSample: 16,
+            tags: new AudioTrackTags(
+                Title: "Lossless Overture",
+                Artist: "Ignis Ensemble",
+                Album: "Pure Lossless Sessions",
+                TrackNumber: 1,
+                TrackTotal: 3,
+                Isrc: "US-IGN-26-00001"));
+
+        // Track 2: 16-bit / 44.1 kHz FLAC with a 64 KB prepended ID3v2 header
+        const int track2Frames = 35;
+        byte[] track2Pcm = GenerateSineWavePcm(660.0, track2Frames);
+        byte[] rawFlac2 = FlacFileCodec.CreateFlacBytes(
+            track2Pcm,
+            sampleRate: 44100,
+            channels: 2,
+            bitsPerSample: 16,
+            tags: new AudioTrackTags(
+                Title: "ID3v2 Cover Art Track",
+                Artist: "Ignis Ensemble",
+                Album: "Pure Lossless Sessions",
+                TrackNumber: 2,
+                TrackTotal: 3));
+
+        // Prepend a 65,536-byte payload ID3v2.3 tag
+        const int id3PayloadLen = 65536;
+        byte[] id3Header = new byte[10 + id3PayloadLen];
+        id3Header[0] = (byte)'I';
+        id3Header[1] = (byte)'D';
+        id3Header[2] = (byte)'3';
+        id3Header[3] = 3;
+        id3Header[6] = (byte)((id3PayloadLen >> 21) & 0x7F);
+        id3Header[7] = (byte)((id3PayloadLen >> 14) & 0x7F);
+        id3Header[8] = (byte)((id3PayloadLen >> 7) & 0x7F);
+        id3Header[9] = (byte)(id3PayloadLen & 0x7F);
+
+        string flac2 = Path.Combine(_tempDir, "02_id3_prefixed.flac");
+        using (var fs = new FileStream(flac2, FileMode.Create, FileAccess.Write))
+        {
+            fs.Write(id3Header);
+            fs.Write(rawFlac2);
+        }
+
+        // Track 3: 24-bit / 48 kHz stereo FLAC (1 second = 48,000 stereo samples = 75 CD frames after resampling)
+        const int sr48k = 48000;
+        byte[] pcm24Bit48k = new byte[sr48k * 2 * 3]; // 48,000 samples * 2 channels * 3 bytes
+        for (int i = 0; i < sr48k; i++)
+        {
+            int sample24 = (int)Math.Round(2_000_000 * Math.Sin(2.0 * Math.PI * 880.0 * i / sr48k));
+            int offset = i * 6;
+            pcm24Bit48k[offset] = (byte)(sample24 & 0xFF);
+            pcm24Bit48k[offset + 1] = (byte)((sample24 >> 8) & 0xFF);
+            pcm24Bit48k[offset + 2] = (byte)((sample24 >> 16) & 0xFF);
+            pcm24Bit48k[offset + 3] = (byte)(sample24 & 0xFF);
+            pcm24Bit48k[offset + 4] = (byte)((sample24 >> 8) & 0xFF);
+            pcm24Bit48k[offset + 5] = (byte)((sample24 >> 16) & 0xFF);
+        }
+
+        string flac3 = Path.Combine(_tempDir, "03_hires_24bit_48k.flac");
+        FlacFileCodec.WriteFlacFile(flac3, pcm24Bit48k, sampleRate: sr48k, channels: 2, bitsPerSample: 24);
+
+        var decoder = new MediaFoundationAudioDecoder();
+        var meta1 = decoder.ProbeAudioFile(flac1);
+        Assert.Equal("Lossless Overture", meta1.Title);
+        Assert.Equal("Ignis Ensemble", meta1.Artist);
+        Assert.Equal("Pure Lossless Sessions", meta1.Album);
+        Assert.Equal("US-IGN-26-00001", meta1.Isrc);
+
+        var meta2 = decoder.ProbeAudioFile(flac2);
+        Assert.Equal("ID3v2 Cover Art Track", meta2.Title);
+        Assert.Equal("Ignis Ensemble", meta2.Artist);
+
+        var meta3 = decoder.ProbeAudioFile(flac3);
+        Assert.Equal(48000, meta3.SampleRate);
+        Assert.Equal(24, meta3.BitsPerSample);
+
+        var compilation = new AudioCdCompilation
+        {
+            AlbumTitle = meta1.Album ?? "Pure Lossless Sessions",
+            AlbumPerformer = meta1.Artist ?? "Ignis Ensemble",
+            RecordingMode = AudioRecordingMode.DiscAtOnceGapless,
+            IncludeCdText = true
+        };
+
+        compilation.AddTrack(flac1, meta1.Title!, meta1.Artist!, isrc: meta1.Isrc);
+        compilation.AddTrack(flac2, meta2.Title!, meta2.Artist!);
+        compilation.AddTrack(flac3, "Hi-Res 24-Bit Finale", "Ignis Ensemble");
+
+        using var recorder = new VirtualDiscRecorder();
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        recorder.InsertMedia(medium);
+
+        var engine = new VirtualBurnEngine(recorder);
+        var burnService = new AudioCdBurnService(engine, decoder);
+
+        var burnResult = await burnService.BurnCompilationAsync(recorder, compilation);
+        Assert.True(burnResult.Success, burnResult.ErrorMessage);
+        Assert.Equal(track1Frames + track2Frames + 75, burnResult.SectorsWritten);
+
+        // Rip back and verify exact PCM match on tracks 1 and 2
+        string ripFolder = Path.Combine(_tempDir, "flac_ripped");
+        var ripper = new AudioCdRipperService();
+        var ripResult = await ripper.RipAudioCdAsync(recorder, engine, ripFolder);
+        Assert.True(ripResult.Success, ripResult.ErrorMessage);
+        Assert.Equal(3, ripResult.TracksRipped);
+
+        byte[] ripped1 = WavFileCodec.DecodeToRedBookPcm(ripResult.RippedFilePaths[0]);
+        byte[] ripped2 = WavFileCodec.DecodeToRedBookPcm(ripResult.RippedFilePaths[1]);
+        byte[] ripped3 = WavFileCodec.DecodeToRedBookPcm(ripResult.RippedFilePaths[2]);
+
+        Assert.Equal(track1Pcm, ripped1);
+        Assert.Equal(track2Pcm, ripped2);
+        Assert.Equal(75 * OpticalConstants.RawSectorSize, ripped3.Length);
+    }
+
+    [Fact]
+    public async Task ImportCueSheet_SingleFileFlacWithCue_SlicesTracksByIndex01AndBurnsCleanly()
+    {
+        // Create a single 3-second (225 frames) Album.flac containing 3 distinct 1-second (75-frame) tracks
+        byte[] part1 = GenerateSineWavePcm(330.0, 75);
+        byte[] part2 = GenerateSineWavePcm(550.0, 75);
+        byte[] part3 = GenerateSineWavePcm(770.0, 75);
+
+        byte[] fullAlbumPcm = new byte[part1.Length + part2.Length + part3.Length];
+        Buffer.BlockCopy(part1, 0, fullAlbumPcm, 0, part1.Length);
+        Buffer.BlockCopy(part2, 0, fullAlbumPcm, part1.Length, part2.Length);
+        Buffer.BlockCopy(part3, 0, fullAlbumPcm, part1.Length + part2.Length, part3.Length);
+
+        string albumFlac = Path.Combine(_tempDir, "AlbumImage.flac");
+        FlacFileCodec.WriteFlacFile(albumFlac, fullAlbumPcm);
+
+        string albumCue = Path.Combine(_tempDir, "AlbumImage.cue");
+        string cueContent = """
+            PERFORMER "Single File Orchestra"
+            TITLE "Continuous Concert FLAC"
+            FILE "AlbumImage.flac" WAVE
+              TRACK 01 AUDIO
+                TITLE "Movement I"
+                PERFORMER "Single File Orchestra"
+                INDEX 01 00:00:00
+              TRACK 02 AUDIO
+                TITLE "Movement II"
+                PERFORMER "Single File Orchestra"
+                INDEX 01 00:01:00
+              TRACK 03 AUDIO
+                TITLE "Movement III"
+                PERFORMER "Single File Orchestra"
+                INDEX 01 00:02:00
+            """;
+        await File.WriteAllTextAsync(albumCue, cueContent);
+
+        var decoder = new MediaFoundationAudioDecoder();
+        var compilation = new AudioCdCompilation();
+        int imported = compilation.ImportCueSheet(albumCue, decoder);
+
+        Assert.Equal(3, imported);
+        Assert.Equal("Continuous Concert FLAC", compilation.AlbumTitle);
+        Assert.Equal("Single File Orchestra", compilation.AlbumPerformer);
+        Assert.Equal(75, compilation.Tracks[0].DurationFrames);
+        Assert.Equal(75, compilation.Tracks[1].DurationFrames);
+        Assert.Equal(75, compilation.Tracks[2].DurationFrames);
+
+        using var recorder = new VirtualDiscRecorder();
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        recorder.InsertMedia(medium);
+
+        var engine = new VirtualBurnEngine(recorder);
+        var burnService = new AudioCdBurnService(engine, decoder);
+
+        var burnResult = await burnService.BurnCompilationAsync(recorder, compilation);
+        Assert.True(burnResult.Success, burnResult.ErrorMessage);
+        Assert.Equal(225, burnResult.SectorsWritten);
+
+        string ripFolder = Path.Combine(_tempDir, "single_flac_cue_rip");
+        var ripper = new AudioCdRipperService();
+        var ripResult = await ripper.RipAudioCdAsync(recorder, engine, ripFolder);
+        Assert.True(ripResult.Success, ripResult.ErrorMessage);
+        Assert.Equal(3, ripResult.TracksRipped);
+
+        Assert.Equal(part1, WavFileCodec.DecodeToRedBookPcm(ripResult.RippedFilePaths[0]));
+        Assert.Equal(part2, WavFileCodec.DecodeToRedBookPcm(ripResult.RippedFilePaths[1]));
+        Assert.Equal(part3, WavFileCodec.DecodeToRedBookPcm(ripResult.RippedFilePaths[2]));
+    }
 }

@@ -124,6 +124,16 @@ public class CdBurnerProjectDocument
     public int DefaultPreGapFrames { get; set; } = 150;
 
     /// <summary>
+    /// Whether RMS loudness leveling is applied to every track (audio projects).
+    /// </summary>
+    public bool UseRmsLoudnessLeveling { get; set; }
+
+    /// <summary>
+    /// Crossfade length in seconds between adjacent tracks (0 = disabled; audio projects).
+    /// </summary>
+    public double CrossfadeSeconds { get; set; }
+
+    /// <summary>
     /// Ordered list of audio tracks in this compilation.
     /// </summary>
     public List<SerializedAudioTrack> AudioTracks { get; set; } = new();
@@ -334,6 +344,17 @@ public class SerializedAudioTrack
     /// Total duration of this track in Red Book frames (75 fps).
     /// </summary>
     public int DurationFrames { get; set; }
+
+    /// <summary>
+    /// Slice start (75 fps frames) inside <see cref="SourceFilePath"/> when the track comes from a single-file album
+    /// image (multi-track CUE over one .flac/.wav). Null = the whole file.
+    /// </summary>
+    public int? SourceStartFrame { get; set; }
+
+    /// <summary>
+    /// Slice length (75 fps frames), or null to run to the end of the file. Only used with <see cref="SourceStartFrame"/>.
+    /// </summary>
+    public int? SourceFrameCount { get; set; }
 }
 
 /// <summary>

@@ -416,7 +416,17 @@ public static class CliCommandRunner
         };
 
         var burnService = new DataBurnService(burnEngine);
-        var result = await burnService.BurnIsoFileAsync(recorder, isoPath, burnOptions).ConfigureAwait(false);
+        DataBurnResult result;
+        if (LegacyDiscImageConverter.IsLegacyImageFile(isoPath))
+        {
+            // .nrg / .mdf / .mds / .ccd / .img: stream the 2048-byte user data directly (no temp .iso, no 2 GB limit).
+            await using var legacyStream = LegacyDiscImageConverter.OpenIsoUserDataStream(isoPath);
+            result = await burnService.BurnStreamAsync(recorder, legacyStream, burnOptions).ConfigureAwait(false);
+        }
+        else
+        {
+            result = await burnService.BurnIsoFileAsync(recorder, isoPath, burnOptions).ConfigureAwait(false);
+        }
 
         if (cmd.IsJson)
         {
@@ -635,7 +645,7 @@ public static class CliCommandRunner
         IBurnEngineBackend burnEngine)
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
-        string tracksRaw = cmd.GetRequiredOption("tracks", "--tracks <wav1,wav2,...>");
+        string tracksRaw = cmd.GetRequiredOption("tracks", "--tracks <file1,file2,...>");
         string? title = cmd.GetOption("title");
         string? artist = cmd.GetOption("artist");
         string? speedStr = cmd.GetOption("speed");
@@ -659,6 +669,9 @@ public static class CliCommandRunner
             }
         }
 
+        using var mfDecoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
+        var audioBurnService = new AudioCdBurnService(burnEngine, mfDecoder);
+
         var compilation = new AudioCdCompilation
         {
             AlbumTitle = title ?? "Audio CD",
@@ -670,18 +683,71 @@ public static class CliCommandRunner
         for (int i = 0; i < trackFiles.Length; i++)
         {
             string trackPath = trackFiles[i];
+            if (string.Equals(Path.GetExtension(trackPath), ".cue", StringComparison.OrdinalIgnoreCase))
+            {
+                compilation.ImportCueSheet(trackPath, audioBurnService.AudioDecoder);
+                compilation.IncludeCdText = true;
+                continue;
+            }
+
+            if (AudioPlaylistParser.IsPlaylistFile(trackPath))
+            {
+                compilation.ImportPlaylist(trackPath, audioBurnService.AudioDecoder);
+                compilation.IncludeCdText = true;
+                continue;
+            }
+
             string trackTitle = Path.GetFileNameWithoutExtension(trackPath);
+            string trackPerformer = artist ?? compilation.AlbumPerformer;
+            string? trackSongwriter = null;
+            string? trackComposer = null;
+            string? trackIsrc = null;
+
+            try
+            {
+                var meta = audioBurnService.AudioDecoder.ProbeAudioFile(trackPath);
+                if (!string.IsNullOrWhiteSpace(meta.Title))
+                {
+                    trackTitle = meta.Title;
+                    compilation.IncludeCdText = true;
+                }
+                if (string.IsNullOrEmpty(artist) && !string.IsNullOrWhiteSpace(meta.Artist))
+                {
+                    trackPerformer = meta.Artist;
+                    compilation.IncludeCdText = true;
+                }
+                if (string.IsNullOrEmpty(title) && compilation.AlbumTitle == "Audio CD" && !string.IsNullOrWhiteSpace(meta.Album))
+                {
+                    compilation.AlbumTitle = meta.Album;
+                    compilation.IncludeCdText = true;
+                }
+                if (string.IsNullOrEmpty(artist) && compilation.AlbumPerformer == "Various Artists" && !string.IsNullOrWhiteSpace(meta.AlbumArtist ?? meta.Artist))
+                {
+                    compilation.AlbumPerformer = (meta.AlbumArtist ?? meta.Artist)!;
+                }
+                trackSongwriter = meta.Songwriter;
+                trackComposer = meta.Composer;
+                trackIsrc = meta.Isrc;
+            }
+            catch
+            {
+                // Fall back to filename metadata if probe fails here (BurnAsync will report detailed decode errors)
+            }
+
+            int nextTrackNum = compilation.TrackCount + 1;
             compilation.AddTrack(new AudioCdTrackItem(
-                TrackNumber: i + 1,
+                TrackNumber: nextTrackNum,
                 SourceFilePath: trackPath,
                 Title: trackTitle,
-                Performer: artist ?? "Various Artists",
-                Isrc: null,
-                PreGapFrames: i == 0 ? 150 : 0));
+                Performer: trackPerformer,
+                Isrc: trackIsrc,
+                PreGapFrames: nextTrackNum == 1 ? 150 : 0)
+            {
+                Songwriter = trackSongwriter,
+                Composer = trackComposer
+            });
         }
 
-        using var mfDecoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
-        var audioBurnService = new AudioCdBurnService(burnEngine, mfDecoder);
         var result = await audioBurnService.BurnAsync(
             recorder,
             compilation,
@@ -1545,7 +1611,16 @@ public static class CliCommandRunner
         var recorder = FindRecorder(deviceService, driveId);
         var verifier = new DiscVerificationService();
 
-        var result = await verifier.VerifyDiscAgainstIsoFileAsync(recorder, burnEngine, isoPath).ConfigureAwait(false);
+        VerificationResult result;
+        if (LegacyDiscImageConverter.IsLegacyImageFile(isoPath))
+        {
+            await using var legacyStream = LegacyDiscImageConverter.OpenIsoUserDataStream(isoPath);
+            result = await verifier.VerifyDiscAgainstStreamAsync(recorder, burnEngine, legacyStream, raw2352Mode: false).ConfigureAwait(false);
+        }
+        else
+        {
+            result = await verifier.VerifyDiscAgainstIsoFileAsync(recorder, burnEngine, isoPath).ConfigureAwait(false);
+        }
 
         if (cmd.IsJson)
         {
@@ -1821,7 +1896,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
         stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
-        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--no-close] [--overwrite] [--json]");
+        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
@@ -1839,7 +1914,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data.");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");
-        stdout.WriteLine("  verify --drive <id> --iso <file.iso> [--json]");
+        stdout.WriteLine("  verify --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
         stdout.WriteLine("  erase --drive <id> [--full] [--json]");
         stdout.WriteLine("      Erases rewritable optical media (CD-RW, DVD-RW, DVD+RW, DVD-RAM).");

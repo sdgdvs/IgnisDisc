@@ -114,6 +114,13 @@ public class VerificationResult
     public bool Success => IsMatch;
 
     /// <summary>
+    /// True when verification was not attempted because the source cannot be compared sector-for-sector
+    /// (e.g. an Audio CD burned from compressed .flac/.wav files). <see cref="ErrorMessage"/> explains why.
+    /// A skipped result is neither a pass nor a failure.
+    /// </summary>
+    public bool IsSkipped { get; init; }
+
+    /// <summary>
     /// Total number of logical sectors verified.
     /// </summary>
     public int TotalSectorsVerified { get; init; }

@@ -9,6 +9,7 @@ using CdBurner.Core.Burning;
 using CdBurner.Core.Images;
 using CdBurner.Core.Iso;
 using CdBurner.Core.Primitives;
+using CdBurner.Hardware.Audio;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Simulation;
 using Microsoft.Win32;
@@ -27,15 +28,29 @@ public class ImageStudioViewModel : ObservableObject
     private readonly AudioCdBurnService _audioBurnService;
     private readonly DiscRipperService _ripperService;
     private readonly DiscVerificationService _verificationService;
+    private readonly DiscCopyService _copyService;
 
     private string _sourceImagePath = string.Empty;
     private string _detectedImageFormat = "No Image Loaded";
     private long _imageSizeBytes;
     private int _imageSectorCount;
+    private bool _isLegacyImageLoaded;
     private bool _verifyAfterBurn = true;
 
     private string _ripTargetFilePath = string.Empty;
     private bool _ripRawBinCueMode = false;
+
+    private IDiscRecorderBackend? _copySourceRecorder;
+    private IDiscRecorderBackend? _copyTargetRecorder;
+    private int _copyCount = 1;
+    private bool _copyRawCloneMode;
+    private bool _copyVerifyEachDisc = true;
+    private bool _copyKeepStagedImage;
+    private DiscCopyResult? _lastCopyResult;
+
+    private double _deviceBufferPercent = 100.0;
+    private double _softwareBufferPercent = 100.0;
+    private string _currentSpeedDisplay = "Idle";
 
     private string _verificationStatusText = "Ready to verify";
     private string _calculatedSha256 = string.Empty;
@@ -53,6 +68,7 @@ public class ImageStudioViewModel : ObservableObject
     // returns no callback of that operation can still write.
     private int _progressEpoch;
     private readonly object _progressLock = new();
+    private string _lastLoggedAction = string.Empty;
 
     private IProgress<BurnProgressSnapshot> CreateOperationProgress(Action<string> setStatus)
     {
@@ -60,6 +76,7 @@ public class ImageStudioViewModel : ObservableObject
         lock (_progressLock)
         {
             epoch = ++_progressEpoch;
+            _lastLoggedAction = string.Empty;
         }
 
         return new Progress<BurnProgressSnapshot>(p =>
@@ -71,7 +88,22 @@ public class ImageStudioViewModel : ObservableObject
                 {
                     BurnProgress = Math.Min(100.0, (double)p.CurrentLba / p.TotalLba * 100.0);
                 }
+                DeviceBufferPercent = Math.Clamp(p.BufferLevelPercent > 0 ? p.BufferLevelPercent : 100.0, 0.0, 100.0);
+                SoftwareBufferPercent = Math.Clamp(p.BufferLevelPercent > 0 ? Math.Min(100.0, p.BufferLevelPercent + 2.0) : 100.0, 0.0, 100.0);
+                if (p.CurrentSpeedMultiplier > 0 || p.CurrentBytesPerSecond > 0)
+                {
+                    double kbps = p.CurrentBytesPerSecond / 1024.0;
+                    CurrentSpeedDisplay = kbps > 0
+                        ? $"{p.CurrentSpeedMultiplier:F1}x ({kbps:N0} KB/s)"
+                        : $"{p.CurrentSpeedMultiplier:F1}x";
+                }
                 setStatus($"{p.CurrentActionDescription} ({BurnProgress:F0}%)");
+                if (!string.IsNullOrWhiteSpace(p.CurrentActionDescription) &&
+                    !string.Equals(_lastLoggedAction, p.CurrentActionDescription, StringComparison.Ordinal))
+                {
+                    _lastLoggedAction = p.CurrentActionDescription;
+                    AppendLog($"{p.CurrentActionDescription} [LBA {p.CurrentLba:N0}/{p.TotalLba:N0}, Buffer {DeviceBufferPercent:F0}%]");
+                }
             }
         });
     }
@@ -82,6 +114,28 @@ public class ImageStudioViewModel : ObservableObject
         {
             _progressEpoch++;
         }
+    }
+
+    /// <summary>
+    /// Appends a timestamped entry to the ImgBurn-style hardware &amp; sector I/O event log.
+    /// </summary>
+    public void AppendLog(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+        string entry = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
+        try
+        {
+            var disp = System.Windows.Application.Current?.Dispatcher;
+            if (disp != null && !disp.CheckAccess() && CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                disp.BeginInvoke(() => OperationLogEntries.Add(entry));
+                return;
+            }
+        }
+        catch
+        {
+        }
+        OperationLogEntries.Add(entry);
     }
     private string _statusMessage = "Ready";
     private double _burnProgress;
@@ -246,8 +300,126 @@ public class ImageStudioViewModel : ObservableObject
     public IDiscRecorderBackend? SelectedRecorder
     {
         get => _selectedRecorder;
-        set => SetProperty(ref _selectedRecorder, value);
+        set
+        {
+            if (SetProperty(ref _selectedRecorder, value))
+            {
+                if (_copySourceRecorder == null) CopySourceRecorder = value;
+                if (_copyTargetRecorder == null) CopyTargetRecorder = value;
+            }
+        }
     }
+
+    /// <summary>
+    /// Indicates whether the currently inspected file is a legacy third-party disc image (.nrg, .mdf/.mds, .ccd/.img)
+    /// that can be converted to a canonical .iso file or burned directly.
+    /// </summary>
+    public bool IsLegacyImageLoaded
+    {
+        get => _isLegacyImageLoaded;
+        set
+        {
+            if (SetProperty(ref _isLegacyImageLoaded, value))
+            {
+                ConvertLegacyImageToIsoCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Source optical drive for 1-Click Disc Copy operations.
+    /// </summary>
+    public IDiscRecorderBackend? CopySourceRecorder
+    {
+        get => _copySourceRecorder;
+        set => SetProperty(ref _copySourceRecorder, value);
+    }
+
+    /// <summary>
+    /// Target optical drive for 1-Click Disc Copy operations.
+    /// </summary>
+    public IDiscRecorderBackend? CopyTargetRecorder
+    {
+        get => _copyTargetRecorder;
+        set => SetProperty(ref _copyTargetRecorder, value);
+    }
+
+    /// <summary>
+    /// Number of sequential disc copies to produce in a batch (1..99).
+    /// </summary>
+    public int CopyCount
+    {
+        get => _copyCount;
+        set => SetProperty(ref _copyCount, Math.Clamp(value, 1, 99));
+    }
+
+    /// <summary>
+    /// When true, Disc Copy reads and writes raw 2,352-byte sectors (.bin + .cue).
+    /// </summary>
+    public bool CopyRawCloneMode
+    {
+        get => _copyRawCloneMode;
+        set => SetProperty(ref _copyRawCloneMode, value);
+    }
+
+    /// <summary>
+    /// When true, Disc Copy verifies each burned copy bit-for-bit against the staged image.
+    /// </summary>
+    public bool CopyVerifyEachDisc
+    {
+        get => _copyVerifyEachDisc;
+        set => SetProperty(ref _copyVerifyEachDisc, value);
+    }
+
+    /// <summary>
+    /// When true, Disc Copy keeps the temporary staged image file on disk after completion.
+    /// </summary>
+    public bool CopyKeepStagedImage
+    {
+        get => _copyKeepStagedImage;
+        set => SetProperty(ref _copyKeepStagedImage, value);
+    }
+
+    /// <summary>
+    /// Result of the most recent 1-Click Disc Copy operation.
+    /// </summary>
+    public DiscCopyResult? LastCopyResult
+    {
+        get => _lastCopyResult;
+        set => SetProperty(ref _lastCopyResult, value);
+    }
+
+    /// <summary>
+    /// Hardware drive buffer fill level percentage (0.0 .. 100.0).
+    /// </summary>
+    public double DeviceBufferPercent
+    {
+        get => _deviceBufferPercent;
+        set => SetProperty(ref _deviceBufferPercent, value);
+    }
+
+    /// <summary>
+    /// Host software ring-buffer fill level percentage (0.0 .. 100.0).
+    /// </summary>
+    public double SoftwareBufferPercent
+    {
+        get => _softwareBufferPercent;
+        set => SetProperty(ref _softwareBufferPercent, value);
+    }
+
+    /// <summary>
+    /// Formatted real-time write/read speed telemetry string (e.g. "16.0x (22,160 KB/s)").
+    /// </summary>
+    public string CurrentSpeedDisplay
+    {
+        get => _currentSpeedDisplay;
+        set => SetProperty(ref _currentSpeedDisplay, value);
+    }
+
+    /// <summary>
+    /// Timestamped hardware, SCSI, and sector I/O event log entries (ImgBurn-style telemetry drawer).
+    /// </summary>
+    public ObservableCollection<string> OperationLogEntries { get; } = new();
 
     /// <summary>
     /// Currently selected write speed for burning operations.
@@ -277,6 +449,8 @@ public class ImageStudioViewModel : ObservableObject
                 BurnImageToDiscCommand.RaiseCanExecuteChanged();
                 RipDiscToImageCommand.RaiseCanExecuteChanged();
                 VerifyDiscAgainstImageCommand.RaiseCanExecuteChanged();
+                ConvertLegacyImageToIsoCommand?.RaiseCanExecuteChanged();
+                CopyDiscCommand?.RaiseCanExecuteChanged();
                 CancelCommand?.RaiseCanExecuteChanged();
             }
         }
@@ -383,6 +557,21 @@ public class ImageStudioViewModel : ObservableObject
     /// </summary>
     public RelayCommand CancelCommand { get; }
 
+    /// <summary>
+    /// Converts a loaded legacy image (.nrg, .mdf/.mds, .ccd/.img) to a standard 2,048-byte Mode 1 .iso file.
+    /// </summary>
+    public AsyncRelayCommand ConvertLegacyImageToIsoCommand { get; }
+
+    /// <summary>
+    /// Executes a 1-Click Disc-to-Disc Copy (single-drive swap or drive-to-drive) with optional multi-copy batching.
+    /// </summary>
+    public AsyncRelayCommand CopyDiscCommand { get; }
+
+    /// <summary>
+    /// Clears all entries in the hardware/sector event log drawer.
+    /// </summary>
+    public RelayCommand ClearOperationLogCommand { get; }
+
     #endregion
 
     /// <summary>
@@ -395,9 +584,10 @@ public class ImageStudioViewModel : ObservableObject
         _deviceService = deviceService ?? new DiscDeviceManager(enablePhysicalEnumeration: false);
         _burnEngine = burnEngine ?? new VirtualBurnEngine();
         _dataBurnService = new DataBurnService(_burnEngine);
-        _audioBurnService = new AudioCdBurnService(_burnEngine);
+        _audioBurnService = new AudioCdBurnService(_burnEngine, new MediaFoundationAudioDecoder());
         _ripperService = new DiscRipperService();
         _verificationService = new DiscVerificationService();
+        _copyService = new DiscCopyService(_burnEngine, _audioBurnService.AudioDecoder);
 
         try
         {
@@ -416,6 +606,9 @@ public class ImageStudioViewModel : ObservableObject
         RipDiscToImageCommand = new AsyncRelayCommand(async p => await RipDiscToImageAsync(p as string), _ => !IsBusy);
         VerifyDiscAgainstImageCommand = new AsyncRelayCommand(async p => await VerifyDiscAgainstImageAsync(p as string), _ => !IsBusy && !string.IsNullOrWhiteSpace(SourceImagePath));
         BrowseRipTargetFileCommand = new RelayCommand(BrowseRipTargetFile);
+        ConvertLegacyImageToIsoCommand = new AsyncRelayCommand(async p => await ConvertLegacyImageToIsoAsync(p as string), _ => !IsBusy && IsLegacyImageLoaded);
+        CopyDiscCommand = new AsyncRelayCommand(async _ => await CopyDiscAsync(), _ => !IsBusy);
+        ClearOperationLogCommand = new RelayCommand(() => OperationLogEntries.Clear());
         CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => IsBusy);
 
         foreach (var r in _deviceService.GetRecorders())
@@ -427,6 +620,9 @@ public class ImageStudioViewModel : ObservableObject
         SelectedRecorder = AvailableRecorders.FirstOrDefault(r => !r.IsVirtual)
                            ?? AvailableRecorders.FirstOrDefault(r => string.Equals(r.UniqueId, "VDRV-01", StringComparison.OrdinalIgnoreCase))
                            ?? AvailableRecorders.FirstOrDefault();
+        CopySourceRecorder = SelectedRecorder;
+        CopyTargetRecorder = SelectedRecorder;
+        AppendLog("Disc Image Studio initialized. Ready for ISO/CUE/NRG/MDF/CCD mastering & 1-Click Disc Copy.");
     }
 
     #region Image Inspection Operations
@@ -447,10 +643,12 @@ public class ImageStudioViewModel : ObservableObject
             DetectedImageFormat = "No Image Loaded";
             ImageSizeBytes = 0;
             ImageSectorCount = 0;
+            IsLegacyImageLoaded = false;
             return;
         }
 
         string ext = Path.GetExtension(SourceImagePath).ToLowerInvariant();
+        IsLegacyImageLoaded = LegacyDiscImageConverter.IsLegacyImageFile(SourceImagePath);
         if (ext == ".iso")
         {
             var fi = new FileInfo(SourceImagePath);
@@ -487,6 +685,27 @@ public class ImageStudioViewModel : ObservableObject
                     if (File.Exists(refPath))
                     {
                         var fi = new FileInfo(refPath);
+                        bool isAudioTrack = file.Tracks.Any(t => t.DataType == CueTrackDataType.Audio);
+                        string refExt = Path.GetExtension(refPath);
+                        bool isCompressedOrWaveAudio = isAudioTrack && !string.Equals(refExt, ".bin", StringComparison.OrdinalIgnoreCase);
+
+                        if (isCompressedOrWaveAudio)
+                        {
+                            try
+                            {
+                                var meta = _audioBurnService.AudioDecoder.ProbeAudioFile(refPath);
+                                if (meta.TotalRedBookBytes > 0)
+                                {
+                                    totalBytes += meta.TotalRedBookBytes;
+                                    totalSectors += OpticalConstants.BytesToSectors(meta.TotalRedBookBytes, OpticalConstants.RawSectorSize);
+                                    continue;
+                                }
+                            }
+                            catch
+                            {
+                            }
+                        }
+
                         totalBytes += fi.Length;
                         bool isRaw = file.Tracks.Any(t => t.DataType == CueTrackDataType.Mode1_2352 || t.DataType == CueTrackDataType.Mode2_2352 || t.DataType == CueTrackDataType.Audio);
                         int secSize = isRaw ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
@@ -532,6 +751,25 @@ public class ImageStudioViewModel : ObservableObject
             ImageSectorCount = OpticalConstants.BytesToSectors(ImageSizeBytes, OpticalConstants.RawSectorSize);
             DetectedImageFormat = "Raw BIN Image (2352-byte sectors)";
         }
+        else if (LegacyDiscImageConverter.IsLegacyImageFile(SourceImagePath))
+        {
+            try
+            {
+                var legacyInfo = LegacyDiscImageConverter.Inspect(SourceImagePath);
+                DetectedImageFormat = legacyInfo.FormatName;
+                ImageSizeBytes = legacyInfo.PayloadLengthBytes;
+                ImageSectorCount = legacyInfo.SectorCount;
+                AppendLog($"Inspected legacy image '{Path.GetFileName(SourceImagePath)}': {legacyInfo.FormatName}, {legacyInfo.SectorCount:N0} sectors ({legacyInfo.SectorSizeBytes} B/sector).");
+            }
+            catch (Exception ex)
+            {
+                var fi = new FileInfo(SourceImagePath);
+                ImageSizeBytes = fi.Length;
+                ImageSectorCount = OpticalConstants.BytesToSectors(ImageSizeBytes, OpticalConstants.DataSectorSize);
+                DetectedImageFormat = "Legacy Disc Image";
+                StatusMessage = $"Failed to inspect legacy image header: {ex.Message}";
+            }
+        }
         else
         {
             var fi = new FileInfo(SourceImagePath);
@@ -548,12 +786,72 @@ public class ImageStudioViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Select Disc Image to Open",
-            Filter = "Disc Images (*.iso;*.cue;*.bin)|*.iso;*.cue;*.bin|ISO Images (*.iso)|*.iso|CUE Sheets (*.cue)|*.cue|Raw Binary Images (*.bin)|*.bin|All Files (*.*)|*.*"
+            Filter = "All Supported Disc Images (*.iso;*.cue;*.bin;*.nrg;*.mdf;*.mds;*.ccd;*.img)|*.iso;*.cue;*.bin;*.nrg;*.mdf;*.mds;*.ccd;*.img|ISO Images (*.iso)|*.iso|CUE Sheets (*.cue)|*.cue|Legacy Images (*.nrg;*.mdf;*.mds;*.ccd;*.img)|*.nrg;*.mdf;*.mds;*.ccd;*.img|Raw Binary Images (*.bin)|*.bin|All Files (*.*)|*.*"
         };
 
         if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
         {
             SourceImagePath = dlg.FileName;
+        }
+    }
+
+    /// <summary>
+    /// Converts a loaded legacy image (.nrg, .mdf/.mds, .ccd/.img) to a standard 2,048-byte Mode 1 .iso file.
+    /// </summary>
+    public async Task<string?> ConvertLegacyImageToIsoAsync(string? outputIsoPath = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(SourceImagePath) || !File.Exists(SourceImagePath))
+        {
+            StatusMessage = "Source legacy image file does not exist.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputIsoPath))
+        {
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                var sfd = new SaveFileDialog
+                {
+                    Title = "Convert Legacy Disc Image to Standard ISO",
+                    Filter = "Standard ISO 9660 Image (*.iso)|*.iso",
+                    FileName = Path.ChangeExtension(Path.GetFileName(SourceImagePath), ".iso")
+                };
+                if (sfd.ShowDialog() != true || string.IsNullOrWhiteSpace(sfd.FileName))
+                {
+                    return null;
+                }
+                outputIsoPath = sfd.FileName;
+            }
+            else
+            {
+                outputIsoPath = Path.ChangeExtension(SourceImagePath, ".converted.iso");
+            }
+        }
+
+        IsBusy = true;
+        BurnProgress = 0;
+        StatusMessage = $"Converting '{Path.GetFileName(SourceImagePath)}' to standard ISO...";
+        AppendLog($"Converting legacy image '{Path.GetFileName(SourceImagePath)}' -> '{Path.GetFileName(outputIsoPath)}'...");
+
+        try
+        {
+            var progress = CreateOperationProgress(text => StatusMessage = text);
+            int sectors = await LegacyDiscImageConverter.ConvertToIsoAsync(SourceImagePath, outputIsoPath, progress, ct);
+            EndOperationProgress();
+            BurnProgress = 100.0;
+            StatusMessage = $"Converted to '{Path.GetFileName(outputIsoPath)}' ({sectors:N0} Mode 1 sectors).";
+            AppendLog($"Conversion complete: {sectors:N0} sectors written to '{outputIsoPath}'.");
+            return outputIsoPath;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Conversion failed: {ex.Message}";
+            AppendLog($"Conversion failed: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 
@@ -645,14 +943,8 @@ public class ImageStudioViewModel : ObservableObject
             var mediaStatus = vRec.QueryMediaStatus();
             if (!mediaStatus.MediaPresent || (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable))
             {
-                if (ImageSizeBytes > 700 * 1024 * 1024)
-                {
-                    vRec.InsertMedia(VirtualDiscMedium.CreateBlankDvdR47());
-                }
-                else
-                {
-                    vRec.InsertMedia(VirtualDiscMedium.CreateBlankCdR700());
-                }
+                // Size by sector count, not file bytes: a raw 2352-byte CD image is ~15% larger than the data it holds.
+                vRec.InsertMedia(CreateBlankVirtualMediumFor(new MediaStatusDto { UsedSectors = ImageSectorCount }));
             }
         }
 
@@ -693,6 +985,27 @@ public class ImageStudioViewModel : ObservableObject
             else if (ext == ".cue")
             {
                 burnResult = await BurnCueSheetAsync(recorder, SourceImagePath, progress, linkedToken);
+            }
+            else if (LegacyDiscImageConverter.IsLegacyImageFile(SourceImagePath))
+            {
+                var legacyInfo = LegacyDiscImageConverter.Inspect(SourceImagePath);
+                AppendLog($"Burning legacy {legacyInfo.FormatName} ({legacyInfo.SectorCount:N0} sectors) to {recorder.UniqueId}...");
+
+                // Stream the 2048-byte user data straight from the image (no in-memory copy: DVD images exceed 2 GB).
+                await using var isoMem = LegacyDiscImageConverter.OpenIsoUserDataStream(legacyInfo);
+
+                burnResult = await _burnEngine.BurnDataStreamAsync(
+                    recorder,
+                    isoMem,
+                    new DataBurnOptions
+                    {
+                        VolumeLabel = Path.GetFileNameWithoutExtension(SourceImagePath),
+                        CloseDisc = true,
+                        Speed = SelectedWriteSpeed,
+                        OverwriteExistingData = replaceAllowed
+                    },
+                    progress,
+                    linkedToken);
             }
             else // .bin or raw stream
             {
@@ -772,26 +1085,7 @@ public class ImageStudioViewModel : ObservableObject
                 IncludeCdText = !string.IsNullOrEmpty(cueSheet.Title) || !string.IsNullOrEmpty(cueSheet.Performer)
             };
 
-            int trackNumber = 1;
-            foreach (var file in cueSheet.Files)
-            {
-                string audioFile = Path.IsPathRooted(file.FileName) ? file.FileName : Path.Combine(cueDir, file.FileName);
-                foreach (var trk in file.Tracks)
-                {
-                    compilation.AddTrack(new AudioCdTrackItem(
-                        TrackNumber: trk.TrackNumber > 0 ? trk.TrackNumber : trackNumber,
-                        SourceFilePath: audioFile,
-                        Title: trk.Title ?? $"Track {trackNumber:D2}",
-                        Performer: trk.Performer ?? compilation.AlbumPerformer,
-                        Isrc: trk.Isrc,
-                        PreGapFrames: trk.PreGap?.ToFrameCount() ?? (trackNumber == 1 ? 150 : 0)
-                    )
-                    {
-                        Songwriter = trk.Songwriter
-                    });
-                    trackNumber++;
-                }
-            }
+            compilation.ImportCueSheet(cueSheet, cueDir, _audioBurnService.AudioDecoder);
 
             return await _audioBurnService.BurnAsync(
                 recorder,
@@ -1027,6 +1321,19 @@ public class ImageStudioViewModel : ObservableObject
             {
                 result = await VerifyCueSheetAsync(recorder, SourceImagePath, progress, linkedToken);
             }
+            else if (LegacyDiscImageConverter.IsLegacyImageFile(SourceImagePath))
+            {
+                var legacyInfo = LegacyDiscImageConverter.Inspect(SourceImagePath);
+                await using var isoMem = LegacyDiscImageConverter.OpenIsoUserDataStream(legacyInfo);
+
+                result = await _verificationService.VerifyDiscAgainstStreamAsync(
+                    recorder,
+                    _burnEngine,
+                    isoMem,
+                    raw2352Mode: false,
+                    progress: progress,
+                    ct: linkedToken);
+            }
             else // .bin or raw
             {
                 await using var fs = new FileStream(SourceImagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -1045,7 +1352,12 @@ public class ImageStudioViewModel : ObservableObject
             DiscSha256 = result.ActualSha256;
             IsChecksumMatch = result.IsMatch;
 
-            if (result.IsMatch)
+            if (result.IsSkipped)
+            {
+                VerificationStatusText = $"Verification skipped: {result.ErrorMessage}";
+                BurnProgress = 100.0;
+            }
+            else if (result.IsMatch)
             {
                 VerificationStatusText = $"Verification PASSED: SHA-256 Checksums match bit-for-bit ({result.TotalSectorsVerified:N0} sectors verified).";
                 BurnProgress = 100.0;
@@ -1092,6 +1404,20 @@ public class ImageStudioViewModel : ObservableObject
     {
         var cueSheet = CueSheetParser.ParseFile(cuePath);
         string cueDir = Path.GetDirectoryName(cuePath) ?? "";
+
+        // An audio CUE (.flac/.wav/.mp3 tracks, or audio in .bin) cannot be compared sector-for-sector: the files are
+        // decoded/resampled, tracks are padded to sector boundaries, pre-gaps are generated, and audio reads carry the
+        // drive's read offset and no EDC. Comparing would read a compressed .flac as raw sectors and always "fail".
+        if (cueSheet.Files.Any(f => f.Tracks.Any(t => t.DataType == CueTrackDataType.Audio)))
+        {
+            return new VerificationResult
+            {
+                IsMatch = false,
+                IsSkipped = true,
+                ErrorMessage = "Audio CD tracks can't be verified bit-for-bit against the source files. Rip the disc with AccurateRip to check it."
+            };
+        }
+
         var firstFile = cueSheet.Files.FirstOrDefault();
 
         if (firstFile == null)
@@ -1147,6 +1473,233 @@ public class ImageStudioViewModel : ObservableObject
             SelectedRecorder = defaultRec;
         }
         return defaultRec;
+    }
+
+    #endregion
+
+    #region 1-Click Disc Copy & Multi-Copy Batch Operations
+
+    /// <summary>
+    /// Executes a 1-Click Disc-to-Disc Copy from <paramref name="sourceDriveId"/> (or <see cref="CopySourceRecorder"/>)
+    /// to <paramref name="targetDriveId"/> (or <see cref="CopyTargetRecorder"/>) for <see cref="CopyCount"/> copies.
+    /// </summary>
+    public async Task<DiscCopyResult> CopyDiscAsync(
+        string? sourceDriveId = null,
+        string? targetDriveId = null,
+        Func<int, CancellationToken, Task<bool>>? onPrepareTargetDiscAsync = null,
+        CancellationToken ct = default)
+    {
+        var sourceRec = !string.IsNullOrWhiteSpace(sourceDriveId)
+            ? _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, sourceDriveId, StringComparison.OrdinalIgnoreCase))
+            : (CopySourceRecorder ?? SelectedRecorder);
+
+        var targetRec = !string.IsNullOrWhiteSpace(targetDriveId)
+            ? _deviceService.GetRecorders().FirstOrDefault(r => string.Equals(r.UniqueId, targetDriveId, StringComparison.OrdinalIgnoreCase))
+            : (CopyTargetRecorder ?? SelectedRecorder);
+
+        if (sourceRec == null || targetRec == null)
+        {
+            StatusMessage = "Source or target optical drive is not available.";
+            var fail = DiscCopyResult.Failed(StatusMessage, CopyCount);
+            LastCopyResult = fail;
+            return fail;
+        }
+
+        _activeCts?.Dispose();
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var linkedToken = _activeCts.Token;
+
+        IsBusy = true;
+        BurnProgress = 0;
+        StatusMessage = $"Copying disc from {sourceRec.UniqueId} to {targetRec.UniqueId} ({CopyCount} copy/copies)...";
+        AppendLog($"Starting 1-Click Disc Copy: Source={sourceRec.UniqueId} -> Target={targetRec.UniqueId}, Copies={CopyCount}, RawClone={CopyRawCloneMode}.");
+
+        try
+        {
+            var progress = CreateOperationProgress(text => StatusMessage = text);
+
+            // Capture the source geometry before any single-drive swap replaces the source disc.
+            var sourceStatus = sourceRec.QueryMediaStatus();
+            bool singleDrive = DiscCopyService.IsSameDrive(sourceRec, targetRec);
+
+            Func<int, CancellationToken, Task<bool>> prepareCallback = async (copyIdx, token) =>
+            {
+                if (onPrepareTargetDiscAsync != null)
+                {
+                    return await onPrepareTargetDiscAsync(copyIdx, token);
+                }
+
+                // For virtual target drives, automatically mount a fresh blank disc sized for the source before each copy
+                if (targetRec is VirtualDiscRecorder vTarget)
+                {
+                    var st = vTarget.QueryMediaStatus();
+                    if (singleDrive || copyIdx > 1 || !st.MediaPresent || !st.IsBlank)
+                    {
+                        var blank = CreateBlankVirtualMediumFor(sourceStatus);
+                        vTarget.InsertMedia(blank);
+                        AppendLog($"Mounted blank virtual {blank.MediaType.GetDisplayName()} in {vTarget.UniqueId} for Copy #{copyIdx}.");
+                    }
+                    return true;
+                }
+
+                // Physical drives: drive-to-drive copy #1 goes onto the blank already in the target drive.
+                // Single-drive copies (source still loaded) and every later copy need the user to swap discs.
+                if (!singleDrive && copyIdx == 1)
+                {
+                    return true;
+                }
+
+                return await PromptForBlankTargetDiscAsync(targetRec, copyIdx, CopyCount, singleDrive, token);
+            };
+
+            var copyResult = await _copyService.CopyDiscAsync(
+                sourceRec,
+                targetRec,
+                new DiscCopyOptions
+                {
+                    CopyCount = CopyCount,
+                    RawCloneMode = CopyRawCloneMode,
+                    VerifyEachCopy = CopyVerifyEachDisc,
+                    KeepStagedImage = CopyKeepStagedImage,
+                    WriteSpeed = SelectedWriteSpeed,
+                    OnPrepareTargetDiscAsync = prepareCallback
+                },
+                progress,
+                linkedToken);
+
+            EndOperationProgress();
+            LastCopyResult = copyResult;
+
+            if (copyResult.Success)
+            {
+                BurnProgress = 100.0;
+                StatusMessage = $"Disc Copy complete: {copyResult.CopiesCompleted}/{copyResult.CopiesRequested} copy/copies burned ({copyResult.TotalSectorsWritten:N0} total sectors).";
+                AppendLog(StatusMessage);
+            }
+            else
+            {
+                StatusMessage = $"Disc Copy failed: {copyResult.ErrorMessage}";
+                AppendLog(StatusMessage);
+            }
+
+            return copyResult;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Disc Copy cancelled by user.";
+            AppendLog(StatusMessage);
+            var cancelled = DiscCopyResult.Failed(StatusMessage, CopyCount);
+            LastCopyResult = cancelled;
+            return cancelled;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Disc Copy error: {ex.Message}";
+            AppendLog(StatusMessage);
+            var fail = DiscCopyResult.Failed(ex.Message, CopyCount);
+            LastCopyResult = fail;
+            return fail;
+        }
+        finally
+        {
+            _activeCts?.Dispose();
+            _activeCts = null;
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Picks the smallest blank virtual medium that can hold a copy of the source disc
+    /// (CD-R 700 MB, DVD-R 4.7 GB, or DVD+R DL 8.5 GB).
+    /// </summary>
+    public static VirtualDiscMedium CreateBlankVirtualMediumFor(MediaStatusDto sourceStatus)
+    {
+        int used = Math.Max(0, sourceStatus.UsedSectors);
+        if (sourceStatus.MediaType.IsDvd() || used > OpticalConstants.Cd700MbSectors)
+        {
+            return used > OpticalConstants.DvdMinusR5Sectors
+                ? VirtualDiscMedium.CreateBlankDvdPlusRDL85()
+                : VirtualDiscMedium.CreateBlankDvdR47();
+        }
+
+        return VirtualDiscMedium.CreateBlankCdR700();
+    }
+
+    /// <summary>
+    /// Ejects the target drive and asks the user to insert a blank disc for <paramref name="copyIndex"/>, then waits for the
+    /// drive to report blank (or rewritable) media. Returns false if the user cancels. Without an interactive desktop it
+    /// cannot prompt, so it proceeds only if blank media is already present.
+    /// </summary>
+    private async Task<bool> PromptForBlankTargetDiscAsync(
+        IDiscRecorderBackend targetRec,
+        int copyIndex,
+        int copyCount,
+        bool singleDrive,
+        CancellationToken ct)
+    {
+        static bool IsUsableBlank(MediaStatusDto st) => st.MediaPresent && (st.IsBlank || st.IsRewritable);
+
+        if (!CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+        {
+            bool ready = IsUsableBlank(targetRec.QueryMediaStatus());
+            if (!ready) AppendLog($"Copy #{copyIndex}: no blank disc in {targetRec.UniqueId} and no interactive session to prompt for one.");
+            return ready;
+        }
+
+        try
+        {
+            targetRec.EjectMedia();
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Could not eject {targetRec.UniqueId}: {ex.Message}");
+        }
+
+        string reason = singleDrive && copyIndex == 1
+            ? "The source disc has been read and ejected."
+            : $"Copy #{copyIndex - 1} is finished and has been ejected.";
+        string message = $"{reason}\n\nInsert a blank disc into {targetRec.VolumePath} for copy {copyIndex} of {copyCount}, close the tray, then click OK.";
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            AppendLog($"Waiting for blank disc in {targetRec.UniqueId} for Copy #{copyIndex}...");
+
+            var answer = await ShowMessageOnUiThreadAsync(message, System.Windows.MessageBoxButton.OKCancel, System.Windows.MessageBoxImage.Information);
+            if (answer != System.Windows.MessageBoxResult.OK)
+            {
+                return false;
+            }
+
+            // Give the drive time to spin up and read the new disc.
+            for (int attempt = 0; attempt < 30; attempt++)
+            {
+                if (IsUsableBlank(targetRec.QueryMediaStatus()))
+                {
+                    return true;
+                }
+                await Task.Delay(1000, ct).ConfigureAwait(false);
+            }
+
+            message = $"No blank disc was detected in {targetRec.VolumePath}.\n\nInsert a blank (or rewritable) disc for copy {copyIndex} of {copyCount}, then click OK — or Cancel to stop the batch.";
+        }
+    }
+
+    private static Task<System.Windows.MessageBoxResult> ShowMessageOnUiThreadAsync(
+        string message,
+        System.Windows.MessageBoxButton buttons,
+        System.Windows.MessageBoxImage icon)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        System.Windows.MessageBoxResult Show() =>
+            System.Windows.MessageBox.Show(message, "Disc Copy — IgnisDisc", buttons, icon);
+
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            return Task.FromResult(Show());
+        }
+
+        return dispatcher.InvokeAsync(Show).Task;
     }
 
     #endregion

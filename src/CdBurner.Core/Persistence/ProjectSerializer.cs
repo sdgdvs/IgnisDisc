@@ -536,6 +536,8 @@ public static class ProjectSerializer
             IncludeCdText = compilation.IncludeCdText,
             NormalizeAllTracks = compilation.NormalizeAllTracks,
             DefaultPreGapFrames = compilation.DefaultPreGapFrames,
+            UseRmsLoudnessLeveling = compilation.UseRmsLoudnessLeveling,
+            CrossfadeSeconds = compilation.CrossfadeSeconds,
             CreatedAtUtc = DateTime.UtcNow,
             ModifiedAtUtc = DateTime.UtcNow,
             CdText = new SerializedCdText
@@ -567,7 +569,9 @@ public static class ProjectSerializer
                 Songwriter = track.Songwriter,
                 Composer = track.Composer,
                 Arranger = track.Arranger,
-                Message = track.Message
+                Message = track.Message,
+                SourceStartFrame = track.SourceStartFrame,
+                SourceFrameCount = track.SourceFrameCount
             });
         }
 
@@ -577,7 +581,9 @@ public static class ProjectSerializer
     /// <summary>
     /// Reconstitutes a live <see cref="AudioCdCompilation"/> from a persistent project document.
     /// </summary>
-    public static AudioCdCompilation ToAudioCdCompilation(CdBurnerProjectDocument document)
+    /// <param name="document">The persisted project.</param>
+    /// <param name="audioDecoder">Decoder used to rebuild single-file CUE album slices (null = built-in FLAC/WAV codecs).</param>
+    public static AudioCdCompilation ToAudioCdCompilation(CdBurnerProjectDocument document, IAudioDecoder? audioDecoder = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -586,7 +592,9 @@ public static class ProjectSerializer
             RecordingMode = document.RecordingMode,
             IncludeCdText = document.IncludeCdText,
             NormalizeAllTracks = document.NormalizeAllTracks,
-            DefaultPreGapFrames = document.DefaultPreGapFrames
+            DefaultPreGapFrames = document.DefaultPreGapFrames,
+            UseRmsLoudnessLeveling = document.UseRmsLoudnessLeveling,
+            CrossfadeSeconds = Math.Max(0.0, document.CrossfadeSeconds)
         };
 
         if (document.CdText != null)
@@ -607,10 +615,25 @@ public static class ProjectSerializer
                 .GroupBy(t => t.TrackNumber)
                 .ToDictionary(g => g.Key, g => g.First());
 
+            // Tracks sliced from the same single-file album image share one lazily decoded source,
+            // so reloading a 12-track CUE album decodes the .flac once, not 12 times.
+            var albumSources = new Dictionary<string, SingleFileAlbumSource>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var track in document.AudioTracks.OrderBy(t => t.TrackNumber))
             {
                 SerializedCdTextTrack? cdt = null;
                 cdTextTracksByNum?.TryGetValue(track.TrackNumber, out cdt);
+
+                Func<Stream>? sliceFactory = null;
+                if (track.SourceStartFrame.HasValue && !string.IsNullOrWhiteSpace(track.SourceFilePath))
+                {
+                    if (!albumSources.TryGetValue(track.SourceFilePath, out var album))
+                    {
+                        album = new SingleFileAlbumSource(track.SourceFilePath, audioDecoder);
+                        albumSources[track.SourceFilePath] = album;
+                    }
+                    sliceFactory = album.CreateSliceFactory(Math.Max(0, track.SourceStartFrame.Value), track.SourceFrameCount);
+                }
 
                 var trackItem = new AudioCdTrackItem(
                     track.TrackNumber,
@@ -619,13 +642,16 @@ public static class ProjectSerializer
                     !string.IsNullOrEmpty(track.Performer) ? track.Performer : (cdt?.Performer ?? string.Empty),
                     track.Isrc ?? cdt?.Isrc,
                     track.PreGapFrames,
-                    track.NormalizeAudio)
+                    track.NormalizeAudio,
+                    sliceFactory)
                 {
                     DurationFrames = track.DurationFrames,
                     Songwriter = track.Songwriter ?? cdt?.Songwriter,
                     Composer = track.Composer ?? cdt?.Composer,
                     Arranger = track.Arranger ?? cdt?.Arranger,
-                    Message = track.Message ?? cdt?.Message
+                    Message = track.Message ?? cdt?.Message,
+                    SourceStartFrame = track.SourceStartFrame,
+                    SourceFrameCount = track.SourceFrameCount
                 };
 
                 compilation.AddTrack(trackItem);

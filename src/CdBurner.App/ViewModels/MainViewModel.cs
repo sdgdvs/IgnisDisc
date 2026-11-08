@@ -1128,6 +1128,7 @@ public class MainViewModel : ObservableObject, IDisposable
                     _mediaPollTimer.Stop();
                     _mediaPollTimer = null;
                 }
+                _audioBurn.Dispose(); // stops audio preview playback on shutdown
                 _deviceService.DeviceChanged -= OnDeviceChanged;
                 if (_ownsDeviceService && _deviceService is IDisposable d)
                 {

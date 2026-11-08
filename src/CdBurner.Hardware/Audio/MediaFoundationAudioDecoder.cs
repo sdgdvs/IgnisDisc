@@ -44,7 +44,7 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
 
     /// <summary>
     /// Inspects and extracts metadata from an audio file. Uses pure C# WavFileCodec for .wav files,
-    /// or Windows Media Foundation source reader for other formats.
+    /// FlacFileCodec for .flac files (extracting STREAMINFO + Vorbis Comments), or Windows Media Foundation source reader for other formats.
     /// </summary>
     public AudioFormatMetadata ProbeAudioFile(string filePath)
     {
@@ -63,6 +63,22 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
         if (string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase))
         {
             return WavFileCodec.ProbeAudioFile(filePath);
+        }
+
+        if (FlacFileCodec.IsFlacFile(filePath))
+        {
+            try
+            {
+                var flacMeta = FlacFileCodec.ProbeAudioFile(filePath);
+                if (flacMeta.Duration > TimeSpan.Zero || flacMeta.TotalRedBookBytes > 0)
+                {
+                    return flacMeta;
+                }
+            }
+            catch
+            {
+                // Fall through to Media Foundation if container is non-standard (e.g. Ogg-encapsulated FLAC)
+            }
         }
 
         return ProbeViaMediaFoundation(filePath);
@@ -91,6 +107,23 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             return WavFileCodec.OpenRedBookPcmStream(filePath);
         }
 
+        if (FlacFileCodec.IsFlacFile(filePath))
+        {
+            try
+            {
+                var flacStream = FlacFileCodec.OpenRedBookPcmStream(filePath);
+                if (flacStream.Length > 0)
+                {
+                    return flacStream;
+                }
+                flacStream.Dispose();
+            }
+            catch
+            {
+                // Fall back to Media Foundation source reader if needed
+            }
+        }
+
         return OpenRedBookPcmStreamViaMediaFoundation(filePath);
     }
 
@@ -114,6 +147,16 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
                 (hr == unchecked((int)0x80004005) && (string.Equals(Path.GetExtension(filePath), ".m4p", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetExtension(filePath), ".m4a", StringComparison.OrdinalIgnoreCase))))
             {
                 throw new DrmProtectedAudioException(filePath, "Apple FairPlay DRM");
+            }
+            if (FlacFileCodec.IsFlacFile(filePath))
+            {
+                try
+                {
+                    return FlacFileCodec.OpenRedBookPcmStream(filePath);
+                }
+                catch
+                {
+                }
             }
             throw new COMException($"Failed to open audio file '{Path.GetFileName(filePath)}' for decoding via Windows Media Foundation (HRESULT 0x{hr:X8}). The file may be corrupt, DRM-protected, or in an unsupported format.", hr);
         }
@@ -325,6 +368,16 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
                 (hr == unchecked((int)0x80004005) && (string.Equals(Path.GetExtension(filePath), ".m4p", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetExtension(filePath), ".m4a", StringComparison.OrdinalIgnoreCase))))
             {
                 throw new DrmProtectedAudioException(filePath, "Apple FairPlay DRM");
+            }
+            if (FlacFileCodec.IsFlacFile(filePath))
+            {
+                try
+                {
+                    return FlacFileCodec.ProbeAudioFile(filePath);
+                }
+                catch
+                {
+                }
             }
             throw new COMException($"Failed to open audio file '{Path.GetFileName(filePath)}' via Windows Media Foundation (HRESULT 0x{hr:X8}). The file may be corrupt, DRM-protected, or in an unsupported format.", hr);
         }

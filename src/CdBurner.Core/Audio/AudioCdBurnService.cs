@@ -99,6 +99,7 @@ public class AudioCdBurnService
         try
         {
             int totalRequiredFrames = 0;
+            var preparedTracks = new byte[compilation.Tracks.Count][];
 
             for (int i = 0; i < compilation.Tracks.Count; i++)
             {
@@ -178,6 +179,11 @@ public class AudioCdBurnService
                         await pcmStream.CopyToAsync(mem, cancellationToken).ConfigureAwait(false);
                         pcmBytes = mem.ToArray();
                     }
+
+                    if (compilation.UseRmsLoudnessLeveling)
+                    {
+                        pcmBytes = RedBookPcmDspProcessor.NormalizeRmsLoudness(pcmBytes);
+                    }
                 }
                 finally
                 {
@@ -187,12 +193,32 @@ public class AudioCdBurnService
                     }
                 }
 
+                preparedTracks[i] = pcmBytes;
+            }
+
+            // Crossfade adjacent tracks by overlapping them (the next track's head is mixed into this track's tail
+            // and removed from the next track), so the transition plays exactly once. Only meaningful when tracks
+            // butt against each other: gapless DAO with no pre-gap on the incoming track.
+            if (compilation.CrossfadeSeconds > 0 && compilation.RecordingMode == AudioRecordingMode.DiscAtOnceGapless)
+            {
+                for (int k = 0; k + 1 < preparedTracks.Length; k++)
+                {
+                    if (compilation.Tracks[k + 1].PreGapFrames > 0) continue;
+                    (preparedTracks[k], preparedTracks[k + 1]) = RedBookPcmDspProcessor.ApplyCrossfadeBetweenTracks(
+                        preparedTracks[k], preparedTracks[k + 1], compilation.CrossfadeSeconds);
+                }
+            }
+
+            for (int i = 0; i < preparedTracks.Length; i++)
+            {
+                var trackItem = compilation.Tracks[i];
+                byte[] pcmBytes = preparedTracks[i];
                 int frames = pcmBytes.Length / OpticalConstants.RawSectorSize;
                 trackItem.DurationFrames = frames;
                 int preGap = i > 0 ? Math.Max(0, trackItem.PreGapFrames) : Math.Max(0, trackItem.PreGapFrames - OpticalConstants.CdLeadInFrames);
                 totalRequiredFrames += frames + preGap;
 
-                var source = new AudioTrackSource
+                audioTrackSources.Add(new AudioTrackSource
                 {
                     TrackNumber = trackItem.TrackNumber > 0 ? trackItem.TrackNumber : i + 1,
                     FilePath = trackItem.SourceFilePath,
@@ -206,9 +232,7 @@ public class AudioCdBurnService
                     Duration = TimeSpan.FromSeconds((double)frames / OpticalConstants.AudioFramesPerSecond),
                     PcmStream = new MemoryStream(pcmBytes, writable: false),
                     PcmStreamFactory = () => new MemoryStream(pcmBytes, writable: false)
-                };
-
-                audioTrackSources.Add(source);
+                });
             }
 
             // 4. Validate capacity against media
@@ -263,11 +287,18 @@ public class AudioCdBurnService
         BurnAsync(recorder, compilation, options, progress, cancellationToken);
 
     /// <summary>
-    /// Built-in fallback audio decoder for standard RIFF WAVE files.
+    /// Built-in fallback audio decoder for standard RIFF WAVE (.wav) and lossless FLAC (.flac) files.
     /// </summary>
     private sealed class CoreWavAudioDecoder : IAudioDecoder
     {
-        public AudioFormatMetadata ProbeAudioFile(string filePath) => WavFileCodec.ProbeAudioFile(filePath);
-        public Stream OpenRedBookPcmStream(string filePath) => WavFileCodec.OpenRedBookPcmStream(filePath);
+        public AudioFormatMetadata ProbeAudioFile(string filePath) =>
+            FlacFileCodec.IsFlacFile(filePath)
+                ? FlacFileCodec.ProbeAudioFile(filePath)
+                : WavFileCodec.ProbeAudioFile(filePath);
+
+        public Stream OpenRedBookPcmStream(string filePath) =>
+            FlacFileCodec.IsFlacFile(filePath)
+                ? FlacFileCodec.OpenRedBookPcmStream(filePath)
+                : WavFileCodec.OpenRedBookPcmStream(filePath);
     }
 }

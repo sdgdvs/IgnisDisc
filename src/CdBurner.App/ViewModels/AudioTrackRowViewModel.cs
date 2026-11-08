@@ -1,3 +1,4 @@
+using System.IO;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Primitives;
 
@@ -19,6 +20,26 @@ public class AudioTrackRowViewModel : ObservableObject
     private bool _normalizeAudio;
     private int _durationFrames;
     private long _fileSizeBytes;
+    private string _formatName = string.Empty;
+    private int _sampleRate = OpticalConstants.CdAudioSampleRate;
+    private int _bitsPerSample = OpticalConstants.CdAudioBitsPerSample;
+    private int _channels = OpticalConstants.CdAudioChannels;
+
+    /// <summary>
+    /// Optional custom PCM stream factory (used when a track is a frame slice of a single-file CUE + FLAC/WAV album image).
+    /// </summary>
+    public Func<Stream>? CustomPcmStreamFactory { get; set; }
+
+    /// <summary>
+    /// Slice start (75 fps frames) inside <see cref="SourceFilePath"/> for single-file CUE album tracks; null = whole file.
+    /// Carried into the compilation so project files can rebuild the slice.
+    /// </summary>
+    public int? SourceStartFrame { get; set; }
+
+    /// <summary>
+    /// Slice length (75 fps frames), or null to run to the end of the file.
+    /// </summary>
+    public int? SourceFrameCount { get; set; }
 
     /// <summary>
     /// Sequential 1-based track number on the Audio CD.
@@ -35,7 +56,13 @@ public class AudioTrackRowViewModel : ObservableObject
     public string SourceFilePath
     {
         get => _sourceFilePath;
-        set => SetProperty(ref _sourceFilePath, value);
+        set
+        {
+            if (SetProperty(ref _sourceFilePath, value))
+            {
+                OnPropertyChanged(nameof(FormatSummary));
+            }
+        }
     }
 
     /// <summary>
@@ -168,6 +195,97 @@ public class AudioTrackRowViewModel : ObservableObject
         {
             double mb = _fileSizeBytes / (1024.0 * 1024.0);
             return $"{mb:F2} MB";
+        }
+    }
+
+    /// <summary>
+    /// Source codec/container format name (e.g. "FLAC 24-bit", "WAV PCM 16-bit", "MP3").
+    /// </summary>
+    public string FormatName
+    {
+        get => _formatName;
+        set
+        {
+            if (SetProperty(ref _formatName, value))
+            {
+                OnPropertyChanged(nameof(FormatSummary));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Source sample rate in Hz (e.g. 44100, 96000).
+    /// </summary>
+    public int SampleRate
+    {
+        get => _sampleRate;
+        set
+        {
+            if (SetProperty(ref _sampleRate, value))
+            {
+                OnPropertyChanged(nameof(FormatSummary));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Source bit depth per sample (e.g. 16, 24).
+    /// </summary>
+    public int BitsPerSample
+    {
+        get => _bitsPerSample;
+        set
+        {
+            if (SetProperty(ref _bitsPerSample, value))
+            {
+                OnPropertyChanged(nameof(FormatSummary));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Source channel count (1 = mono, 2 = stereo).
+    /// </summary>
+    public int Channels
+    {
+        get => _channels;
+        set
+        {
+            if (SetProperty(ref _channels, value))
+            {
+                OnPropertyChanged(nameof(FormatSummary));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Concise source format badge shown in the track table (e.g. "FLAC 24-bit / 96 kHz", "FLAC 16-bit / 44.1 kHz", "WAV 16-bit").
+    /// </summary>
+    public string FormatSummary
+    {
+        get
+        {
+            string baseFormat = !string.IsNullOrWhiteSpace(_formatName)
+                ? _formatName
+                : System.IO.Path.GetExtension(_sourceFilePath).TrimStart('.').ToUpperInvariant();
+
+            if (string.IsNullOrWhiteSpace(baseFormat))
+            {
+                baseFormat = "PCM";
+            }
+
+            if (_sampleRate > 0)
+            {
+                double khz = _sampleRate / 1000.0;
+                string khzStr = (_sampleRate % 1000 == 0) ? $"{_sampleRate / 1000} kHz" : $"{khz:F1} kHz";
+                if (_bitsPerSample > 0 && !baseFormat.Contains("-bit", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{baseFormat} {_bitsPerSample}-bit / {khzStr}";
+                }
+                return $"{baseFormat} / {khzStr}";
+            }
+
+            return baseFormat;
         }
     }
 }
