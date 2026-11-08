@@ -22,9 +22,9 @@ Last reviewed: 2026-11-08 (v1.08 pre-release audit, `f4dff8d`).
       **v1.09**. Released 2026-11-08 (`4bd267e`, tag `v1.09`); installer smoke-tested, downloaded hashes match the site.
 - [x] Stop slipstreaming: `Update-Version.ps1` and `Publish-ReleaseAndSite.ps1` refuse already-published versions;
       release notes come from `docs/release-notes/v<version>.md`. 2026-11-08 (`4bd267e`)
-- [ ] Submit the v1.09 WinGet manifest (`packaging/winget/.../1.09`, validated) to `microsoft/winget-pkgs`. Put
-      `winget install TetherWorks.IgnisDisc` back on the sites only once `winget show --id TetherWorks.IgnisDisc`
-      works. *(low)* **[owner: approve PR]**
+- [ ] Get `TetherWorks.IgnisDisc` into WinGet: microsoft/winget-pkgs#474307 now submits v1.09 (switched from 1.08 on
+      2026-11-08); CLA signed, waiting on a community moderator. Put `winget install TetherWorks.IgnisDisc` back on
+      the sites only once `winget show --id TetherWorks.IgnisDisc` works. *(low)* **[owner: watch the PR]**
 - [x] Installer/WinGet publisher "Ignis Optical Engineering" → "tetherworks". 2026-11-08 (`4bd267e`)
 - [x] WinGet `FileExtensions` removed: the installer registers no file types. 2026-11-08 (`4bd267e`)
 - [ ] Code signing, so SmartScreen stops warning: SignPath Foundation (free for OSS) or Azure Artifact Signing
