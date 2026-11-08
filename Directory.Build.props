@@ -9,8 +9,8 @@
     <InformationalVersion>1.08</InformationalVersion>
     <AssemblyVersion>1.0.8.0</AssemblyVersion>
     <FileVersion>1.0.8.0</FileVersion>
-    <Company>tetherWorks</Company>
-    <Copyright>Copyright (c) 2026 tetherWorks</Copyright>
+    <Company>tetherworks</Company>
+    <Copyright>Copyright (c) 2026 tetherworks</Copyright>
     <RepositoryUrl>https://github.com/tether-works/IgnisDisc</RepositoryUrl>
     <PackageProjectUrl>https://ignisdisc.tetherworks.dev</PackageProjectUrl>
   </PropertyGroup>
