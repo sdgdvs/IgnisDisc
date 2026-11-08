@@ -39,6 +39,8 @@ pipeline can be tested without hardware or blank media.
 
 ✅ supported · ⚠️ works but needs more real-hardware testing · ❌ not available on physical drives yet
 
+Planned work, including direct drive writing to unlock the ❌ rows, is tracked in [docs/ROADMAP.md](docs/ROADMAP.md).
+
 Reading from physical drives uses SCSI pass-through when Windows allows it and falls back to standard volume reads
 (data) or `IOCTL_CDROM_RAW_READ` (audio) otherwise, so no administrator rights are needed.
 

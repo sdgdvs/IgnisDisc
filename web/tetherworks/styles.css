@@ -1,3 +1,21 @@
+/* Self-hosted fonts (SIL Open Font License 1.1, see /assets/fonts/*-OFL.txt). Served from this site so pages
+   make no third-party requests. Latin subset, variable weight. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/assets/fonts/inter-latin-wght-normal.woff2) format("woff2-variations"), url(/assets/fonts/inter-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url(/assets/fonts/jetbrains-mono-latin-wght-normal.woff2) format("woff2-variations"), url(/assets/fonts/jetbrains-mono-latin-wght-normal.woff2) format("woff2");
+}
+
 :root,
 [data-theme="dark"] {
   --bg: #0b0d12;

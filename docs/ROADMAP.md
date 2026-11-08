@@ -1,0 +1,148 @@
+# IgnisDisc Roadmap
+
+The goal: what ImgBurn would be today if it had never been abandoned — and the obvious choice on Windows for anyone
+burning or ripping CDs and DVDs.
+
+**How to use this file.** It is the single shared engineering roadmap and release checklist for IgnisDisc.
+
+- Tick a box (`- [x]`) in the same commit that finishes the work, and add the date and short commit hash.
+- Add new problems where they belong instead of starting another list.
+- Anything that needs the owner (hardware, accounts, money, decisions) is marked **[owner]**.
+- Risk: **low** = no chance of ruining discs or user data; **med** = new code paths users will hit; **high** = can
+  turn discs into coasters or needs real-hardware testing to prove.
+
+Last reviewed: 2026-11-08 (v1.08 pre-release audit, `f4dff8d`).
+
+---
+
+## P0 — Trust, correctness and release hygiene (low risk, do first)
+
+### Releases
+- [ ] Ship the audited features (FLAC/CUE albums, disc copy, legacy images, playlists, crossfade, cover printing) as
+      **v1.09**. Do not slipstream them into v1.08. *(low)*
+- [ ] Stop slipstreaming: make `scripts/Publish-ReleaseAndSite.ps1` and the `ignisdisc-version-bump` skill refuse to
+      replace assets on an existing release tag. Rebuilds get a new version number. *(low)*
+- [ ] Submit the WinGet manifest to `microsoft/winget-pkgs` after v1.09. Put `winget install TetherWorks.IgnisDisc`
+      back on the sites only once `winget show --id TetherWorks.IgnisDisc` works. *(low)* **[owner: approve PR]**
+- [ ] Installer/WinGet publisher is "Ignis Optical Engineering", a company that doesn't exist → use "tetherworks".
+      *(low)*
+- [ ] WinGet `FileExtensions` lists `.ignis`, but projects are saved as `.cdbproj`. Fix the manifest and check what
+      the installer actually registers. *(low)*
+- [ ] Code signing, so SmartScreen stops warning: SignPath Foundation (free for OSS) or Azure Artifact Signing
+      (~$10/month; check eligibility). *(low)* **[owner: account setup]**
+- [ ] Installer is 149 MB but the portable zip is 70 MB. Find out why (likely uncompressed payload) and shrink it.
+      *(low)*
+
+### Single source of truth for facts
+- [ ] README predates v1.08: add the new features and keep the "What works today" table current. *(low)*
+- [ ] Generate volatile facts (version, sizes, SHA-256 hashes, support table) from the release script into the README
+      and both sites, instead of typing them by hand in four places. *(low)*
+- [x] Sites: aligned landing page strictly with v1.09 physical hardware test matrix, replaced static UI mockups with
+      live build screenshots, self-hosted fonts, and enforced a strict Content-Security-Policy. Deployed 2026-11-08.
+
+### GitHub (tether-works)
+- [ ] CI: a GitHub Actions workflow on `windows-latest` that builds Release and runs all tests on every push and PR.
+      Only then can "CI tests" be claimed anywhere. *(low)*
+- [ ] Turn on Dependabot alerts and secret scanning (free for public repos). *(low)* **[owner: settings]**
+- [ ] Add SECURITY.md, CONTRIBUTING.md and issue templates (bug report; drive compatibility report). *(low)*
+
+---
+
+## P1 — Native drive-command writer (the big one)
+
+Windows' burning service (IMAPIv2) cannot do several of ImgBurn's signature features. ImgBurn drove the drive itself
+with SCSI MMC commands. IgnisDisc already reads discs this way; this epic adds **writing** this way, behind an opt-in
+switch that is off by default, with IMAPIv2 remaining the default and the fallback.
+
+Unlocks: CD-Text, test write (simulation), real Session-at-Once audio with audio in pre-gaps (INDEX 00), hidden track
+one audio, pre-emphasis, ISRC/MCN in subcode, DVD±R DL layer-break control, overburning, DVD+R book type, and
+eventually burning to several drives at once.
+
+Groundwork that already exists: `MmcCommandBuilder` (including `SEND CUE SHEET`, 0x5D), SCSI pass-through,
+TOC / CD-Text parsing, the virtual drive simulator.
+
+**Safety rails (apply to every phase):** opt-in switch per burn, default off. Allow only drives whose capability probe
+passed. Offer a test write first. Verify after burn is mandatory in native mode. Fall back to IMAPIv2 on any
+unexpected sense code. Full SCSI log for every native burn. The virtual drive implements the same MMC write commands,
+so every phase is tested without hardware before it touches a real disc.
+
+- [ ] **Phase 0 — Design gate.** Write the design (command sequence per write type, error/sense handling, buffer and
+      underrun handling, exclusive-access coexistence with IMAPIv2). Pick the 80/20 first feature. List the drives
+      and media available for testing. *(low)* **[owner: decision + drive list]**
+- [ ] **Phase 1 — Capability probe (read-only).** `GET CONFIGURATION` feature descriptors (TAO 0x002D, CD Mastering
+      0x002E, DVD-R/-RW Write 0x002F, Layer Jump 0x0033, BD Write 0x0041) and the Write Parameters mode page (0x05),
+      shown per drive in Drive Utilities and `media-info --json`. Writes nothing. *(low)*
+- [ ] **Phase 2 — Test write.** Full native write pipeline (`MODE SELECT` write parameters with the Test Write bit,
+      `WRITE(10)`, `SYNCHRONIZE CACHE`, `CLOSE TRACK/SESSION`) with the laser off. Proves the pipeline end to end at
+      zero risk to media. *(med)* **[owner: run on real drives]**
+- [ ] **Phase 3 — Audio CD Session-at-Once with CD-Text.** `SEND CUE SHEET` + lead-in CD-Text packs. Test on CD-RW
+      first, then CD-R. *(high)* **[owner: hardware test]**
+- [ ] **Phase 4 — Audio extras.** Audio inside pre-gaps (INDEX 00) and hidden track one audio, pre-emphasis flag,
+      ISRC/MCN. Also enables bit-exact burning of single-file CUE albums with their real gaps. *(high)*
+- [ ] **Phase 5 — DVD.** DVD±R DL layer-break selection (wire the existing DVD-Video layer-break picker to real drives),
+      overburn with explicit warnings, DVD+R book type (drive-vendor commands, per-drive allow-list). *(high)*
+- [ ] **Phase 6 — Throughput.** Burn to several drives at once; burn queue (could also run on IMAPIv2 earlier — see P2).
+      *(med)*
+
+---
+
+## P2 — Features competitors have
+
+### Audio
+- [ ] Rip to MP3 / Opus / AAC as well as WAV / FLAC (Windows has an AAC encoder; check licences before bundling MP3
+      or Opus encoders). *(med)*
+- [ ] Gap detection when ripping, writing INDEX 00 into the ripped `.cue`; hidden track one audio; pre-emphasis
+      detection. *(med)*
+- [ ] CUETools database (CTDB) verification and repair alongside AccurateRip. *(med)*
+- [ ] ReplayGain tags and embedded cover art in ripped FLAC. *(low)*
+
+### Images and copying
+- [ ] Mixed-mode CUE burning: a data track plus audio tracks currently burns only the audio tracks. *(med)*
+- [ ] Copying a mixed-mode / Enhanced CD keeps only the audio unless Raw Clone mode is on; detect it and say so, or
+      copy both. *(med)*
+- [ ] Convert between image formats (BIN/CUE ↔ ISO, legacy formats → BIN/CUE, not only → ISO). *(low)*
+- [ ] DiscJuggler `.cdi` reading. *(low)*
+- [ ] Real-hardware test of disc copy: single-drive swap prompt, multi-copy prompts, physical audio CD detection.
+      *(low)* **[owner: hardware test]**
+
+### Burning workflow
+- [ ] Burn queue (several images one after another) on IMAPIv2. *(med)*
+- [ ] After-burn actions: eject, play a sound, shut down. *(low)*
+
+### Blu-ray
+- [ ] UDF 2.50 image builder (needed for BD-Video and the BD norm). *(med)*
+- [ ] Test BD-R / BD-RE burning on real media before the site claims Blu-ray. *(low)* **[owner: hardware + media]**
+
+### Platform and reach
+- [ ] Windows on ARM64 build (IMAPIv2 exists on ARM64). *(low)*
+- [ ] Opt-in update check against GitHub Releases, disclosed on the site. *(low)*
+- [ ] Accessibility: screen-reader names (`AutomationProperties`) and full keyboard navigation in the WPF app. *(low)*
+- [ ] Localization (resource files; start with the strings in dialogs and status messages). *(med)*
+- [ ] Opt-in, copy-paste drive compatibility report (model, firmware, capability probe, results) feeding a public
+      compatibility list. *(low)*
+
+---
+
+## P3 — Known technical debt (from the v1.08 audit)
+
+- [ ] WAV conversion still uses linear interpolation (aliases on 88.2/96/192 kHz WAVs). Route `WavFileCodec`'s
+      general path through `RedBookPcmConverter` like FLAC. *(low)*
+- [ ] Add TPDF dither when reducing 24-bit audio to 16-bit. *(low)*
+- [ ] `SingleFileAlbumSource` keeps the decoded album (up to ~800 MB) in memory for as long as its tracks are in the
+      compilation. Release it after burning, or decode slices on demand. *(med)*
+- [ ] Audio preview decodes on the UI thread (a long single-file album freezes the window), and `IsPreviewPlaying`
+      never resets when the 30-second clip ends. *(low)*
+- [ ] `AudioCdTrackItem.DurationFrames` can decode a whole album synchronously when the duration is unknown. *(low)*
+- [ ] Check the FLAC test encoder and the Nero pre-gap detection against files made by real tools (`flac.exe`, Nero).
+      Our tests encode our own reading of those formats. *(low)*
+- [ ] 32-bit FLAC with stereo decorrelation is rejected with a clear message rather than decoded. *(low)*
+
+---
+
+## Decisions log
+
+| Date | Decision |
+|---|---|
+| 2026-11-08 | Sites state only verified facts; limitations are listed openly in the support table. |
+| 2026-11-08 | No more slipstreaming: every rebuild gets a new version number. |
+| 2026-11-08 | Direct drive writing will be opt-in and default off; IMAPIv2 stays the default and the fallback. |

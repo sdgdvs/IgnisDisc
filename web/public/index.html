@@ -3,12 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>IgnisDisc Optical Studio — Open-Source Windows CD/DVD Burner, Audio Ripper &amp; PAR2 Archiver</title>
-  <meta name="description" content="Free, open-source (MIT) Windows 10/11 CD, DVD &amp; Blu-ray burning, C2/AccurateRip audio ripping, and multi-disc PAR2 archival suite. Zero adware, zero telemetry." />
+  <title>IgnisDisc — Free, Open-Source CD/DVD Burner and Audio CD Ripper for Windows</title>
+  <meta name="description" content="Free, open-source (MIT) CD and DVD burner, audio CD ripper with AccurateRip, and multi-disc archiver for Windows 10 and 11. No ads, no telemetry." />
   <link rel="icon" type="image/x-icon" href="/assets/IgnisDisc.ico" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -24,6 +21,7 @@
       </div>
 
       <nav class="main-nav" aria-label="Primary Navigation">
+        <a href="#support">/support</a>
         <a href="#features">/features</a>
         <a href="#cli">/cli</a>
         <a id="navGithubLink" href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">github ↗</a>
@@ -43,13 +41,13 @@
     <section class="hero" id="download">
       <div class="status-line">
         <span class="status-dot"></span>
-        <span>MIT OPEN SOURCE • WINDOWS 10 &amp; 11 (x64) • ZERO ADWARE • ZERO TELEMETRY</span>
+        <span>MIT OPEN SOURCE • WINDOWS 10 &amp; 11 (x64) • NO ADS • NO TELEMETRY</span>
       </div>
 
-      <h1>A clean, modern Windows CD/DVD burner, AccurateRip audio ripper, and multi-disc PAR2 archiver.</h1>
+      <h1>A free, open-source CD and DVD burner and audio CD ripper for Windows.</h1>
 
       <p class="hero-lead">
-        Most Windows optical disc utilities (ImgBurn, CDBurnerXP, Exact Audio Copy) haven't been updated in a decade, bundle adware in mirror installers, or require juggling three separate tools. <strong>IgnisDisc</strong> packs 1-click data/ISO burning, gapless Audio CD mastering, hardware C2/AccurateRip extraction, and multi-disc PAR2 cold storage into one self-contained Windows 10/11 desktop app (<code>IgnisDisc.exe</code>) and headless CLI (<code>ignisdisc-cli.exe</code>).
+        <strong>IgnisDisc</strong> burns data discs, ISO images and audio CDs, rips audio CDs with AccurateRip verification, and archives large folders across several discs. It is one desktop app (<code>IgnisDisc.exe</code>) plus a command-line tool (<code>ignisdisc-cli.exe</code>) for scripts. It burns through Windows' built-in burning service (IMAPIv2), so it needs no extra drivers.
       </p>
 
       <!-- Download Box -->
@@ -57,19 +55,18 @@
         <div class="download-buttons">
           <a id="btnDownloadSetup" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Setup.exe" class="btn btn-primary btn-dl">
             <span class="dl-title">⬇ Download Installer (<code>IgnisDisc-Setup.exe</code>)</span>
-            <span class="dl-sub">v1.08 • 149.2 MB Self-Contained x64 • Per-User Install &amp; Upgrade</span>
+            <span class="dl-sub">v1.08 • 149.2 MB • x64 • Per-user install, no admin rights</span>
           </a>
           <a id="btnDownloadPortable" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Portable-win-x64.zip" class="btn btn-secondary btn-dl">
             <span class="dl-title">📦 Portable ZIP (<code>IgnisDisc-Portable-win-x64.zip</code>)</span>
-            <span class="dl-sub">v1.08 • 70.6 MB • No Installer Needed • Includes GUI + CLI</span>
+            <span class="dl-sub">v1.08 • 70.6 MB • No installer • Includes app + CLI</span>
           </a>
         </div>
 
         <div class="winget-row">
-          <span class="winget-label">WinGet / Terminal:</span>
-          <code id="wingetCmd">winget install TetherWorks.IgnisDisc</code>
-          <button type="button" class="btn-copy" data-copy="winget install TetherWorks.IgnisDisc">Copy</button>
-          <a id="ctaGithub" href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener" class="winget-gh">View Source &amp; Release Notes on GitHub ↗</a>
+          <span class="winget-label">Note:</span>
+          <span class="download-note">Builds are not code-signed yet, so Windows SmartScreen may warn the first time you run them. Compare the checksums below with the release page.</span>
+          <a id="ctaGithub" href="https://github.com/tether-works/IgnisDisc/releases" target="_blank" rel="noopener" class="winget-gh">Source &amp; release notes on GitHub ↗</a>
         </div>
 
         <div class="checksum-bar">
@@ -91,125 +88,137 @@
           </div>
         </div>
       </div>
+    </section>
 
-      <!-- Interactive Workspace Preview -->
+    <!-- 01 // SUPPORT MATRIX -->
+    <section class="section" id="support">
+      <div class="section-bar">
+        <h2>01 // What works today</h2>
+        <span class="section-meta">✅ supported • ⚠️ needs more real-hardware testing • ❌ not available yet</span>
+      </div>
+
       <div class="studio-preview">
-        <div class="studio-bar">
-          <div class="studio-tabs" role="tablist">
-            <button class="studio-tab active" data-view="audio" type="button">🎵 Audio CD &amp; Ripper</button>
-            <button class="studio-tab" data-view="data" type="button">💿 Data / ISO / UDF</button>
-            <button class="studio-tab" data-view="archive" type="button">🗄️ Multi-Disc PAR2 Archive</button>
-            <button class="studio-tab" data-view="dvd" type="button">🎬 DVD-Video</button>
-            <button class="studio-tab" data-view="scan" type="button">🔍 Surface Scan &amp; Erase</button>
-          </div>
-          <span class="studio-badge" id="studioBadge">PCM 44.1 kHz • 16-Bit Stereo • 2352B/Sector</span>
-        </div>
-
         <div class="studio-body">
-          <div class="studio-title" id="studioTitle">Red Book Audio CD Studio (DAO / CD-Text / Secure Rip)</div>
           <div class="studio-table-wrap">
             <table class="studio-table">
-              <thead id="studioThead"></thead>
-              <tbody id="studioTbody"></tbody>
+              <thead>
+                <tr><th>Feature</th><th>Real drives</th><th>Notes</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Burn a data disc from files and folders</td><td>✅</td><td>ISO 9660 + Joliet + UDF 1.02 bridge</td></tr>
+                <tr><td>Burn an <code>.iso</code>; create <code>.iso</code> files</td><td>✅</td><td>Images are checked against an independent ISO reader in the test suite</td></tr>
+                <tr><td>Verify after burning</td><td>✅</td><td>Reads the disc back and compares SHA-256</td></tr>
+                <tr><td>Rip a data disc to <code>.iso</code> or <code>.bin</code> + <code>.cue</code></td><td>✅</td><td></td></tr>
+                <tr><td>Burn an audio CD (Disc-at-Once / Track-at-Once)</td><td>✅</td><td>From WAV, FLAC, MP3 or M4A</td></tr>
+                <tr><td>Rip an audio CD to WAV or FLAC + <code>.cue</code></td><td>✅</td><td>AccurateRip check, drive read-offset detection, secure mode with C2 error pointers, optional MusicBrainz track names</td></tr>
+                <tr><td>Span a folder across several discs</td><td>✅</td><td>SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code></td></tr>
+                <tr><td>Append a session (multi-session)</td><td>✅</td><td></td></tr>
+                <tr><td>Bootable discs (BIOS + UEFI)</td><td>✅</td><td>Whether it boots depends on the boot loaders you supply</td></tr>
+                <tr><td>Erase rewritable discs; surface scan</td><td>✅</td><td>Quick or full erase</td></tr>
+                <tr><td>DVD-Video authoring</td><td>⚠️</td><td>Needs <code>ffmpeg.exe</code>; test on a standalone player before relying on it</td></tr>
+                <tr><td>Blu-ray (BD-R / BD-RE)</td><td>⚠️</td><td>Uses the same Windows burning service, but not yet tested on real Blu-ray media</td></tr>
+                <tr><td>CD-Text on burned audio CDs</td><td>❌</td><td>Windows' burning service cannot write it; titles are kept in <code>.cue</code> and project files</td></tr>
+                <tr><td>DVD+R book type (bitsetting)</td><td>❌</td><td>Needs drive-specific commands</td></tr>
+                <tr><td>Test write (simulation)</td><td>❌</td><td>Not offered by Windows' burning service</td></tr>
+              </tbody>
             </table>
           </div>
           <div class="studio-footer">
-            <span id="studioFooterLeft"></span>
-            <span class="studio-action-pill" id="studioFooterRight"></span>
+            <span>Tested on real CD-R, CD-RW, DVD-R and DVD+RW media. Reading discs needs no administrator rights.</span>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 01 // CAPABILITIES -->
+    <!-- 02 // FEATURES -->
     <section class="section" id="features">
       <div class="section-bar">
-        <h2>01 // What's Inside the Binary</h2>
-        <span class="section-meta">No external burning SDKs or paid DLLs</span>
+        <h2>02 // Features</h2>
+        <span class="section-meta">No paid SDKs or bundled software</span>
       </div>
 
       <div class="feature-grid">
         <article class="feature-card">
-          <div class="feature-tag">COLD STORAGE / r/DataHoarder</div>
-          <h3>Multi-Disc Archive Studio + PAR2</h3>
+          <div class="feature-tag">AUDIO CD RIPPING</div>
+          <h3>Secure ripping with AccurateRip</h3>
           <p>
-            Point IgnisDisc at a folder larger than a single disc and it bin-packs files across numbered discs (<code>Disc 1..N</code>), generates <code>par2cmdline-turbo</code> parity recovery blocks, writes a self-contained <code>ARCHIVE_MANIFEST.json</code> (with per-file SHA-256 hashes) onto every disc, and verifies or repairs damaged reads straight from the drive.
+            Reads audio directly from the drive with C2 error pointers and repeated reads of suspect sectors, corrects for your drive's read offset (detected from any disc in the AccurateRip database), checks the result against AccurateRip, and saves WAV or FLAC with a <code>.cue</code> sheet. Track names can be looked up on MusicBrainz.
           </p>
         </article>
 
         <article class="feature-card">
-          <div class="feature-tag">AUDIO EXTRACTION &amp; MASTERING</div>
-          <h3>Hardware C2 Secure Rip &amp; AccurateRip</h3>
+          <div class="feature-tag">AUDIO CD BURNING</div>
+          <h3>Gapless or Track-at-Once audio CDs</h3>
           <p>
-            Extracts audio CDs via raw SCSI <code>READ CD (0xBE)</code> with hardware C2 error pointers and multi-pass MajorityVote retry, automatic drive read-offset calibration, MusicBrainz metadata lookup, AccurateRip v1/v2 checksum verification, and native Media Foundation FLAC/WAV encoding. Also burns gapless DAO/TAO Audio CDs with binary CD-Text (<code>0x80..0x8F</code> + CRC-16).
+            Burns audio CDs from WAV, FLAC, MP3 and M4A, either gapless (Disc-at-Once) or with gaps between tracks (Track-at-Once). Optional peak normalization. CD-Text is saved in projects and <code>.cue</code> files but is not yet written to discs in real drives.
           </p>
         </article>
 
         <article class="feature-card">
-          <div class="feature-tag">FILE SYSTEMS &amp; MULTI-SESSION</div>
-          <h3>ISO 9660 + Joliet + UDF 1.02 Bridge</h3>
+          <div class="feature-tag">DATA DISCS &amp; IMAGES</div>
+          <h3>ISO 9660, Joliet and UDF</h3>
           <p>
-            Pure managed filesystem compiler generating simultaneous ISO 9660 Level 2, Joliet (UCS-2 Big Endian), and OSTA UDF 1.02 Bridge structures (AVDP at LBA 256 &amp; N-1). Supports Multi-Session CD/DVD appending by reading prior session TOCs via SCSI <code>0x51</code>/<code>0x43</code> and merging previous directory trees.
+            Builds images with ISO 9660, Joliet and a UDF 1.02 bridge, so long file names work on Windows, macOS and Linux. Appends sessions to multi-session discs, makes bootable BIOS + UEFI discs, and rips discs to <code>.iso</code> or <code>.bin</code> + <code>.cue</code>.
           </p>
         </article>
 
         <article class="feature-card">
-          <div class="feature-tag">BOOTABLE MEDIA &amp; DVD-VIDEO</div>
-          <h3>Dual BIOS + UEFI El Torito &amp; VIDEO_TS</h3>
+          <div class="feature-tag">COLD STORAGE</div>
+          <h3>Multi-disc archives</h3>
           <p>
-            Authors hybrid bootable Windows PE / Linux ISOs with both x86 BIOS (<code>0x00</code>) and UEFI ESP (<code>0xEF</code>) validation/section entries, plus standalone DVD-Video discs with strict 32 KB (16-sector ECC block) padding between <code>.IFO</code> and <code>.BUP</code> headers.
+            Splits a folder that is too big for one disc across numbered discs, writes a manifest with a SHA-256 hash of every file onto each disc, and can add PAR2 recovery data (with <code>par2.exe</code>) so damaged files can be repaired later.
           </p>
         </article>
 
         <article class="feature-card">
-          <div class="feature-tag">OPTICAL DIAGNOSTICS</div>
-          <h3>Full-TOC Surface Scan &amp; Rewritable Guards</h3>
+          <div class="feature-tag">DRIVE UTILITIES</div>
+          <h3>Erase, scan and inspect</h3>
           <p>
-            Scans data and multi-track audio discs via SCSI Format <code>0x02</code> Full TOC lead-out discovery, maps good/slow/bad LBA blocks, performs quick/full CD-RW &amp; DVD-RW erases, sets DVD+R/RW book-type bitsetting, and issues explicit SCSI <code>0x1B</code> (<code>START STOP UNIT</code>) spindle spin-down.
+            Quick and full erase of CD-RW and DVD-RW, a surface scan that maps readable, slow and unreadable areas, and a media inspector that shows disc type, capacity, sessions and supported speeds.
           </p>
         </article>
 
         <article class="feature-card">
-          <div class="feature-tag">SAFETY &amp; ERGONOMICS</div>
-          <h3>Max-Speed Negotiation &amp; Coaster Prevention</h3>
+          <div class="feature-tag">SAFETY</div>
+          <h3>Checks before it writes</h3>
           <p>
-            Automatically negotiates the highest write speed supported by the inserted media, refuses to overwrite finalized CD-RWs without a clean erase first, and warns before overwriting existing data on formatted DVD+RW media.
+            Refuses to burn over a finalized CD-RW until it has been erased, asks before replacing the files on a used DVD+RW or DVD-RAM, and can verify every burn by reading it back.
           </p>
         </article>
       </div>
     </section>
 
-    <!-- 02 // CLI -->
+    <!-- 03 // CLI -->
     <section class="section" id="cli">
       <div class="section-bar">
-        <h2>02 // Headless CLI (<code>ignisdisc-cli.exe</code>)</h2>
-        <span class="section-meta">Structured JSON output &amp; deterministic exit codes</span>
+        <h2>03 // Command line (<code>ignisdisc-cli.exe</code>)</h2>
+        <span class="section-meta">Every command accepts <code>--json</code></span>
       </div>
 
       <div class="terminal-card">
         <div class="terminal-head">
-          <span>PowerShell — Automated Burning, Secure Ripping &amp; Archival</span>
-          <span class="terminal-tag">EXIT 0 = VERIFIED</span>
+          <span>PowerShell examples</span>
+          <span class="terminal-tag">EXIT CODE 0 = SUCCESS</span>
         </div>
-        <pre class="terminal-code"><code># 1. Inspect drives &amp; media status
+        <pre class="terminal-code"><code># 1. List drives and inspect the disc
 PS C:\&gt; ignisdisc-cli.exe drives
 PS C:\&gt; ignisdisc-cli.exe media-info --drive H:
 
-# 2. Multi-session data burn (Session 1 open, Session 2 appended &amp; verified)
+# 2. Multi-session data burn (first session left open, second appended)
 PS C:\&gt; ignisdisc-cli.exe burn-data --drive H: --input "C:\Batch1" --label "ARCHIVE_S1" --no-close --verify
 PS C:\&gt; ignisdisc-cli.exe burn-data --drive H: --input "C:\Batch2" --label "ARCHIVE_S2" --verify
 
-# 3. Build &amp; burn a dual BIOS + UEFI bootable ISO image
+# 3. Build and burn a BIOS + UEFI bootable ISO
 PS C:\&gt; ignisdisc-cli.exe build-iso --input "C:\WinPE" --output "C:\WinPE.iso" `
     --boot-bios "C:\WinPE\etfsboot.com" --boot-uefi "C:\WinPE\efisys.bin"
 PS C:\&gt; ignisdisc-cli.exe burn-iso --drive H: --iso "C:\WinPE.iso" --verify
 
-# 4. Burn a gapless DAO Audio CD from WAV/FLAC, then C2 secure-rip back to FLAC
+# 4. Burn a gapless audio CD, then rip it back to FLAC
 PS C:\&gt; ignisdisc-cli.exe burn-audio --drive H: --tracks "01.wav,02.wav,03.flac" --title "Mix" --dao
 PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output "C:\Rips" --format flac --secure --verify-accuraterip
 
-# 5. Stage a multi-disc archive with 10% PAR2 recovery &amp; verify the burned disc
-PS C:\&gt; ignisdisc-cli.exe archive-stage --input "C:\Photos" --staging "C:\Stage" --media cdr --redundancy 10
+# 5. Plan a multi-disc archive with 10% PAR2 recovery data, then check a burned disc
+PS C:\&gt; ignisdisc-cli.exe archive-stage --input "C:\Photos" --staging "C:\Stage" --media cd --redundancy 10
 PS C:\&gt; ignisdisc-cli.exe archive-verify --path H:\ --json</code></pre>
       </div>
     </section>
@@ -219,7 +228,7 @@ PS C:\&gt; ignisdisc-cli.exe archive-verify --path H:\ --json</code></pre>
     <div class="container footer-inner">
       <div class="footer-left">
         <img src="/assets/IgnisDisc.png" alt="" class="footer-logo" />
-        <span><strong>IgnisDisc Optical Studio v1.08</strong> • MIT License • <a href="https://tetherworks.dev">tetherworks.dev</a></span>
+        <span><strong>IgnisDisc v1.08</strong> • MIT License • <a href="https://tetherworks.dev">tetherworks.dev</a> • no cookies, no trackers, no ads</span>
       </div>
       <div class="footer-right">
         <a href="#download">Download</a>
