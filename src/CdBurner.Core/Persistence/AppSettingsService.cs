@@ -40,7 +40,7 @@ public class AppSettings
     /// <summary>
     /// Temporary directory path used for ISO staging, audio decoding, and DVD transcode scratch files.
     /// </summary>
-    public string TempStagingDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "CdBurner", "Staging");
+    public string TempStagingDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "IgnisDisc", "Staging");
 
     /// <summary>
     /// Visual theme selection (Dark, Light, or follow Windows System preference).
@@ -163,7 +163,7 @@ public class AppSettingsService
     public static string GetDefaultSettingsFilePath()
     {
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        return Path.Combine(appData, "CdBurner", "settings.json");
+        return Path.Combine(appData, "IgnisDisc", "settings.json");
     }
 
     /// <summary>

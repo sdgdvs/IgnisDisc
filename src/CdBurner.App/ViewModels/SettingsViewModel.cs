@@ -20,7 +20,7 @@ public class SettingsViewModel : ObservableObject
     private bool _ejectAfterBurnByDefault;
     private bool _enableBurnFreeByDefault;
     private string _tempStagingDirectory = string.Empty;
-    private ThemeMode _themeMode;
+    private ThemeMode _themeMode = ThemeMode.System;
     private string _ffmpegExecutablePath = string.Empty;
     private bool _enableVirtualDrive;
     private int _logRingBufferCapacity;
