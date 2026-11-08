@@ -2,8 +2,6 @@ bin/
 obj/
 .vs/
 artifacts/
-state/logs/
-state/current-turn-prompt.md
 *.user
 *.suo
 *.tmp
@@ -20,3 +18,4 @@ ffmpeg.exe
 
 # Firebase CLI local deploy cache
 .firebase/
+

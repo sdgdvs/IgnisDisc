@@ -1,0 +1,70 @@
+name: Drive compatibility report
+description: Tell us how IgnisDisc worked (or didn't) with your drive and discs.
+title: "[Drive] <vendor> <model> – <what you did>"
+labels: ["drive-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Reports that something **worked** are as useful as reports of problems.
+  - type: input
+    id: version
+    attributes:
+      label: IgnisDisc version
+      placeholder: "1.10"
+    validations:
+      required: true
+  - type: input
+    id: drive
+    attributes:
+      label: Drive (vendor, model, firmware) and connection
+      placeholder: "HL-DT-ST DVDRAM GP60NB50, firmware RF02, USB"
+    validations:
+      required: true
+  - type: input
+    id: media
+    attributes:
+      label: Disc type and brand
+      placeholder: "CD-R 700 MB Verbatim, DVD+R DL, BD-RE..."
+    validations:
+      required: true
+  - type: dropdown
+    id: operation
+    attributes:
+      label: What did you do?
+      multiple: true
+      options:
+        - Burn data disc / ISO
+        - Burn audio CD
+        - Rip audio CD
+        - Rip data disc
+        - Disc copy
+        - Burn legacy image (.nrg / .mdf / .ccd)
+        - Erase
+        - Surface scan
+        - Archive (multi-disc)
+        - DVD-Video
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Worked
+        - Worked with problems
+        - Failed
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What happened? Include any error message shown.
+  - type: textarea
+    id: cli-output
+    attributes:
+      label: Drive and media information
+      description: Paste the output of `ignisdisc-cli drives --json` and `ignisdisc-cli media-info --drive D: --json` (replace D: with your drive).
+      render: json

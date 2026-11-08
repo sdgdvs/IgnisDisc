@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/tether-works/IgnisDisc/discussions
+    about: Ask a question or suggest a feature in Discussions.
+  - name: Security problem
+    url: https://github.com/tether-works/IgnisDisc/security/advisories/new
+    about: Report security problems privately, not as a public issue.
