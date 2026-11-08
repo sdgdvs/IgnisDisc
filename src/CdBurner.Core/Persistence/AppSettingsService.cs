@@ -158,7 +158,7 @@ public class AppSettingsService
     }
 
     /// <summary>
-    /// Computes the default application settings file path under %APPDATA%\CdBurner\settings.json.
+    /// Computes the default application settings file path under %APPDATA%\IgnisDisc\settings.json.
     /// </summary>
     public static string GetDefaultSettingsFilePath()
     {
