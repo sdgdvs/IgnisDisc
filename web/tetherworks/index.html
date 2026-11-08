@@ -20,7 +20,6 @@
 
       <nav class="main-nav" aria-label="Navigation">
         <a href="#projects">/projects</a>
-        <a href="#principles">/principles</a>
         <a href="https://github.com/tether-works" target="_blank" rel="noopener">github ↗</a>
       </nav>
 
@@ -50,7 +49,7 @@
     <!-- LIVE PROJECTS -->
     <section class="section" id="projects">
       <div class="section-bar">
-        <h2>01 // Shipped Projects</h2>
+        <h2>Shipped Projects</h2>
         <span class="section-meta">2 live deployments</span>
       </div>
 
@@ -138,48 +137,6 @@
             </div>
           </div>
         </article>
-      </div>
-    </section>
-
-    <!-- DESIGN PRINCIPLES -->
-    <section class="section" id="principles">
-      <div class="section-bar">
-        <h2>02 // Design Principles</h2>
-        <span class="section-meta">How projects are built &amp; tested</span>
-      </div>
-
-      <div class="notes-grid">
-        <div class="note-box">
-          <div class="note-idx">PRINCIPLE 01</div>
-          <h3>Simulator-First Verification</h3>
-          <p>
-            Reliable software shouldn't depend on manual guesswork. Every project here is paired with a deterministic simulation harness—from an in-memory optical drive simulator (<code>VirtualDiscBackend</code>) that tests sector-level corruption in milliseconds, to automated 60fps visual and frame-budget verification suites.
-          </p>
-        </div>
-
-        <div class="note-box">
-          <div class="note-idx">PRINCIPLE 02</div>
-          <h3>1999 Efficiency, Modern Reliability</h3>
-          <p>
-            Software should open immediately, do its job cleanly, and respect the machine it runs on. Projects published under tetherWorks ship as self-contained binaries or instant-loading web environments with zero telemetry, zero ads, and no account requirements.
-          </p>
-        </div>
-      </div>
-
-      <!-- Interactive Technical Specs -->
-      <div class="console-card">
-        <div class="console-header">
-          <div class="console-tabs" role="tablist">
-            <button class="console-tab active" data-tab="ignis" type="button">ignisdisc_verification.txt</button>
-            <button class="console-tab" data-tab="kilo" type="button">kiloos_fleet_metrics.txt</button>
-            <button class="console-tab" data-tab="cli" type="button">ignisdisc_cli_sample.ps1</button>
-          </div>
-          <span class="console-badge" id="consoleBadge">VERIFICATION SUMMARY</span>
-        </div>
-        <div class="console-body">
-          <pre class="console-code" id="consoleCode"></pre>
-          <div class="console-footer" id="consoleFooter"></div>
-        </div>
       </div>
     </section>
   </main>
