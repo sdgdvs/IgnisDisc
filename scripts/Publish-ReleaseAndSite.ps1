@@ -21,7 +21,7 @@ param(
     [string]$GitHubRepo = "",
     [string]$FirebaseProjectId = "ignisdisc-studio",
     [string]$EngineerInitials = "TW",
-    [string]$EngineerName = "tetherWorks",
+    [string]$EngineerName = "tetherworks",
     [string]$EngineerRole = "Open-Source Hardware & Software Systems",
     [string]$ContactEmail = "developer@tetherworks.local",
     [switch]$RebuildBinaries,
