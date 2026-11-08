@@ -45,8 +45,52 @@ public sealed class AppSecurityAndBugRegressionTests
         using var secondDrive = new VirtualDiscRecorder("PHYS-01", @"E:\");
         fakeService.AddRecorder(secondDrive, eventUniqueId: string.Empty);
 
+        // If another test left a live WPF UI thread behind, the refresh is marshalled to it; give it a moment.
+        for (int i = 0; i < 50 && mainVm.AvailableRecorders.Count < 2; i++)
+        {
+            Thread.Sleep(20);
+        }
+
         Assert.Equal(2, mainVm.AvailableRecorders.Count);
         Assert.Contains(mainVm.AvailableRecorders, r => r.UniqueId == "PHYS-01");
+    }
+
+    [Fact]
+    public void MainViewModel_OnDeviceChanged_WithApplicationWhoseUiThreadHasExited_StillReloadsRecorders()
+    {
+        // Reproduce the state another test leaves behind: a WPF Application created on an STA thread that has exited.
+        // Its dispatcher never runs again, so marshalling the refresh there would drop it forever.
+        if (System.Windows.Application.Current == null)
+        {
+            var sta = new Thread(() =>
+            {
+                if (System.Windows.Application.Current == null)
+                {
+                    // Same setup as the WPF acceptance test (one Application per process, with the app's resources).
+                    var app = new CdBurner.App.App();
+                    app.InitializeComponent();
+                }
+            });
+            sta.SetApartmentState(ApartmentState.STA);
+            sta.Start();
+            sta.Join();
+        }
+
+        var dispatcher = System.Windows.Application.Current!.Dispatcher;
+        if (dispatcher.Thread.IsAlive)
+        {
+            return; // a live UI thread exists in this test run; the dead-thread case cannot be staged here
+        }
+
+        var fakeService = new DynamicFakeDeviceService();
+        using var virtualDrive = new VirtualDiscRecorder("VDRV-01", @"V:\");
+        fakeService.AddRecorder(virtualDrive);
+        using var mainVm = new MainViewModel(fakeService, new VirtualBurnEngine());
+
+        using var secondDrive = new VirtualDiscRecorder("PHYS-02", @"F:\");
+        fakeService.AddRecorder(secondDrive, eventUniqueId: string.Empty);
+
+        Assert.Equal(2, mainVm.AvailableRecorders.Count); // refreshed immediately, not queued to a dead thread
     }
 
     [Fact]
