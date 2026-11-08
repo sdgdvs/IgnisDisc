@@ -8,8 +8,8 @@ Capabilities  : Multi-session ISO/UDF, Dual BIOS/UEFI boot, C2/AccurateRip, PAR2
     footer: "// Verified against both in-memory simulation and physical optical media"
   },
   kilo: {
-    badge: "KILOOS v0.4.0 / FLEET SUMMARY",
-    code: `Application Fleet : 95 self-contained web apps, system tools, and games
+    badge: "KILOOS v0.4.38 / FLEET SUMMARY",
+    code: `Application Fleet : 104 self-contained web apps, system tools, and games
 Target Frame Rate : Locked 60fps across arcade, strategy, and desktop shell
 Security Pipeline : 4-layer security lint, immutability gate & provenance check
 Included Modules  : KChrono, KStarForge, KRogue, KCosmic, KTerm, KNet, KBBS`,
