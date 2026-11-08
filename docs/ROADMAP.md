@@ -18,23 +18,24 @@ Last reviewed: 2026-11-08 (v1.08 pre-release audit, `f4dff8d`).
 ## P0 — Trust, correctness and release hygiene (low risk, do first)
 
 ### Releases
-- [ ] Ship the audited features (FLAC/CUE albums, disc copy, legacy images, playlists, crossfade, cover printing) as
-      **v1.09**. Do not slipstream them into v1.08. *(low)*
-- [ ] Stop slipstreaming: make `scripts/Publish-ReleaseAndSite.ps1` and the `ignisdisc-version-bump` skill refuse to
-      replace assets on an existing release tag. Rebuilds get a new version number. *(low)*
-- [ ] Submit the WinGet manifest to `microsoft/winget-pkgs` after v1.09. Put `winget install TetherWorks.IgnisDisc`
-      back on the sites only once `winget show --id TetherWorks.IgnisDisc` works. *(low)* **[owner: approve PR]**
-- [ ] Installer/WinGet publisher is "Ignis Optical Engineering", a company that doesn't exist → use "tetherworks".
-      *(low)*
-- [ ] WinGet `FileExtensions` lists `.ignis`, but projects are saved as `.cdbproj`. Fix the manifest and check what
-      the installer actually registers. *(low)*
+- [x] Ship the audited features (FLAC/CUE albums, disc copy, legacy images, playlists, crossfade, cover printing) as
+      **v1.09**. Released 2026-11-08 (`4bd267e`, tag `v1.09`); installer smoke-tested, downloaded hashes match the site.
+- [x] Stop slipstreaming: `Update-Version.ps1` and `Publish-ReleaseAndSite.ps1` refuse already-published versions;
+      release notes come from `docs/release-notes/v<version>.md`. 2026-11-08 (`4bd267e`)
+- [ ] Submit the v1.09 WinGet manifest (`packaging/winget/.../1.09`, validated) to `microsoft/winget-pkgs`. Put
+      `winget install TetherWorks.IgnisDisc` back on the sites only once `winget show --id TetherWorks.IgnisDisc`
+      works. *(low)* **[owner: approve PR]**
+- [x] Installer/WinGet publisher "Ignis Optical Engineering" → "tetherworks". 2026-11-08 (`4bd267e`)
+- [x] WinGet `FileExtensions` removed: the installer registers no file types. 2026-11-08 (`4bd267e`)
 - [ ] Code signing, so SmartScreen stops warning: SignPath Foundation (free for OSS) or Azure Artifact Signing
       (~$10/month; check eligibility). *(low)* **[owner: account setup]**
-- [ ] Installer is 149 MB but the portable zip is 70 MB. Find out why (likely uncompressed payload) and shrink it.
-      *(low)*
+- [ ] Installer is 149 MB but the portable zip is 70 MB. Cause (found 2026-11-08): the setup program is a WPF app
+      published self-contained, so it carries its own ~80 MB .NET runtime in addition to the zip, which already
+      contains one. WPF can't be trimmed; fix by rewriting the setup UI as a small native/AOT bootstrapper (or a
+      standard installer tool) that unpacks the app zip. *(med)*
 
 ### Single source of truth for facts
-- [ ] README predates v1.08: add the new features and keep the "What works today" table current. *(low)*
+- [x] README lists the v1.09 features and the CLI accepts legacy images / `.cue` / playlists. 2026-11-08 (`4bd267e`)
 - [ ] Generate volatile facts (version, sizes, SHA-256 hashes, support table) from the release script into the README
       and both sites, instead of typing them by hand in four places. *(low)*
 - [x] Sites: aligned landing page strictly with v1.09 physical hardware test matrix, replaced static UI mockups with
@@ -146,3 +147,4 @@ so every phase is tested without hardware before it touches a real disc.
 | 2026-11-08 | Sites state only verified facts; limitations are listed openly in the support table. |
 | 2026-11-08 | No more slipstreaming: every rebuild gets a new version number. |
 | 2026-11-08 | Direct drive writing will be opt-in and default off; IMAPIv2 stays the default and the fallback. |
+| 2026-11-08 | v1.09 released as a new version rather than replacing v1.08's files. |
