@@ -68,6 +68,14 @@ if ($CurrentVersion -eq $NewVersion) {
     Write-Warning "Current version is already '$NewVersion'. Checking for missing version references or rebuilding artifacts..."
 }
 
+# No slipstreaming: never rebuild or restamp a version that has already been published.
+if (Get-Command gh -ErrorAction SilentlyContinue) {
+    & gh release view "v$NewVersion" --repo tether-works/IgnisDisc *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw "v$NewVersion is already published on GitHub. Published files are never replaced; choose the next version number instead."
+    }
+}
+
 # Auto-compute 4-part assembly version if not provided
 if ([string]::IsNullOrWhiteSpace($FourPartVersion)) {
     if ($NewVersion -match '^(\d+)\.0?(\d+)$') {
@@ -169,9 +177,10 @@ if (Test-Path $PublicHtmlPath) {
     $newHtml = [regex]::Replace($html, 'id="navVersion">v[^<]+</span>', "id=`"navVersion`">v$NewVersion</span>")
     $newHtml = [regex]::Replace($newHtml, '/download/v[^/]+/IgnisDisc-Setup\.exe', "/download/v$NewVersion/IgnisDisc-Setup.exe")
     $newHtml = [regex]::Replace($newHtml, '/download/v[^/]+/IgnisDisc-Portable-win-x64\.zip', "/download/v$NewVersion/IgnisDisc-Portable-win-x64.zip")
-    $newHtml = [regex]::Replace($newHtml, '(<span class="dl-sub">)v[^\s•]+ • ([^•]+) Self-Contained x64', "`$1v$NewVersion • `$2 Self-Contained x64")
-    $newHtml = [regex]::Replace($newHtml, '(<span class="dl-sub">)v[^\s•]+ • ([^•]+) • No Installer Needed', "`$1v$NewVersion • `$2 • No Installer Needed")
-    $newHtml = [regex]::Replace($newHtml, '<strong>IgnisDisc Optical Studio v[^<]+</strong>', "<strong>IgnisDisc Optical Studio v$NewVersion</strong>")
+    # Download sub-labels: "v1.08 • 149.2 MB • ..." under the Setup and Portable buttons (anchored on the button ids).
+    $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">)v[^\s•]+', "`${1}v$NewVersion")
+    $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">)v[^\s•]+', "`${1}v$NewVersion")
+    $newHtml = [regex]::Replace($newHtml, '<strong>IgnisDisc( Optical Studio)? v[^<]+</strong>', "<strong>IgnisDisc v$NewVersion</strong>")
     if ($newHtml -ne $html) {
         Set-FileText $PublicHtmlPath $newHtml "web/public/index.html (version badges & URLs)"
     }
@@ -287,12 +296,11 @@ if ($RebuildArtifacts -and -not $DryRun) {
 
         # Update web/public/index.html with new checksums & sizes
         $html = Get-Content $PublicHtmlPath -Raw
-        $html = [regex]::Replace($html, '(<code id="hashSetup">)[A-Fa-f0-9]{64}(</code>)', "`${1}$setupHash`${2}")
-        $html = [regex]::Replace($html, '(data-copy=")[A-Fa-f0-9]{64}(".*hashSetup)', "`${1}$setupHash`${2}")
-        $html = [regex]::Replace($html, '(<code id="hashPortable">)[A-Fa-f0-9]{64}(</code>)', "`${1}$portableHash`${2}")
-        $html = [regex]::Replace($html, '(data-copy=")[A-Fa-f0-9]{64}(".*hashPortable)', "`${1}$portableHash`${2}")
-        $html = [regex]::Replace($html, '(<span class="dl-sub">v[^\s•]+ • )\d+(\.\d+)? MB Self-Contained', "`${1}$setupMb MB Self-Contained")
-        $html = [regex]::Replace($html, '(<span class="dl-sub">v[^\s•]+ • )\d+(\.\d+)? MB • No Installer', "`${1}$portableMb MB • No Installer")
+        # Each hash appears twice: in <code id="hash..."> and in the Copy button's data-copy on the next line.
+        $html = [regex]::Replace($html, '(<code id="hashSetup">)[A-Fa-f0-9]{64}(</code>\s*<button[^>]*data-copy=")[A-Fa-f0-9]{64}', "`${1}$setupHash`${2}$setupHash")
+        $html = [regex]::Replace($html, '(<code id="hashPortable">)[A-Fa-f0-9]{64}(</code>\s*<button[^>]*data-copy=")[A-Fa-f0-9]{64}', "`${1}$portableHash`${2}$portableHash")
+        $html = [regex]::Replace($html, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">v[^\s•]+ • )\d+(\.\d+)? MB', "`${1}$setupMb MB")
+        $html = [regex]::Replace($html, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">v[^\s•]+ • )\d+(\.\d+)? MB', "`${1}$portableMb MB")
         Set-FileText $PublicHtmlPath $html "web/public/index.html (Stamped SHA-256 and MB sizes)"
 
         # Update WinGet installer manifest with hash

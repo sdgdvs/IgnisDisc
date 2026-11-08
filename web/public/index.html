@@ -14,7 +14,7 @@
       <div class="brand-group">
         <a href="#top" class="brand">
           <img src="/assets/IgnisDisc.png" alt="IgnisDisc" class="brand-logo" />
-          <span>IgnisDisc <span class="brand-ver" id="navVersion">v1.08</span></span>
+          <span>IgnisDisc <span class="brand-ver" id="navVersion">v1.09</span></span>
         </a>
         <span class="brand-sep">/</span>
         <a href="https://tetherworks.dev" class="brand-parent">tetherworks.dev</a>
@@ -53,13 +53,13 @@
       <!-- Download Box -->
       <div class="download-panel">
         <div class="download-buttons">
-          <a id="btnDownloadSetup" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Setup.exe" class="btn btn-primary btn-dl">
+          <a id="btnDownloadSetup" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.09/IgnisDisc-Setup.exe" class="btn btn-primary btn-dl">
             <span class="dl-title">⬇ Download Installer (<code>IgnisDisc-Setup.exe</code>)</span>
-            <span class="dl-sub">v1.08 • 149.2 MB • x64 • Per-user install, no admin rights</span>
+            <span class="dl-sub">v1.09 • 149.2 MB • x64 • Per-user install, no admin rights</span>
           </a>
-          <a id="btnDownloadPortable" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.08/IgnisDisc-Portable-win-x64.zip" class="btn btn-secondary btn-dl">
+          <a id="btnDownloadPortable" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.09/IgnisDisc-Portable-win-x64.zip" class="btn btn-secondary btn-dl">
             <span class="dl-title">📦 Portable ZIP (<code>IgnisDisc-Portable-win-x64.zip</code>)</span>
-            <span class="dl-sub">v1.08 • 70.6 MB • No installer • Includes app + CLI</span>
+            <span class="dl-sub">v1.09 • 70.6 MB • No installer • Includes app + CLI</span>
           </a>
         </div>
 
@@ -77,13 +77,13 @@
           <div class="checksum-drawer" id="checksumDrawer" hidden>
             <div class="hash-row">
               <span class="hash-label">IgnisDisc-Setup.exe:</span>
-              <code id="hashSetup">AD05AD78D04E5A7F141BBA38941BB79D17E8792BE3A601FC2EF2BBF7750B7637</code>
-              <button type="button" class="btn-copy" data-copy="AD05AD78D04E5A7F141BBA38941BB79D17E8792BE3A601FC2EF2BBF7750B7637">Copy</button>
+              <code id="hashSetup">1D175C5FCAE9A1D4929113B62D5B3C9F52A1705B335692ED7199BF0BCEB4A3F2</code>
+              <button type="button" class="btn-copy" data-copy="1D175C5FCAE9A1D4929113B62D5B3C9F52A1705B335692ED7199BF0BCEB4A3F2">Copy</button>
             </div>
             <div class="hash-row">
               <span class="hash-label">IgnisDisc-Portable-win-x64.zip:</span>
-              <code id="hashPortable">FBDB5FBDF50CCCFB3F0E61B460F67539E13EBE9B7C794A249E69CC111ED8931E</code>
-              <button type="button" class="btn-copy" data-copy="FBDB5FBDF50CCCFB3F0E61B460F67539E13EBE9B7C794A249E69CC111ED8931E">Copy</button>
+              <code id="hashPortable">C5F6DBC2833085B40136553053F03E934EA0AD2007FB05510ECA22B36B441482</code>
+              <button type="button" class="btn-copy" data-copy="C5F6DBC2833085B40136553053F03E934EA0AD2007FB05510ECA22B36B441482">Copy</button>
             </div>
           </div>
         </div>
@@ -109,8 +109,10 @@
                 <tr><td>Burn an <code>.iso</code>; create <code>.iso</code> files</td><td>✅</td><td>Images are checked against an independent ISO reader in the test suite</td></tr>
                 <tr><td>Verify after burning</td><td>✅</td><td>Reads the disc back and compares SHA-256</td></tr>
                 <tr><td>Rip a data disc to <code>.iso</code> or <code>.bin</code> + <code>.cue</code></td><td>✅</td><td></td></tr>
-                <tr><td>Burn an audio CD (Disc-at-Once / Track-at-Once)</td><td>✅</td><td>From WAV, FLAC, MP3 or M4A</td></tr>
+                <tr><td>Burn an audio CD (Disc-at-Once / Track-at-Once)</td><td>✅</td><td>From WAV, FLAC (including 24-bit and high sample rates), MP3 or M4A, a <code>.cue</code> sheet, or an <code>.m3u</code> / <code>.pls</code> playlist</td></tr>
                 <tr><td>Rip an audio CD to WAV or FLAC + <code>.cue</code></td><td>✅</td><td>AccurateRip check, drive read-offset detection, secure mode with C2 error pointers, optional MusicBrainz track names</td></tr>
+                <tr><td>Burn, verify or convert Nero, Alcohol 120% and CloneCD images</td><td>✅</td><td><code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; new in v1.09</td></tr>
+                <tr><td>Copy a disc (one or two drives, several copies)</td><td>⚠️</td><td>New in v1.09; tested on the virtual drive, real-drive reports welcome</td></tr>
                 <tr><td>Span a folder across several discs</td><td>✅</td><td>SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code></td></tr>
                 <tr><td>Append a session (multi-session)</td><td>✅</td><td></td></tr>
                 <tr><td>Bootable discs (BIOS + UEFI)</td><td>✅</td><td>Whether it boots depends on the boot loaders you supply</td></tr>
@@ -150,7 +152,7 @@
           <div class="feature-tag">AUDIO CD BURNING</div>
           <h3>Gapless or Track-at-Once audio CDs</h3>
           <p>
-            Burns audio CDs from WAV, FLAC, MP3 and M4A, either gapless (Disc-at-Once) or with gaps between tracks (Track-at-Once). Optional peak normalization. CD-Text is saved in projects and <code>.cue</code> files but is not yet written to discs in real drives.
+            Burns audio CDs from WAV, FLAC, MP3 and M4A files, <code>.cue</code> sheets (one file per track or one file per album) and playlists, gapless or with gaps. Optional normalization or loudness leveling, crossfades, a track preview and a printable jewel-case insert. CD-Text is saved in projects and <code>.cue</code> files but is not yet written to discs in real drives.
           </p>
         </article>
 
@@ -158,7 +160,7 @@
           <div class="feature-tag">DATA DISCS &amp; IMAGES</div>
           <h3>ISO 9660, Joliet and UDF</h3>
           <p>
-            Builds images with ISO 9660, Joliet and a UDF 1.02 bridge, so long file names work on Windows, macOS and Linux. Appends sessions to multi-session discs, makes bootable BIOS + UEFI discs, and rips discs to <code>.iso</code> or <code>.bin</code> + <code>.cue</code>.
+            Builds images with ISO 9660, Joliet and a UDF 1.02 bridge, so long file names work on Windows, macOS and Linux. Appends sessions to multi-session discs, makes bootable BIOS + UEFI discs, rips discs to <code>.iso</code> or <code>.bin</code> + <code>.cue</code>, copies discs, and burns or converts Nero, Alcohol 120% and CloneCD images.
           </p>
         </article>
 
@@ -228,7 +230,7 @@ PS C:\&gt; ignisdisc-cli.exe archive-verify --path H:\ --json</code></pre>
     <div class="container footer-inner">
       <div class="footer-left">
         <img src="/assets/IgnisDisc.png" alt="" class="footer-logo" />
-        <span><strong>IgnisDisc v1.08</strong> • MIT License • <a href="https://tetherworks.dev">tetherworks.dev</a> • no cookies, no trackers, no ads</span>
+        <span><strong>IgnisDisc v1.09</strong> • MIT License • <a href="https://tetherworks.dev">tetherworks.dev</a> • no cookies, no trackers, no ads</span>
       </div>
       <div class="footer-right">
         <a href="#download">Download</a>

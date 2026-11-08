@@ -22,7 +22,9 @@ pipeline can be tested without hardware or blank media.
 | Create `.iso` image files | ✅ | — | Validated against an independent reader (DiscUtils) in the test suite |
 | Verify after burn | ✅ | ✅ | SHA-256 readback |
 | Rip data disc to `.iso` / `.bin` + `.cue` | ✅ | ✅ | |
-| Burn audio CD (Disc-at-Once / Track-at-Once) | ✅ | ✅ | MP3/FLAC/WAV/M4A decoded via Media Foundation |
+| Burn audio CD (Disc-at-Once / Track-at-Once) | ✅ | ✅ | WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling, crossfade, preview, printable jewel-case insert |
+| Burn / verify / convert legacy images | ✅ | ✅ | Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit |
+| Disc copy (one or two drives, multi-copy) | ⚠️ | ✅ | Swap prompts between copies; audio CDs copied track by track |
 | Rip audio CD to `.wav` / `.flac` + `.cue` | ✅ | ✅ | Reads the real TOC and CD-Text; optional MusicBrainz track names |
 | AccurateRip verification + read-offset correction | ✅ | ✅ | Detects your drive's offset from a disc in the AccurateRip database |
 | Secure audio ripping (C2 error pointers + re-reads) | ✅ | ✅ | Flags suspect sectors; can be slow on badly scratched discs |
@@ -62,10 +64,10 @@ ignisdisc-cli <command> [options]
   media-info --drive <id>                      Disc status, capacity, sessions, speeds
   build-iso  --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>]
-  burn-iso   --drive <id> --iso <file.iso> [--speed <X>] [--verify] [--no-close] [--overwrite]
+  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite]
-  burn-audio --drive <id> --tracks <a.wav,b.flac,...> [--title <album>] [--artist <name>]
+  burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
              [--speed <X>] [--dao]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
@@ -75,7 +77,7 @@ ignisdisc-cli <command> [options]
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl]
              [--redundancy <0-100>]
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest
-  verify     --drive <id> --iso <file.iso>
+  verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img>
   erase      --drive <id> [--full]
   scan       --drive <id> [--block-size <sectors>]
 

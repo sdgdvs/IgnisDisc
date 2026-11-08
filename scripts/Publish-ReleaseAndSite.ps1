@@ -17,7 +17,7 @@
         -SocialUrl "https://linkedin.com/in/yourprofile"
 #>
 param(
-    [string]$Version = "1.08",
+    [string]$Version = "1.09",
     [string]$GitHubRepo = "",
     [string]$FirebaseProjectId = "ignisdisc-studio",
     [string]$EngineerInitials = "TW",
@@ -85,22 +85,22 @@ Set-Content -Path $FirebaseRcPath -Value $FirebaseRcJson -Encoding UTF8
 
 # Publish GitHub Release
 if (-not $SkipGitHubRelease -and -not [string]::IsNullOrWhiteSpace($GitHubRepo)) {
+    # No slipstreaming: a published version's files are never replaced. Rebuilds get a new version number,
+    # otherwise the checksums on the site, in the WinGet manifest and in users' hands stop matching.
+    & gh release view "v$Version" --repo $GitHubRepo *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw "Release v$Version already exists on $GitHubRepo. Do not replace published files; bump the version with scripts/Update-Version.ps1 instead."
+    }
+
+    # Release notes are written and reviewed by hand (facts only) in docs/release-notes/v<Version>.md.
+    $NotesPath = Join-Path $RepoRoot "docs\release-notes\v$Version.md"
+    if (-not (Test-Path $NotesPath)) {
+        throw "Release notes not found at $NotesPath. Write them before publishing."
+    }
+
     Write-Host "==> Publishing v$Version binaries to GitHub Releases ($GitHubRepo)..." -ForegroundColor Cyan
-    $ReleaseNotes = @"
-## IgnisDisc Optical Studio v$Version
-
-### Downloads & SHA-256 Checksums
-- **Standalone Setup Wizard (`IgnisDisc-Setup.exe`)**: `$SetupHash`
-- **Portable Archive (`IgnisDisc-Portable-win-x64.zip`)**: `$PortableHash`
-
-### Highlights
-- Native .NET 10 (`win-x64`) Windows 10/11 Fluent Desktop Studio (`IgnisDisc.exe`) + `ignisdisc-cli.exe`
-- ISO 9660 / Joliet / UDF 1.02 Bridge, Multi-Session CD/DVD, Dual BIOS + UEFI El Torito Boot, and Red Book DAO/TAO Audio
-- Secure C2 Audio Ripping + AccurateRip + Read-Offset Detection, and Multi-Disc Archive Studio (SHA-256 manifests + PAR2)
-- Max supported write-speed negotiation, finalized CD-RW erase guard, Full TOC (`0x02`) surface scanning & SCSI `0x1B` (`START_STOP_UNIT`) spin-down
-- Verified against 481 automated hardware-free tests via `VirtualDiscBackend` plus physical optical media testing
-"@
-    & gh release create "v$Version" $InstallerExe $PortableZip --repo $GitHubRepo --title "IgnisDisc Optical Studio v$Version" --notes $ReleaseNotes
+    & gh release create "v$Version" $InstallerExe $PortableZip --repo $GitHubRepo --title "IgnisDisc v$Version" --notes-file $NotesPath
+    if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
 }
 
 # Deploy to Firebase Hosting
