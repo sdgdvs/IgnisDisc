@@ -92,8 +92,10 @@ public class DriveCompatibilityMatrixTests
 
         public void EjectMedia() => Ejected = true;
         public void CloseTray() => TrayClosed = true;
-        public void AcquireExclusiveAccess(bool force, string client) => ExclusiveOwner = client;
-        public void ReleaseExclusiveAccess() => ExclusiveOwner = null;
+        public int AcquireCount { get; private set; }
+        public int ReleaseCount { get; private set; }
+        public void AcquireExclusiveAccess(bool force, string client) { ExclusiveOwner = client; AcquireCount++; }
+        public void ReleaseExclusiveAccess() { ExclusiveOwner = null; ReleaseCount++; }
         public void DisableMcn() { }
         public void EnableMcn() { }
         public void InitializeDiscRecorder(string recorderUniqueId) { }
@@ -1533,6 +1535,106 @@ public class DriveCompatibilityMatrixTests
         var resB = await engB.BurnDataStreamAsync(recB, isoB, new DataBurnOptions(), null, CancellationToken.None);
         Assert.False(resB.Success);
         Assert.Equal(DataBurnService.EraseRequiredMessage, resB.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task BurnDataStreamAsync_AcquiresAndReleasesExclusiveAccess_ToPreventAutoPlayInterference()
+    {
+        var persona = new SimulatedDrivePersona
+        {
+            Name = "ExclusiveAccessDataBurnTest",
+            PhysicalMediaType = ImapiMediaPhysicalType.DvdDashR,
+            MediaState = ImapiFormat2DataMediaState.Blank,
+            PhysicallyBlank = true,
+            TotalSectorsOnMedia = 2_298_496,
+            FreeSectorsOnMedia = 2_298_496,
+            ExpectedMediaType = DiscMediaType.DvdMinusR,
+            ExpectedIsBlank = true,
+            ExpectedIsRewritable = false,
+            ExpectedIsAppendable = true,
+            ExpectedIsOverwriteOnly = false,
+            ExpectedRequiresEraseToWrite = false,
+            ExpectedHasDataThatBurningReplaces = false,
+            ExpectedTotalSectors = 2_298_496,
+            ExpectedFreeSectors = 2_298_496,
+            ExpectedUsedSectors = 0,
+            ExpectedNextWritableLba = 0,
+            CanBurnDataWithoutFlags = true,
+            CanBurnDataWithOverwriteFlag = true,
+            CanBurnAudioCd = false,
+            CanErase = false
+        };
+
+        var provider = new SimulatedImapiComProvider(persona);
+        bool wasLockedDuringWrite = false;
+        provider.FormatData.OnWrite = _ =>
+        {
+            wasLockedDuringWrite = !string.IsNullOrEmpty(provider.ComRecorder.ExclusiveAccessOwner);
+        };
+
+        using var recorder = new ImapiDiscRecorder(provider.ComRecorder, "EXCL-DATA", provider);
+        var engine = new Imapi2BurnEngine(provider);
+        using var stream = new MemoryStream(new byte[16 * OpticalConstants.DataSectorSize]);
+
+        var result = await engine.BurnDataStreamAsync(recorder, stream, new DataBurnOptions(), null, CancellationToken.None);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(wasLockedDuringWrite);
+        Assert.Equal(1, provider.ComRecorder.AcquireCount);
+        Assert.Equal(1, provider.ComRecorder.ReleaseCount);
+        Assert.Equal(string.Empty, provider.ComRecorder.ExclusiveAccessOwner);
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0xC0AA0300), "Buffer underrun")]
+    [InlineData(unchecked((int)0xC0AA0301), "Unexpected response from optical drive")]
+    [InlineData(unchecked((int)0xC0AA020D), "Optical drive command timed out")]
+    [InlineData(unchecked((int)0xC0AA0207), "busy or locked by another application")]
+    [InlineData(unchecked((int)0xC0AA0210), "busy or locked by another application")]
+    [InlineData(unchecked((int)0xC0AA0203), "incompatible with the requested recording mode")]
+    [InlineData(unchecked((int)0xC0AA020F), "does not support writing to this media type")]
+    public async Task BurnDataStreamAsync_TranslatesCommonImapiErrorCodesIntoActionableDiagnostics(int hresult, string expectedDiagnosticFragment)
+    {
+        var persona = new SimulatedDrivePersona
+        {
+            Name = $"ComDiagnostic_{hresult:X8}",
+            PhysicalMediaType = ImapiMediaPhysicalType.CdR,
+            MediaState = ImapiFormat2DataMediaState.Blank,
+            PhysicallyBlank = true,
+            TotalSectorsOnMedia = 359_847,
+            FreeSectorsOnMedia = 359_847,
+            ExpectedMediaType = DiscMediaType.CdR,
+            ExpectedIsBlank = true,
+            ExpectedIsRewritable = false,
+            ExpectedIsAppendable = true,
+            ExpectedIsOverwriteOnly = false,
+            ExpectedRequiresEraseToWrite = false,
+            ExpectedHasDataThatBurningReplaces = false,
+            ExpectedTotalSectors = 359_847,
+            ExpectedFreeSectors = 359_847,
+            ExpectedUsedSectors = 0,
+            ExpectedNextWritableLba = 0,
+            CanBurnDataWithoutFlags = true,
+            CanBurnDataWithOverwriteFlag = true,
+            CanBurnAudioCd = true,
+            CanErase = false
+        };
+
+        var provider = new SimulatedImapiComProvider(persona);
+        provider.FormatData.OnWrite = _ => throw new COMException("Device error", hresult);
+
+        using var recorder = new ImapiDiscRecorder(provider.ComRecorder, "DIAG-01", provider);
+        var engine = new Imapi2BurnEngine(provider);
+        using var stream = new MemoryStream(new byte[16 * OpticalConstants.DataSectorSize]);
+
+        var result = await engine.BurnDataStreamAsync(recorder, stream, new DataBurnOptions(), null, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains($"0x{(uint)hresult:X8}", result.ErrorMessage);
+        Assert.Contains(expectedDiagnosticFragment, result.ErrorMessage);
+        // Exclusive lock must still be released in finally block after COM error
+        Assert.Equal(string.Empty, provider.ComRecorder.ExclusiveAccessOwner);
     }
 
     #endregion

@@ -495,7 +495,7 @@ public static class IsoUdfImageBuilder
             {
                 ext = string.Empty;
             }
-            return name[..(max - ext.Length)] + ext;
+            return TruncateUtf16Safe(name, max - ext.Length) + ext;
         }
 
         /// <summary>
@@ -525,7 +525,7 @@ public static class IsoUdfImageBuilder
             {
                 string suffix = "~" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 int room = Math.Max(1, maxLength - version.Length - ext.Length - suffix.Length);
-                string attempt = (stem.Length > room ? stem[..room] : stem) + suffix + ext + version;
+                string attempt = (stem.Length > room ? TruncateUtf16Safe(stem, room) : stem) + suffix + ext + version;
                 if (used.Add(attempt))
                 {
                     return attempt;
@@ -533,6 +533,19 @@ public static class IsoUdfImageBuilder
             }
 
             throw new InvalidOperationException($"Unable to generate a unique name for '{candidate}'.");
+        }
+
+        private static string TruncateUtf16Safe(string value, int maxLength)
+        {
+            if (value.Length <= maxLength)
+            {
+                return value;
+            }
+            if (maxLength > 0 && char.IsHighSurrogate(value[maxLength - 1]))
+            {
+                maxLength--;
+            }
+            return value[..maxLength];
         }
 
         private static int CalculateUdfFidStreamLength(DirectoryLayoutNode dir)

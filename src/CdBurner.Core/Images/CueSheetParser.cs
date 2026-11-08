@@ -105,7 +105,7 @@ public static class CueSheetParser
         string? line;
         while ((line = reader.ReadLine()) != null)
         {
-            string trimmed = line.Trim();
+            string trimmed = line.Trim().TrimStart('\uFEFF');
             if (trimmed.Length == 0)
             {
                 continue;
@@ -117,7 +117,7 @@ public static class CueSheetParser
                 continue;
             }
 
-            string cmd = tokens[0].ToUpperInvariant();
+            string cmd = tokens[0].TrimStart('\uFEFF').ToUpperInvariant();
             switch (cmd)
             {
                 case "REM":
@@ -183,8 +183,7 @@ public static class CueSheetParser
 
                 case "FILE":
                     FinishCurrentFile();
-                    string fileName = tokens.Count >= 2 ? tokens[1] : string.Empty;
-                    string fileType = tokens.Count >= 3 ? tokens[2] : "BINARY";
+                    var (fileName, fileType) = ParseFileTokens(tokens);
                     currentFile = new CueFileEntryBuilder(fileName, fileType);
                     break;
 
@@ -281,7 +280,7 @@ public static class CueSheetParser
         string? line;
         while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
         {
-            string trimmed = line.Trim();
+            string trimmed = line.Trim().TrimStart('\uFEFF');
             if (trimmed.Length == 0)
             {
                 continue;
@@ -293,7 +292,7 @@ public static class CueSheetParser
                 continue;
             }
 
-            string cmd = tokens[0].ToUpperInvariant();
+            string cmd = tokens[0].TrimStart('\uFEFF').ToUpperInvariant();
             switch (cmd)
             {
                 case "REM":
@@ -359,8 +358,7 @@ public static class CueSheetParser
 
                 case "FILE":
                     FinishCurrentFile();
-                    string fileName = tokens.Count >= 2 ? tokens[1] : string.Empty;
-                    string fileType = tokens.Count >= 3 ? tokens[2] : "BINARY";
+                    var (fileName, fileType) = ParseFileTokens(tokens);
                     currentFile = new CueFileEntryBuilder(fileName, fileType);
                     break;
 
@@ -433,6 +431,39 @@ public static class CueSheetParser
             "MODE2/2352" => CueTrackDataType.Mode2_2352,
             _ => throw new FormatException($"Unsupported or unrecognized CUE track data type: '{s}'.")
         };
+    }
+
+    private static readonly HashSet<string> KnownFileTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BINARY", "MOTOROLA", "AIFF", "WAVE", "MP3", "FLAC", "OGG", "AAC", "WAV"
+    };
+
+    private static (string FileName, string FileType) ParseFileTokens(List<string> tokens)
+    {
+        if (tokens.Count < 2)
+        {
+            return (string.Empty, "BINARY");
+        }
+
+        if (tokens.Count == 2)
+        {
+            return (tokens[1], "BINARY");
+        }
+
+        if (tokens.Count == 3)
+        {
+            return (tokens[1], tokens[2]);
+        }
+
+        // Unquoted filename with spaces: if the last token is a known CUE file type, join middle tokens
+        string lastToken = tokens[^1];
+        if (KnownFileTypes.Contains(lastToken))
+        {
+            string joinedFileName = string.Join(" ", tokens.Skip(1).Take(tokens.Count - 2));
+            return (joinedFileName, lastToken);
+        }
+
+        return (tokens[1], tokens[2]);
     }
 
     internal static List<string> TokenizeLine(string line)

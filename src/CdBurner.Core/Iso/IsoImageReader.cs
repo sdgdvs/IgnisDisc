@@ -524,7 +524,7 @@ public sealed class IsoImageReader : IDisposable
                     int semi = entryName.LastIndexOf(';');
                     if (semi >= 0)
                     {
-                        entryName = entryName[..semi];
+                        entryName = entryName[..semi].TrimEnd('.');
                     }
 
                     entryName = entryName.Replace("/", string.Empty).Replace("\\", string.Empty).Replace("\0", string.Empty);

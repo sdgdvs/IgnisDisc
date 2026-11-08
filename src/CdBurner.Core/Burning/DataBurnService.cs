@@ -343,7 +343,7 @@ public class DataBurnService
         while (sectorsToHash > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int read = await sourceStream.ReadAsync(sourceBuf.AsMemory(0, OpticalConstants.DataSectorSize), cancellationToken);
+            int read = await ReadSectorFullyAsync(sourceStream, sourceBuf, cancellationToken);
             if (read == 0) break;
             if (read < OpticalConstants.DataSectorSize)
             {
@@ -381,6 +381,21 @@ public class DataBurnService
         }
 
         return (true, null);
+    }
+
+    private static async ValueTask<int> ReadSectorFullyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
+    {
+        int totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            int read = await stream.ReadAsync(buffer.AsMemory(totalRead, buffer.Length - totalRead), cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+            totalRead += read;
+        }
+        return totalRead;
     }
 }
 

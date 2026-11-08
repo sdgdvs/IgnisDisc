@@ -5,6 +5,8 @@ namespace CdBurner.Core.Compilation;
 /// </summary>
 public static class CompilationFolderImporter
 {
+    public const int MaxDirectoryDepth = 64;
+
     /// <summary>
     /// Adds every file and subfolder of <paramref name="sourceFolder"/> to <paramref name="target"/>.
     /// </summary>
@@ -16,40 +18,94 @@ public static class CompilationFolderImporter
     public static void Import(CompilationDirectory target, string sourceFolder, bool strict, Func<string, bool>? skipFile = null)
     {
         ArgumentNullException.ThrowIfNull(target);
+        var activeAncestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ImportCore(target, sourceFolder, strict, skipFile, activeAncestors, depth: 0);
+    }
+
+    private static void ImportCore(
+        CompilationDirectory target,
+        string sourceFolder,
+        bool strict,
+        Func<string, bool>? skipFile,
+        HashSet<string> activeAncestors,
+        int depth)
+    {
         var dirInfo = new DirectoryInfo(sourceFolder);
         if (!dirInfo.Exists)
         {
             throw new DirectoryNotFoundException($"Folder not found: {sourceFolder}");
         }
 
-        foreach (var file in dirInfo.GetFiles())
+        if (depth > MaxDirectoryDepth)
         {
-            try
-            {
-                if (skipFile?.Invoke(file.FullName) == true)
-                {
-                    continue;
-                }
-                target.AddFile(new CompilationFile(file.FullName, file.Length));
-            }
-            catch (Exception ex) when (!strict && ex is not OperationCanceledException)
-            {
-                // Non-strict: skip unreadable or rejected files.
-            }
+            return;
         }
 
-        foreach (var subDir in dirInfo.GetDirectories())
+        string canonicalPath = ResolveCanonicalDirectoryPath(dirInfo);
+        if (!activeAncestors.Add(canonicalPath))
         {
-            try
+            return;
+        }
+
+        try
+        {
+            foreach (var file in dirInfo.GetFiles())
             {
-                var child = target.AddDirectory(subDir.Name);
-                Import(child, subDir.FullName, strict, skipFile);
+                try
+                {
+                    if (skipFile?.Invoke(file.FullName) == true)
+                    {
+                        continue;
+                    }
+                    target.AddFile(new CompilationFile(file.FullName, file.Length));
+                }
+                catch (Exception ex) when (!strict && ex is not OperationCanceledException)
+                {
+                    // Non-strict: skip unreadable or rejected files.
+                }
             }
-            catch (Exception ex) when (!strict && ex is not OperationCanceledException)
+
+            foreach (var subDir in dirInfo.GetDirectories())
             {
-                // Non-strict: skip unreadable folders.
+                try
+                {
+                    string subCanonical = ResolveCanonicalDirectoryPath(subDir);
+                    if (activeAncestors.Contains(subCanonical))
+                    {
+                        // Circular NTFS junction or directory symlink pointing to an ancestor: skip
+                        continue;
+                    }
+
+                    var child = target.AddDirectory(subDir.Name);
+                    ImportCore(child, subDir.FullName, strict, skipFile, activeAncestors, depth + 1);
+                }
+                catch (Exception ex) when (!strict && ex is not OperationCanceledException)
+                {
+                    // Non-strict: skip unreadable folders.
+                }
             }
         }
+        finally
+        {
+            activeAncestors.Remove(canonicalPath);
+        }
+    }
+
+    private static string ResolveCanonicalDirectoryPath(DirectoryInfo dirInfo)
+    {
+        string path = dirInfo.FullName;
+        try
+        {
+            if (dirInfo.LinkTarget != null && dirInfo.ResolveLinkTarget(returnFinalTarget: true) is FileSystemInfo resolved)
+            {
+                path = resolved.FullName;
+            }
+        }
+        catch
+        {
+        }
+
+        return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     /// <summary>Creates a root directory populated from <paramref name="sourceFolder"/>.</summary>

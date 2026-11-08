@@ -152,7 +152,7 @@ public static class CdTextPackBuilder
         var trackByteArrays = new byte[strings.Length][];
         for (int i = 0; i < strings.Length; i++)
         {
-            string sanitized = (strings[i] ?? string.Empty).Replace("\0", string.Empty);
+            string sanitized = SanitizeToIso8859_1(strings[i]);
             byte[] strBytes = Encoding.Latin1.GetBytes(sanitized);
             byte[] withNull = new byte[strBytes.Length + 1];
             strBytes.CopyTo(withNull, 0);
@@ -293,5 +293,88 @@ public static class CdTextPackBuilder
         payload2.CopyTo(pack16_2.Slice(4, 12));
         ushort crc2 = CdTextCrc16.ComputeInvertedCrc16(pack16_2);
         packs.Add(new CdTextPack(CdTextPackType.SizeInfo, 0x02, seq2, 0x00, payload2, crc2));
+    }
+
+    internal static string SanitizeToIso8859_1(string? input)
+    {
+        if (string.IsNullOrEmpty(input))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(input.Length);
+        foreach (char c in input)
+        {
+            if (c == '\0')
+            {
+                continue;
+            }
+
+            if (c <= 0xFF)
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            switch (c)
+            {
+                case '\u2018':
+                case '\u2019':
+                case '\u201A':
+                case '\u201B':
+                case '\u2032':
+                    sb.Append('\'');
+                    break;
+                case '\u201C':
+                case '\u201D':
+                case '\u201E':
+                case '\u201F':
+                case '\u2033':
+                    sb.Append('"');
+                    break;
+                case '\u2010':
+                case '\u2011':
+                case '\u2012':
+                case '\u2013':
+                case '\u2014':
+                case '\u2015':
+                case '\u2212':
+                    sb.Append('-');
+                    break;
+                case '\u2026':
+                    sb.Append("...");
+                    break;
+                case 'ł':
+                    sb.Append('l');
+                    break;
+                case 'Ł':
+                    sb.Append('L');
+                    break;
+                case 'đ':
+                    sb.Append('d');
+                    break;
+                case 'Đ':
+                    sb.Append('D');
+                    break;
+                default:
+                    string decomposed = c.ToString().Normalize(NormalizationForm.FormD);
+                    bool appendedBase = false;
+                    foreach (char dc in decomposed)
+                    {
+                        if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(dc) != System.Globalization.UnicodeCategory.NonSpacingMark && dc <= 0xFF)
+                        {
+                            sb.Append(dc);
+                            appendedBase = true;
+                        }
+                    }
+                    if (!appendedBase)
+                    {
+                        sb.Append('?');
+                    }
+                    break;
+            }
+        }
+
+        return sb.ToString();
     }
 }

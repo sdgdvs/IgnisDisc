@@ -109,15 +109,31 @@ public static class RedBookPcmDspProcessor
         int maxAbs = 0;
         byte[] buffer = new byte[8192];
         int bytesRead;
+        int carryOver = 0;
 
         try
         {
-            while ((bytesRead = pcmStream.Read(buffer, 0, buffer.Length)) > 0)
+            while ((bytesRead = pcmStream.Read(buffer, carryOver, buffer.Length - carryOver)) > 0)
             {
-                int sampleCount = bytesRead / 2;
+                int totalAvailable = carryOver + bytesRead;
+                int sampleCount = totalAvailable / 2;
                 ReadOnlySpan<byte> span = buffer.AsSpan(0, sampleCount * 2);
 
                 for (int i = 0; i < sampleCount; i++)
+                {
+                    short sample = BinaryPrimitives.ReadInt16LittleEndian(span.Slice(i * 2, 2));
+                    int abs = Math.Abs((int)sample);
+                    if (abs > maxAbs)
+                    {
+                        maxAbs = abs;
+                    }
+                }
+                carryOver = totalAvailable % 2;
+                if (carryOver == 1)
+                {
+                    buffer[0] = buffer[totalAvailable - 1];
+                }
+                for (int i = 0; i < 0; i++)
                 {
                     short sample = BinaryPrimitives.ReadInt16LittleEndian(span.Slice(i * 2, 2));
                     int abs = Math.Abs((int)sample);

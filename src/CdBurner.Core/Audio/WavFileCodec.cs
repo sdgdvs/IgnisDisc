@@ -485,13 +485,14 @@ public static class WavFileCodec
         bool fmtFound = false;
         bool dataFound = false;
 
-        while (stream.Position < stream.Length)
+        while (!stream.CanSeek || stream.Position < stream.Length)
         {
             byte[] chunkIdBytes = reader.ReadBytes(4);
             if (chunkIdBytes.Length < 4) break;
 
             uint chunkSize = reader.ReadUInt32();
-            long chunkStart = stream.Position;
+            long chunkStart = stream.CanSeek ? stream.Position : 0;
+            int bytesConsumedInChunk = 0;
 
             if (chunkIdBytes.AsSpan().SequenceEqual(FmtHeader))
             {
@@ -507,6 +508,7 @@ public static class WavFileCodec
                 uint byteRate = reader.ReadUInt32();
                 ushort blockAlign = reader.ReadUInt16();
                 info.BitsPerSample = reader.ReadUInt16();
+                bytesConsumedInChunk = 16;
 
                 if (info.AudioFormat != WaveFormatPcm &&
                     info.AudioFormat != WaveFormatIeeeFloat &&
@@ -535,6 +537,7 @@ public static class WavFileCodec
                     ushort validBits = reader.ReadUInt16();
                     uint channelMask = reader.ReadUInt32();
                     byte[] guidBytes = reader.ReadBytes(16);
+                    bytesConsumedInChunk += 8 + guidBytes.Length;
                     if (guidBytes.Length == 16)
                     {
                         var subFormat = new Guid(guidBytes);
@@ -576,6 +579,9 @@ public static class WavFileCodec
             else if (chunkIdBytes.AsSpan().SequenceEqual("LIST"u8) && chunkSize > 4)
             {
                 byte[] listType = reader.ReadBytes(4);
+                bytesConsumedInChunk += listType.Length;
+                long infoRead = 0;
+                long maxInfoBytes = (long)chunkSize - 4;
                 if (listType.AsSpan().SequenceEqual("INFO"u8))
                 {
                     long listEnd = chunkStart + chunkSize;
@@ -583,14 +589,18 @@ public static class WavFileCodec
                     {
                         listEnd = Math.Min(listEnd, stream.Length);
                     }
-                    while (stream.Position + 8 <= listEnd)
+                    while (infoRead + 8 <= maxInfoBytes)
                     {
                         byte[] tagBytes = reader.ReadBytes(4);
                         if (tagBytes.Length < 4) break;
                         uint tagSize = reader.ReadUInt32();
-                        if (tagSize > 0 && tagSize <= 65536 && stream.Position + tagSize <= listEnd)
+                        bytesConsumedInChunk += 4 + tagBytes.Length;
+                        infoRead += 8;
+                        if (tagSize > 0 && tagSize <= 65536 && infoRead + tagSize <= maxInfoBytes)
                         {
                             byte[] valBytes = reader.ReadBytes((int)tagSize);
+                            bytesConsumedInChunk += valBytes.Length;
+                            infoRead += valBytes.Length;
                             string text = Encoding.ASCII.GetString(valBytes).TrimEnd('\0', ' ');
                             if (tagBytes.AsSpan().SequenceEqual("INAM"u8))
                             {
@@ -600,9 +610,11 @@ public static class WavFileCodec
                             {
                                 info.Artist = text;
                             }
-                            if ((tagSize % 2) != 0 && stream.Position < listEnd)
+                            if ((tagSize % 2) != 0 && infoRead < maxInfoBytes)
                             {
-                                stream.Position++;
+                                _ = reader.ReadBytes(1);
+                                bytesConsumedInChunk++;
+                                infoRead++;
                             }
                         }
                         else
@@ -624,7 +636,7 @@ public static class WavFileCodec
             }
             else
             {
-                long toSkip = (long)chunkSize + ((chunkSize % 2) != 0 ? 1L : 0L);
+                long toSkip = Math.Max(0L, (long)chunkSize - bytesConsumedInChunk) + ((chunkSize % 2) != 0 ? 1L : 0L);
                 if (toSkip > 64 * 1024 * 1024)
                 {
                     throw new InvalidDataException($"WAVE chunk size ({chunkSize}) is too large to skip on a non-seekable stream.");

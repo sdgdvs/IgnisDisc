@@ -100,6 +100,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                 return BurnOperationResult.Failed("Failed to instantiate MsftDiscFormat2Data COM object.");
             }
 
+            acquiredLock = recorder.AcquireExclusiveAccess(ClientName);
             formatData.put_Recorder(comRecorder);
             formatData.put_ClientName(ClientName);
 
@@ -274,7 +275,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                     return BurnOperationResult.Failed(friendly, cex);
                 }
             }
-            return BurnOperationResult.Failed($"IMAPIv2 COM error (0x{cex.ErrorCode:X8}): {cex.Message}", cex);
+            return BurnOperationResult.Failed(FormatComExceptionMessage(cex), cex);
         }
         catch (Exception ex)
         {
@@ -690,7 +691,7 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                     return BurnOperationResult.Failed(friendly, cex);
                 }
             }
-            return BurnOperationResult.Failed($"IMAPIv2 COM error (0x{cex.ErrorCode:X8}): {cex.Message}", cex);
+            return BurnOperationResult.Failed(FormatComExceptionMessage(cex), cex);
         }
         catch (Exception ex)
         {
@@ -732,6 +733,25 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         }
 
         return maxSectorsPerSec;
+    }
+
+    private static string FormatComExceptionMessage(COMException cex)
+    {
+        uint code = (uint)cex.ErrorCode;
+        string? hint = code switch
+        {
+            0xC0AA0300u => "Buffer underrun / loss of streaming (source disk or USB bus could not feed data fast enough; try a lower write speed).",
+            0xC0AA0301u => "Unexpected response from optical drive (laser power calibration / OPC failed on this disc, or USB power dropped; try a lower write speed or different media brand).",
+            0xC0AA020Du => "Optical drive command timed out (drive stopped responding on the SATA/USB bus).",
+            0xC0AA0207u or 0xC0AA0210u => "Optical drive is busy or locked by another application (close Windows Explorer burn sessions, iTunes, or other disc tools).",
+            0xC0AA0203u => "Inserted disc is incompatible with the requested recording mode.",
+            0xC0AA020Fu => "Optical drive does not support writing to this media type.",
+            _ => null
+        };
+
+        return hint != null
+            ? $"IMAPIv2 COM error (0x{code:X8}): {hint} ({cex.Message})"
+            : $"IMAPIv2 COM error (0x{code:X8}): {cex.Message}";
     }
 
     private static string? ResolveNonBlankMediaErrorMessage(IDiscRecorderBackend recorder, bool isForceOverwriteError)
