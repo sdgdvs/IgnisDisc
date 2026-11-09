@@ -399,6 +399,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
             SupportsBufferUnderrunFree = mmcProbe.SupportsBufferUnderrunFree,
             SupportsNativeTao = mmcProbe.HasTaoFeature,
             SupportsNativeSao = mmcProbe.SupportsSao,
+            SupportsNativeCdText = mmcProbe.SupportsCdTextLeadIn,
             SupportsNativeRawDao = mmcProbe.SupportsRawDao,
             SupportsLayerJump = mmcProbe.HasLayerJumpFeature,
             MmcFeatureSummary = mmcProbe.ToFeatureSummary(),

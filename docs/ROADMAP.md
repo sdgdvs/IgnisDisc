@@ -73,9 +73,11 @@ passed. Offer a test write first. Verify after burn is mandatory in native mode.
 unexpected sense code. Full SCSI log for every native burn. The virtual drive implements the same MMC write commands,
 so every phase is tested without hardware before it touches a real disc.
 
-- [ ] **Phase 0 — Design gate.** Draft design in `docs/NATIVE-WRITER-DESIGN.md` (command sequence per write type,
-      error handling and stop-before-the-laser fallback, buffer polling, exclusive access). Remaining: pick the first
-      feature and list the drives and media available for testing. *(low)* **[owner: decision + drive list]**
+- [x] **Phase 0 — Design gate.** Design in `docs/NATIVE-WRITER-DESIGN.md` (command sequence per write type,
+      error handling and stop-before-the-laser fallback, buffer polling, exclusive access). First feature: audio CD
+      Session-at-Once with CD-Text. Test drive (HL-DT-ST GP60NB50) and media (CD-RW, CD-R, DVD±R/RW, DVD±R DL) listed
+      there. Fixed on the way: the probe reported CD-Text support for every SAO drive instead of reading the CD
+      Mastering R-W bit; `drives --json` and the drive report now show `supportsNativeCdText`. 2026-11-08
 - [x] **Phase 1 — Capability probe & Media ID / ATIP / ADIP inspection (read-only).** `GET CONFIGURATION` feature
       descriptors (TAO 0x002D, CD Mastering 0x002E, DVD-R/-RW Write 0x002F, Layer Jump 0x0033, BD Write 0x0041), Write
       Parameters mode page (0x05), and physical media Manufacturer ID / dye inspection (`READ TOC/PMA/ATIP` 0x43 format
@@ -193,3 +195,4 @@ so every phase is tested without hardware before it touches a real disc.
 | 2026-11-08 | Installer shrink keeps the existing wizard (launcher + shared runtime) rather than switching to Inno Setup. |
 | 2026-11-08 | Agent prompts, skills and loop scripts live in a private repository; the public repo holds only the product. |
 | 2026-11-08 | Blu-ray is listed as not supported until the app recognises BD media and it has been tested on real discs. |
+| 2026-11-08 | The native writer's first feature is audio CD Session-at-Once with CD-Text; its test write comes first. |

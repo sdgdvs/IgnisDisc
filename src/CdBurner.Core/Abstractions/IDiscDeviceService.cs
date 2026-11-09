@@ -124,6 +124,8 @@ public class DriveCapabilitiesDto
     public bool SupportsBufferUnderrunFree { get; init; }
     public bool SupportsNativeTao { get; init; }
     public bool SupportsNativeSao { get; init; }
+    /// <summary>The drive records user-supplied R-W subcode in Session-at-Once (CD Mastering R-W bit), which CD-Text needs.</summary>
+    public bool SupportsNativeCdText { get; init; }
     public bool SupportsNativeRawDao { get; init; }
     public bool SupportsLayerJump { get; init; }
     public IReadOnlyList<string> MmcFeatureSummary { get; init; } = Array.Empty<string>();

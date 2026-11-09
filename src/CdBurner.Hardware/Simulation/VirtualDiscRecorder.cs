@@ -161,6 +161,7 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
             SupportsBufferUnderrunFree = true,
             SupportsNativeTao = true,
             SupportsNativeSao = true,
+            SupportsNativeCdText = true,
             SupportsNativeRawDao = true,
             SupportsLayerJump = true,
             MmcFeatureSummary = new[]

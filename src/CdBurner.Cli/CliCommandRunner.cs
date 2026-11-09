@@ -204,6 +204,7 @@ public static class CliCommandRunner
                         mmcFeatures = caps.MmcFeatureSummary,
                         supportsNativeTao = caps.SupportsNativeTao,
                         supportsNativeSao = caps.SupportsNativeSao,
+                        supportsNativeCdText = caps.SupportsNativeCdText,
                         supportsNativeRawDao = caps.SupportsNativeRawDao,
                         supportsTestWrite = caps.SupportsTestWrite,
                         supportsBufferUnderrunFree = caps.SupportsBufferUnderrunFree,

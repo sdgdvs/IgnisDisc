@@ -160,4 +160,35 @@ public class DriveCompatibilityReportTests
         Assert.Contains("- **Media Present:** No", markdown);
         Assert.Contains("No media inserted", markdown);
     }
+
+    [Fact]
+    public void BuildMarkdownReport_DrivesJson_IncludesNativeWriteCapabilities()
+    {
+        var recorder = new MockRecorder();
+        recorder.Caps = new DriveCapabilitiesDto
+        {
+            CanWriteCdR = true,
+            SupportsNativeTao = true,
+            SupportsNativeSao = true,
+            SupportsNativeCdText = false,
+            SupportsTestWrite = true,
+            SupportsBufferUnderrunFree = true,
+            MmcFeatureSummary = new[] { "0x002D TAO", "0x002E SAO/Raw" }
+        };
+
+        string markdown = DriveCompatibilityReportBuilder.BuildMarkdownReport(recorder, appVersion: "1.11");
+
+        int start = markdown.IndexOf("```json");
+        int end = markdown.IndexOf("```", start + 7);
+        using var doc = JsonDocument.Parse(markdown.Substring(start + 7, end - (start + 7)).Trim());
+        var caps = doc.RootElement.GetProperty("drives")[0].GetProperty("capabilities");
+
+        Assert.True(caps.GetProperty("supportsNativeTao").GetBoolean());
+        Assert.True(caps.GetProperty("supportsNativeSao").GetBoolean());
+        Assert.False(caps.GetProperty("supportsNativeCdText").GetBoolean());
+        Assert.False(caps.GetProperty("supportsNativeRawDao").GetBoolean());
+        Assert.True(caps.GetProperty("supportsTestWrite").GetBoolean());
+        Assert.True(caps.GetProperty("supportsBufferUnderrunFree").GetBoolean());
+        Assert.Equal(2, caps.GetProperty("mmcFeatures").GetArrayLength());
+    }
 }

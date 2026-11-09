@@ -162,7 +162,8 @@ public static class MmcCommandBuilder
                     sao = (payload[0] & 0x20) != 0;
                     rawDao = (payload[0] & 0x08) != 0;
                     cdMasteringTestWrite = (payload[0] & 0x04) != 0;
-                    cdTextLeadIn = sao;
+                    // R-W bit: the drive records user-supplied R-W subcode, which carries CD-Text in the lead-in.
+                    cdTextLeadIn = (payload[0] & 0x01) != 0;
                 }
             }
             else if (featureCode == FeatureDvdRecordableWrite)

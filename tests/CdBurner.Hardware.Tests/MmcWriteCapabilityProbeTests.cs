@@ -144,7 +144,7 @@ public class MmcWriteCapabilityProbeTests
         Assert.True(probe.HasCdMasteringFeature);
         Assert.True(probe.SupportsSao);
         Assert.True(probe.SupportsRawDao);
-        Assert.True(probe.SupportsCdTextLeadIn);
+        Assert.False(probe.SupportsCdTextLeadIn); // 0x6C has no R-W bit (0x01)
         Assert.True(probe.CdMasteringSupportsTestWrite);
         Assert.True(probe.CdMasteringSupportsBufferUnderrunFree);
 
@@ -210,6 +210,27 @@ public class MmcWriteCapabilityProbeTests
 
         Assert.False(probe.SupportsTestWrite);
         Assert.False(probe.SupportsBufferUnderrunFree);
+        Assert.False(probe.SupportsCdTextLeadIn); // SAO alone does not mean the drive can write CD-Text
+    }
+
+    [Theory]
+    [InlineData(0x21, true)]  // SAO + R-W
+    [InlineData(0x01, true)]  // R-W only
+    [InlineData(0x7E, false)] // every other CD Mastering bit, no R-W
+    public void ParseGetConfigurationFeatures_CdText_FollowsCdMasteringRwBit(byte flags, bool expected)
+    {
+        // MMC-5 CD Mastering feature (0x002E), byte 4: BUF 0x40, SAO 0x20, Raw MS 0x10, Raw 0x08,
+        // Test Write 0x04, CD-RW 0x02, R-W 0x01.
+        byte[] buffer = new byte[16];
+        BinaryPrimitives.WriteUInt32BigEndian(buffer.AsSpan(0, 4), 12);
+        BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(8, 2), MmcCommandBuilder.FeatureCdMastering);
+        buffer[10] = 0x01;
+        buffer[11] = 4;
+        buffer[12] = flags;
+
+        var probe = MmcCommandBuilder.ParseGetConfigurationFeatures(buffer);
+
+        Assert.Equal(expected, probe.SupportsCdTextLeadIn);
     }
 
     [Fact]

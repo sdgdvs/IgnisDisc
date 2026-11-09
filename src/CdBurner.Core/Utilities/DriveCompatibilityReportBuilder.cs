@@ -90,6 +90,14 @@ public static class DriveCompatibilityReportBuilder
                         canReadCd = canReadCd,
                         canReadDvd = canReadDvd,
                         supportedMediaTypes = capabilities.SupportedMediaTypes.Select(m => m.ToString()).ToList(),
+                        mmcFeatures = capabilities.MmcFeatureSummary,
+                        supportsNativeTao = capabilities.SupportsNativeTao,
+                        supportsNativeSao = capabilities.SupportsNativeSao,
+                        supportsNativeRawDao = capabilities.SupportsNativeRawDao,
+                        supportsNativeCdText = capabilities.SupportsNativeCdText,
+                        supportsTestWrite = capabilities.SupportsTestWrite,
+                        supportsBufferUnderrunFree = capabilities.SupportsBufferUnderrunFree,
+                        supportsLayerJump = capabilities.SupportsLayerJump,
                         supportedWriteSpeeds = capabilities.SupportedWriteSpeeds.Select(s => new
                         {
                             multiplier = s.Multiplier,

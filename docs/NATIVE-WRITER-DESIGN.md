@@ -4,6 +4,9 @@
 (`MmcWriteCapabilityProbe`, `MmcMediaIdInspector`): it sends `GET CONFIGURATION`, `MODE SENSE`, `READ TOC/PMA/ATIP`
 and `READ DISC STRUCTURE`, and writes nothing. Everything below is the plan for roadmap item P1, phases 2–6.
 
+**First feature (decided 2026-11-08):** audio CD Session-at-Once with CD-Text. Phase 2 (test write) is built on that
+path, so the first laser-off test write is an audio CD with CD-Text, not a data CD.
+
 ## Why
 
 IgnisDisc burns through Windows' IMAPIv2 service. IMAPIv2 cannot:
@@ -20,7 +23,8 @@ way (`Win32ScsiTransport`, `IOCTL_SCSI_PASS_THROUGH_DIRECT`); this proposal adds
 
 1. **Off by default.** Native writing is chosen per burn (app option, CLI `--native`). IMAPIv2 stays the default.
 2. **Probed drives only.** The drive must report the needed feature: CD Mastering (0x002E) with SAO for audio
-   Session-at-Once, Track-at-Once (0x002D) for TAO, DVD-R/-RW Write (0x002F) or the DVD+R feature for DVD.
+   Session-at-Once, plus its R-W bit for CD-Text (`supportsNativeCdText` in `drives --json`); Track-at-Once (0x002D)
+   for TAO; DVD-R/-RW Write (0x002F) or the DVD+R feature for DVD.
 3. **Test write first.** For write-once media the app offers a test write (Test Write bit in mode page 0x05) before
    the real burn, on drives that report it.
 4. **Verify after every native burn.** Not optional in native mode.
@@ -40,10 +44,25 @@ READY`, `GET CONFIGURATION` (current profile), `READ DISC INFORMATION` (blank? a
 write as chosen) → `READ TRACK INFORMATION` (next writable address) → `WRITE(10)` in 32 KB–64 KB chunks →
 `SYNCHRONIZE CACHE` → `CLOSE TRACK/SESSION` (close track, then close session or finalize).
 
-**Audio CD, Session-at-Once with CD-Text:** `MODE SELECT` page 0x05 (write type SAO) → `SEND CUE SHEET` (0x5D) built
-from the track list, pre-gaps and ISRC/MCN; with CD-Text, the cue sheet's lead-in entry announces R-W subcode and the
-CD-Text packs are written into the lead-in → `WRITE(10)` of 2,352-byte audio sectors from the first pre-gap
-(LBA −150) → `SYNCHRONIZE CACHE`. The drive closes the session itself.
+**Audio CD, Session-at-Once with CD-Text:**
+
+1. `MODE SELECT` page 0x05: write type 2 (SAO), Test Write bit as chosen, BUFE on when supported, multi-session 00
+   (close the disc).
+2. `SEND CUE SHEET` (0x5D). One 8-byte entry per index (CTL/ADR, track, index, data form, SCMS, absolute MSF): a
+   lead-in entry (track 0), track 1 INDEX 00 at 00:00:00 and INDEX 01 at 00:02:00, then every track's INDEX 00 / 01,
+   then the lead-out (track 0xAA). The CTL nibble carries pre-emphasis and copy-permit; ADR 2 / 3 entries carry MCN
+   and ISRC. With CD-Text, the lead-in entry's data form says the host sends R-W subcode for the lead-in.
+3. With CD-Text, write the lead-in: CD-Text packs are 18 bytes (4 header, 12 text, 2 CRC); four packs fill one
+   sector's 96 bytes of raw R-W subcode, 6 bits per byte. The pack set repeats from the lead-in start address read
+   from the ATIP (`READ TOC/PMA/ATIP` format 4, already read by Phase 1, currently kept only as display text) up to
+   LBA −150. Start MSF 9x:ss:ff converts to LBA as `(m × 60 + s) × 75 + f − 450,150`, which is negative.
+4. `WRITE(10)` of 2,352-byte audio sectors from LBA −150 (the 2-second pre-gap of track 1) to the end of the last
+   track.
+5. `SYNCHRONIZE CACHE`. The drive writes the lead-out and closes the session itself.
+
+The cue sheet data form values and the lead-in pack layout are to be checked against MMC-5 and an existing writer
+(cdrdao's generic MMC driver) before any code is written; the virtual drive must reject a malformed cue sheet the way
+a real drive does.
 
 **DVD±R:** `RESERVE TRACK` (DVD-R DAO) or sequential writing (DVD+R) → `WRITE(10)` → `SYNCHRONIZE CACHE` →
 `CLOSE TRACK/SESSION`. Dual layer adds `SEND DISC STRUCTURE` with the layer-break address before writing.
@@ -67,11 +86,15 @@ BURN-Free / buffer-underrun protection (BUFE bit in page 0x05) when the drive su
 
 - Virtual drive: each command is implemented in `VirtualDiscBackend`, including failure injection (sense codes at
   chosen LBAs), so the error paths are tested.
-- Real hardware, in order: test write on CD-RW, real write on CD-RW, then CD-R; DVD after CD. The drives and media
-  used are listed in the roadmap.
+- Real hardware, in order: test write on CD-RW, real write on CD-RW, then CD-R; DVD after CD.
 
-## Open decisions (owner)
+## Test hardware
 
-- Which feature ships first. Suggested: audio CD with CD-Text (Session-at-Once), since it is the most requested
-  thing IMAPIv2 cannot do.
-- Which drives and media are available for testing.
+| Drive | Firmware | Connection | Probe result (`drives --json`, 2026-11-08) |
+|---|---|---|---|
+| HL-DT-ST DVDRAM GP60NB50 | RF02 | USB, slim tray | TAO, SAO, raw DAO, CD-Text (R-W), test write, BURN-Free, layer jump |
+
+Media on hand: CD-RW, CD-R, DVD±R / DVD±RW, DVD±R DL.
+
+The GP60NB50 has a spring-loaded slim tray that cannot close itself: automated runs never eject it, and the owner
+swaps discs by hand. Drives added later get a row here with their probe result.
