@@ -5,7 +5,7 @@ namespace CdBurner.Hardware.Interop;
 
 /// <summary>
 /// Managed bridge implementing COM IStream over any System.IO.Stream.
-/// Enables seamless passing of managed streams into Windows IMAPIv2 COM interfaces.
+/// Passes managed streams to Windows IMAPIv2 COM interfaces as IStream.
 /// </summary>
 public sealed class ManagedComStream : IStream, IDisposable
 {

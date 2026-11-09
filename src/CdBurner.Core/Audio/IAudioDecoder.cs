@@ -90,6 +90,51 @@ public record AudioFormatMetadata
     /// Optional embedded 1-based track number.
     /// </summary>
     public int? TrackNumber { get; init; }
+
+    /// <summary>
+    /// Optional embedded total track count.
+    /// </summary>
+    public int? TrackTotal { get; init; }
+
+    /// <summary>
+    /// Optional embedded recording or release date.
+    /// </summary>
+    public string? Date { get; init; }
+
+    /// <summary>
+    /// Optional embedded ReplayGain track gain (e.g. "+0.00 dB" or "-2.45 dB").
+    /// </summary>
+    public string? ReplayGainTrackGain { get; init; }
+
+    /// <summary>
+    /// Optional embedded ReplayGain track peak (e.g. "0.987654").
+    /// </summary>
+    public string? ReplayGainTrackPeak { get; init; }
+
+    /// <summary>
+    /// Optional embedded ReplayGain album gain.
+    /// </summary>
+    public string? ReplayGainAlbumGain { get; init; }
+
+    /// <summary>
+    /// Optional embedded ReplayGain album peak.
+    /// </summary>
+    public string? ReplayGainAlbumPeak { get; init; }
+
+    /// <summary>
+    /// True if the stream or container contains embedded front cover art.
+    /// </summary>
+    public bool HasEmbeddedCoverArt { get; init; }
+
+    /// <summary>
+    /// Optional embedded front cover image bytes.
+    /// </summary>
+    public byte[]? CoverArtBytes { get; init; }
+
+    /// <summary>
+    /// Optional MIME type of embedded cover art (e.g. "image/jpeg", "image/png").
+    /// </summary>
+    public string? CoverArtMimeType { get; init; }
 }
 
 /// <summary>

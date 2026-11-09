@@ -158,6 +158,20 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
             CanWriteDvdRam = true,
             SupportsTestWrite = true,
             SupportsBufferUnderrunProtection = true,
+            SupportsBufferUnderrunFree = true,
+            SupportsNativeTao = true,
+            SupportsNativeSao = true,
+            SupportsNativeRawDao = true,
+            SupportsLayerJump = true,
+            MmcFeatureSummary = new[]
+            {
+                "0x002D TAO",
+                "0x002E SAO/Raw",
+                "0x002F DVD Write",
+                "0x0033 Layer Jump",
+                "0x0041 BD Write",
+                "ModePage 0x05 BUFE"
+            },
             InternalBufferSize = 8 * 1024 * 1024,
             SupportedMediaTypes = new[]
             {
@@ -225,6 +239,8 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
                 MediaPresent = true,
                 IsBlank = m.IsBlank,
                 IsRewritable = m.IsRewritable,
+                // DVD+RW and DVD-RAM are rewritten in place (no erase), as the IMAPI recorder reports them.
+                IsOverwriteOnly = m.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam,
                 IsAppendable = !m.IsFinalized && m.FreeSectors > 0,
                 TotalSectors = m.TotalCapacitySectors,
                 FreeSectors = m.FreeSectors,

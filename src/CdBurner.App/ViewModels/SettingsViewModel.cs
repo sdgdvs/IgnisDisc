@@ -3,6 +3,8 @@ using CdBurner.App.Mvvm;
 using CdBurner.App.Themes;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Persistence;
+using CdBurner.Core.Utilities;
+using System.Net.Http;
 
 namespace CdBurner.App.ViewModels;
 
@@ -26,6 +28,9 @@ public class SettingsViewModel : ObservableObject
     private int _logRingBufferCapacity;
     private IDiscRecorderBackend? _selectedRecorder;
     private string _statusMessage = "Ready";
+    private bool _checkForUpdatesOnStartup;
+    private string _updateStatusMessage = "Update check has not been run.";
+    private bool _isCheckingForUpdates;
 
     /// <summary>
     /// Raised when settings are saved or reset so the shell can apply changes immediately.
@@ -141,6 +146,24 @@ public class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Whether to check for updates against GitHub Releases on startup. Strictly opt-in (default false).
+    /// </summary>
+    public bool CheckForUpdatesOnStartup
+    {
+        get => _checkForUpdatesOnStartup;
+        set => SetProperty(ref _checkForUpdatesOnStartup, value);
+    }
+
+    /// <summary>
+    /// Status message from the most recent GitHub update check.
+    /// </summary>
+    public string UpdateStatusMessage
+    {
+        get => _updateStatusMessage;
+        set => SetProperty(ref _updateStatusMessage, value);
+    }
+
+    /// <summary>
     /// User-facing status notification message.
     /// </summary>
     public string StatusMessage
@@ -172,6 +195,11 @@ public class SettingsViewModel : ObservableObject
     #region Commands
 
     /// <summary>
+    /// Queries GitHub Releases API to check for newer versions of IgnisDisc.
+    /// </summary>
+    public AsyncRelayCommand CheckForUpdatesCommand { get; }
+
+    /// <summary>
     /// Saves current settings to disk.
     /// </summary>
     public RelayCommand SaveSettingsCommand { get; }
@@ -199,6 +227,7 @@ public class SettingsViewModel : ObservableObject
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
         ReloadSettingsCommand = new RelayCommand(LoadSettings);
+        CheckForUpdatesCommand = new AsyncRelayCommand(async _ => await CheckForUpdatesAsync(), _ => !_isCheckingForUpdates);
 
         LoadSettings();
     }
@@ -218,6 +247,7 @@ public class SettingsViewModel : ObservableObject
         FfmpegExecutablePath = settings.FfmpegExecutablePath;
         EnableVirtualDrive = settings.EnableVirtualDrive;
         LogRingBufferCapacity = settings.LogRingBufferCapacity;
+        CheckForUpdatesOnStartup = settings.CheckForUpdatesOnStartup;
         StatusMessage = "Settings loaded.";
     }
 
@@ -237,6 +267,7 @@ public class SettingsViewModel : ObservableObject
         settings.FfmpegExecutablePath = FfmpegExecutablePath;
         settings.EnableVirtualDrive = EnableVirtualDrive;
         settings.LogRingBufferCapacity = LogRingBufferCapacity;
+        settings.CheckForUpdatesOnStartup = CheckForUpdatesOnStartup;
 
         _settingsService.CurrentSettings = settings;
         _settingsService.Save();
@@ -258,5 +289,62 @@ public class SettingsViewModel : ObservableObject
         LoadSettings();
         StatusMessage = "Settings reset to default values.";
         SettingsSaved?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Runs the update check once at startup when the user turned it on; the result appears on the Settings page.
+    /// Never throws: a failed check must not affect startup.
+    /// </summary>
+    public async Task CheckForUpdatesOnStartupAsync()
+    {
+        try
+        {
+            var result = await CheckForUpdatesAsync().ConfigureAwait(true);
+            if (result.Success && result.IsUpdateAvailable)
+            {
+                StatusMessage = $"IgnisDisc {result.LatestVersion} is available (you have {result.CurrentVersion}). See Settings.";
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// Checks GitHub Releases for updates.
+    /// </summary>
+    public async Task<UpdateCheckResult> CheckForUpdatesAsync(HttpClient? httpClient = null, CancellationToken ct = default)
+    {
+        _isCheckingForUpdates = true;
+        CheckForUpdatesCommand.RaiseCanExecuteChanged();
+        UpdateStatusMessage = "Checking GitHub Releases for updates...";
+
+        try
+        {
+            var result = await GitHubUpdateChecker.CheckForUpdateAsync(null, httpClient, null, ct);
+            if (!result.Success)
+            {
+                UpdateStatusMessage = $"Update check failed: {result.ErrorMessage}";
+            }
+            else if (result.IsUpdateAvailable)
+            {
+                UpdateStatusMessage = $"Update available: {result.LatestVersion} (Current: {result.CurrentVersion}). Visit: {result.ReleaseUrl}";
+            }
+            else
+            {
+                UpdateStatusMessage = $"IgnisDisc is up to date (version {result.CurrentVersion}).";
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusMessage = $"Update check error: {ex.Message}";
+            return new UpdateCheckResult(false, string.Empty, string.Empty, string.Empty, ex.Message);
+        }
+        finally
+        {
+            _isCheckingForUpdates = false;
+            CheckForUpdatesCommand.RaiseCanExecuteChanged();
+        }
     }
 }

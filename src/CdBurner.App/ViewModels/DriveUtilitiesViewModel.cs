@@ -30,6 +30,7 @@ public class DriveUtilitiesViewModel : ObservableObject
     private bool _isBusy;
     private string _statusMessage = "Ready";
     private double _operationProgress;
+    private string? _lastCompatibilityReport;
 
     #region Properties
 
@@ -106,6 +107,7 @@ public class DriveUtilitiesViewModel : ObservableObject
                 EraseDiscCommand.RaiseCanExecuteChanged();
                 ApplyBookTypeCommand.RaiseCanExecuteChanged();
                 StartSurfaceScanCommand.RaiseCanExecuteChanged();
+                GenerateCompatibilityReportCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -143,7 +145,13 @@ public class DriveUtilitiesViewModel : ObservableObject
     public SurfaceScanReport? LatestScanReport
     {
         get => _latestScanReport;
-        set => SetProperty(ref _latestScanReport, value);
+        set
+        {
+            if (SetProperty(ref _latestScanReport, value))
+            {
+                ExportScanCsvCommand?.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>
@@ -177,6 +185,8 @@ public class DriveUtilitiesViewModel : ObservableObject
                 EraseDiscCommand.RaiseCanExecuteChanged();
                 ApplyBookTypeCommand.RaiseCanExecuteChanged();
                 StartSurfaceScanCommand.RaiseCanExecuteChanged();
+                ExportScanCsvCommand?.RaiseCanExecuteChanged();
+                GenerateCompatibilityReportCommand?.RaiseCanExecuteChanged();
                 CancelCommand?.RaiseCanExecuteChanged();
             }
         }
@@ -194,6 +204,15 @@ public class DriveUtilitiesViewModel : ObservableObject
     /// <summary>
     /// Progress percentage for the active utility operation (0.0 to 100.0).
     /// </summary>
+    /// <summary>
+    /// Most recently generated Markdown compatibility report.
+    /// </summary>
+    public string? LastCompatibilityReport
+    {
+        get => _lastCompatibilityReport;
+        set => SetProperty(ref _lastCompatibilityReport, value);
+    }
+
     public double OperationProgress
     {
         get => _operationProgress;
@@ -227,6 +246,16 @@ public class DriveUtilitiesViewModel : ObservableObject
     /// <summary>
     /// Command to cancel the active scan, erase, or booktype operation.
     /// </summary>
+    /// <summary>
+    /// Command to generate a copy-pasteable Markdown drive compatibility report.
+    /// </summary>
+    public RelayCommand GenerateCompatibilityReportCommand { get; }
+
+    /// <summary>
+    /// Command to export the latest surface scan benchmark report as a CSV file.
+    /// </summary>
+    public AsyncRelayCommand ExportScanCsvCommand { get; }
+
     public RelayCommand CancelCommand { get; }
 
     private CancellationTokenSource? _activeCts;
@@ -262,6 +291,12 @@ public class DriveUtilitiesViewModel : ObservableObject
             canExecute: _ => SelectedRecorder != null && !IsBusy);
 
         RefreshCapabilitiesCommand = new RelayCommand(RefreshCapabilities);
+        GenerateCompatibilityReportCommand = new RelayCommand(
+            execute: () => GenerateCompatibilityReport(),
+            canExecute: () => SelectedRecorder != null);
+        ExportScanCsvCommand = new AsyncRelayCommand(
+            execute: async param => await ExportScanCsvAsync(param),
+            canExecute: _ => LatestScanReport != null && LatestScanReport.Blocks.Count > 0 && !IsBusy);
         CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => IsBusy);
 
         RefreshRecorders();
@@ -311,7 +346,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         if (SelectedRecorder != null)
         {
             Capabilities = SelectedRecorder.GetCapabilities();
-            MediaDetails = SelectedRecorder.QueryMediaStatus();
+            MediaDetails = SelectedRecorder.WithManufacturerId(SelectedRecorder.QueryMediaStatus());
         }
         else
         {
@@ -355,7 +390,7 @@ public class DriveUtilitiesViewModel : ObservableObject
 
             var result = await _eraseService.EraseAsync(targetRecorder, IsFullEraseSelected, progress, ct);
             StatusMessage = result.Success ? "Erase operation completed successfully." : $"Erase failed: {result.ErrorMessage}";
-            MediaDetails = targetRecorder.QueryMediaStatus();
+            MediaDetails = targetRecorder.WithManufacturerId(targetRecorder.QueryMediaStatus());
             return result;
         }
         catch (OperationCanceledException)
@@ -397,7 +432,7 @@ public class DriveUtilitiesViewModel : ObservableObject
             StatusMessage = result.Success
                 ? $"Book Type successfully set to {SelectedBookType}."
                 : $"Failed to set Book Type: {result.ErrorMessage}";
-            MediaDetails = targetRecorder.QueryMediaStatus();
+            MediaDetails = targetRecorder.WithManufacturerId(targetRecorder.QueryMediaStatus());
             return result;
         }
         catch (Exception ex)
@@ -494,5 +529,58 @@ public class DriveUtilitiesViewModel : ObservableObject
                    ?? SelectedRecorder;
         }
         return SelectedRecorder;
+    }
+
+    /// <summary>
+    /// Builds a Markdown drive compatibility report and stores it in <see cref="LastCompatibilityReport"/>.
+    /// </summary>
+    public string? GenerateCompatibilityReport()
+    {
+        if (SelectedRecorder == null)
+        {
+            StatusMessage = "No optical recorder drive selected.";
+            return null;
+        }
+
+        var report = DriveCompatibilityReportBuilder.BuildMarkdownReport(
+            SelectedRecorder,
+            Capabilities,
+            MediaDetails);
+
+        LastCompatibilityReport = report;
+        StatusMessage = "Drive compatibility report generated and ready to copy.";
+        return report;
+    }
+
+    /// <summary>
+    /// Exports the latest surface scan report to a CSV file.
+    /// </summary>
+    public async Task<string?> ExportScanCsvAsync(object? parameter = null, CancellationToken cancellationToken = default)
+    {
+        if (LatestScanReport == null || LatestScanReport.Blocks.Count == 0)
+        {
+            StatusMessage = "Run a surface scan before exporting CSV data.";
+            return null;
+        }
+
+        string? targetPath = parameter as string;
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Export Surface Scan CSV",
+                Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*",
+                FileName = $"IgnisDisc-SurfaceScan-{SelectedRecorder?.UniqueId ?? "Drive"}.csv"
+            };
+            if (dlg.ShowDialog() != true)
+            {
+                return null;
+            }
+            targetPath = dlg.FileName;
+        }
+
+        await LatestScanReport.ExportCsvAsync(targetPath, cancellationToken);
+        StatusMessage = $"Surface scan CSV exported to {targetPath}.";
+        return targetPath;
     }
 }

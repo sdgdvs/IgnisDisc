@@ -261,6 +261,18 @@ ManifestVersion: 1.6.0
 }
 
 # ---------------------------------------------------------------------------
+# 10. Support Matrix Synchronization (README.md & web/public/index.html)
+# ---------------------------------------------------------------------------
+$SyncScript = Join-Path $PSScriptRoot "Sync-SupportTable.ps1"
+if (Test-Path $SyncScript) {
+    if ($DryRun) {
+        & pwsh -ExecutionPolicy Bypass -File $SyncScript -DryRun
+    } else {
+        & pwsh -ExecutionPolicy Bypass -File $SyncScript
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 11. Optional: Rebuild Artifacts, Compute Checksums & Update Site
 # ---------------------------------------------------------------------------
 if ($RebuildArtifacts -and -not $DryRun) {

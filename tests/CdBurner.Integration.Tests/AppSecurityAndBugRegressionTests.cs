@@ -8,7 +8,7 @@ using Xunit;
 namespace CdBurner.Integration.Tests;
 
 /// <summary>
-/// Regression tests verifying WPF ViewModel fixes (CRIT-02 physical drive list reload on DeviceChangeType.Added,
+/// Regression tests verifying WPF ViewModel fixes (physical drive list reload on DeviceChangeType.Added,
 /// DvdVideoViewModel & ImageStudioViewModel CancelCommand and SelectedWriteSpeed propagation).
 /// </summary>
 [Collection(WpfApplicationCollection.Name)]

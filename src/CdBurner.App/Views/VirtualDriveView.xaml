@@ -56,6 +56,7 @@
                                Margin="0,0,10,0" />
 
                     <ComboBox Grid.Column="1"
+                              AutomationProperties.Name="Virtual Recorder"
                               ItemsSource="{Binding AvailableRecorders}"
                               SelectedItem="{Binding SelectedRecorder}">
                         <ComboBox.ItemTemplate>
@@ -70,12 +71,14 @@
 
                     <Button Grid.Column="2"
                             Content="⏏ Eject Tray"
+                            AutomationProperties.Name="Eject Tray"
                             Command="{Binding EjectMediaCommand}"
                             Margin="10,0,0,0"
                             Padding="12,5" />
 
                     <Button Grid.Column="3"
                             Content="📥 Close Tray"
+                            AutomationProperties.Name="Close Tray"
                             Command="{Binding CloseTrayCommand}"
                             Margin="6,0,0,0"
                             Padding="12,5" />
@@ -169,11 +172,11 @@
 
                     <!-- Preset Buttons -->
                     <WrapPanel Margin="0,0,0,16">
-                        <Button Content="💿 CD-R (700 MB)" Command="{Binding MountCdRCommand}" Padding="14,6" Margin="0,0,8,6" />
-                        <Button Content="💿 CD-RW (700 MB)" Command="{Binding MountCdRwCommand}" Padding="14,6" Margin="0,0,8,6" />
-                        <Button Content="📀 DVD-R (4.7 GB)" Command="{Binding MountDvdRCommand}" Padding="14,6" Margin="0,0,8,6" />
-                        <Button Content="📀 DVD-RW (4.7 GB)" Command="{Binding MountDvdRwCommand}" Padding="14,6" Margin="0,0,8,6" />
-                        <Button Content="📀 DVD+R DL (8.5 GB)" Command="{Binding MountDvdPlusRDLCommand}" Padding="14,6" Margin="0,0,8,6" />
+                        <Button Content="💿 CD-R (700 MB)" AutomationProperties.Name="Mount CD-R (700 MB)" Command="{Binding MountCdRCommand}" Padding="14,6" Margin="0,0,8,6" />
+                        <Button Content="💿 CD-RW (700 MB)" AutomationProperties.Name="Mount CD-RW (700 MB)" Command="{Binding MountCdRwCommand}" Padding="14,6" Margin="0,0,8,6" />
+                        <Button Content="📀 DVD-R (4.7 GB)" AutomationProperties.Name="Mount DVD-R (4.7 GB)" Command="{Binding MountDvdRCommand}" Padding="14,6" Margin="0,0,8,6" />
+                        <Button Content="📀 DVD-RW (4.7 GB)" AutomationProperties.Name="Mount DVD-RW (4.7 GB)" Command="{Binding MountDvdRwCommand}" Padding="14,6" Margin="0,0,8,6" />
+                        <Button Content="📀 DVD+R DL (8.5 GB)" AutomationProperties.Name="Mount DVD+R DL (8.5 GB)" Command="{Binding MountDvdPlusRDLCommand}" Padding="14,6" Margin="0,0,8,6" />
                     </WrapPanel>
 
                     <Separator Background="{DynamicResource CardBorderBrush}" Margin="0,0,0,12" />
@@ -191,6 +194,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox Grid.Column="0"
+                                 AutomationProperties.Name="Custom Image File Path"
                                  Text="{Binding CustomImageFilePath, UpdateSourceTrigger=PropertyChanged}"
                                  Padding="8,5"
                                  Background="{DynamicResource ControlBackgroundBrush}"
@@ -198,6 +202,7 @@
                                  BorderBrush="{DynamicResource ControlBorderBrush}" />
                         <Button Grid.Column="1"
                                 Content="Mount Image File"
+                                AutomationProperties.Name="Mount Image File"
                                 Command="{Binding MountImageFileCommand}"
                                 Margin="8,0,0,0"
                                 Padding="16,5" />
@@ -243,6 +248,7 @@
                                    Margin="0,0,10,0" />
 
                         <TextBox Grid.Column="1"
+                                 AutomationProperties.Name="Target Sector LBA"
                                  Text="{Binding NewBadLba, UpdateSourceTrigger=PropertyChanged}"
                                  Padding="8,5"
                                  Background="{DynamicResource ControlBackgroundBrush}"
@@ -251,6 +257,7 @@
 
                         <Button Grid.Column="2"
                                 Content="Inject Bad Sector"
+                                AutomationProperties.Name="Inject Bad Sector"
                                 Command="{Binding InjectBadLbaCommand}"
                                 Margin="10,0,0,0"
                                 Padding="14,5"
@@ -259,6 +266,7 @@
 
                         <Button Grid.Column="3"
                                 Content="Clear All Bad LBAs"
+                                AutomationProperties.Name="Clear All Bad LBAs"
                                 Command="{Binding ClearBadLbasCommand}"
                                 Margin="8,0,0,0"
                                 Padding="14,5" />
@@ -272,6 +280,7 @@
                             Padding="8"
                             MaxHeight="160">
                         <ListBox ItemsSource="{Binding SimulatedBadLbas}"
+                                 AutomationProperties.Name="Simulated Bad LBAs"
                                  Background="Transparent"
                                  BorderThickness="0"
                                  Foreground="{DynamicResource TextPrimaryBrush}">

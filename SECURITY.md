@@ -20,25 +20,27 @@ Every release lists SHA-256 checksums for its files, both on the release page an
 [ignisdisc.tetherworks.dev](https://ignisdisc.tetherworks.dev). Builds are not code-signed yet; compare the checksum
 before running a file you downloaded from anywhere else.
 
-## Code signing policy
+## Code signing
 
-Free code signing is provided by [SignPath.io](https://signpath.io), certificate by the
-[SignPath Foundation](https://signpath.org) (application and CI pipeline configured; current v1.10 binaries are
-unsigned until certificate provisioning completes).
+Releases are not code-signed yet, so Windows SmartScreen may warn when you first run them. Signing through the
+[SignPath Foundation](https://signpath.org) programme for open-source projects is planned; until a signed release is
+published, compare the SHA-256 checksum above. Release builds are produced from tagged commits by
+`.github/workflows/release.yml` on GitHub-hosted runners, and changes from outside contributors are merged only after
+maintainer review.
 
-- **Committers, reviewers and approvers:** [tether-works](https://github.com/tether-works) maintainers. External pull
-  requests require maintainer review before merge, and release builds run only on GitHub-hosted runners from tagged
-  commits in `.github/workflows/release.yml`.
+## Privacy
 
-## Privacy policy
+IgnisDisc collects no telemetry, analytics, crash reports or usage data. It makes network requests only in these
+cases:
 
-IgnisDisc does not collect telemetry, analytics, crash reports, or usage data. This program will not transfer any
-information to other networked systems unless specifically requested by the user or the person installing or operating
-it:
+- **MusicBrainz lookup** (audio CD ripping; *on by default* in the app's rip options, off unless you pass `--lookup`
+  on the command line): the disc's table of contents (track start positions) is sent to `musicbrainz.org` to fetch
+  album and track titles.
+- **AccurateRip check** (audio CD ripping; *on by default* in the app's rip options, off unless you pass
+  `--verify-accuraterip` or run `detect-offset` on the command line): IDs computed from the disc's table of contents
+  are used to download the matching checksum file from `accuraterip.com`.
+- **Update check** (*off by default*): when you turn on *Check for updates on startup* or click
+  *Check for Updates Now* in Settings, the app asks `api.github.com` for the latest IgnisDisc release. No personal or
+  machine identifiers are sent.
 
-- **MusicBrainz lookup (opt-in):** When you click *Look Up Metadata* or pass `--lookup` to `ignisdisc-cli rip-audio`,
-  the disc's TOC sector offsets are sent to `musicbrainz.org` to fetch album and track titles.
-- **AccurateRip verification (opt-in):** When you enable *Verify with AccurateRip* or pass `--verify-accuraterip` /
-  `detect-offset`, the disc's TOC identifiers are used to download the matching checksum bin from
-  `accuraterip.com`.
-
+Both ripping lookups can be switched off in the rip options; the choice is remembered.

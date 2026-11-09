@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace CdBurner.Hardware.Scsi;
 
 /// <summary>
@@ -9,16 +11,31 @@ public static class MmcCommandBuilder
     public const byte OpCodeTestUnitReady        = 0x00;
     public const byte OpCodeInquiry              = 0x12;
     public const byte OpCodeStartStopUnit        = 0x1B;
+    public const byte OpCodeWrite10              = 0x2A;
     public const byte OpCodeSynchronizeCache10   = 0x35;
     public const byte OpCodeReadTocPmaAtip       = 0x43;
     public const byte OpCodeGetConfiguration     = 0x46;
     public const byte OpCodeReadDiscInformation  = 0x51;
+    public const byte OpCodeReadTrackInformation = 0x52;
+    public const byte OpCodeModeSelect10         = 0x55;
     public const byte OpCodeModeSense10          = 0x5A;
+    public const byte OpCodeCloseTrackSession    = 0x5B;
+    public const byte OpCodeReadBufferCapacity   = 0x5C;
     public const byte OpCodeSendCueSheet         = 0x5D;
     public const byte OpCodeBlank                = 0xA1;
     public const byte OpCodeReadDiscStructure    = 0xAD;
     public const byte OpCodeReadCd               = 0xBE;
     public const byte OpCodeSendDiscStructure    = 0xBF;
+
+    // MMC-5 Feature Codes
+    public const ushort FeatureTrackAtOnce        = 0x002D;
+    public const ushort FeatureCdMastering        = 0x002E;
+    public const ushort FeatureDvdRecordableWrite = 0x002F;
+    public const ushort FeatureLayerJumpRecording = 0x0033;
+    public const ushort FeatureBdWrite            = 0x0041;
+
+    // MMC Mode Pages
+    public const byte ModePageWriteParameters    = 0x05;
 
     // READ TOC Formats
     public const byte TocFormatFormattedToc      = 0x00;
@@ -72,6 +89,169 @@ public static class MmcCommandBuilder
         cdb[8] = (byte)(allocationLength & 0xFF);
         cdb[9] = 0x00; // Control
         return cdb;
+    }
+
+    /// <summary>
+    /// Builds a 10-byte MMC MODE SENSE (10) CDB (OpCode 0x5A) to query drive mode parameters.
+    /// </summary>
+    /// <param name="pageCode">Mode Page Code to query (bits 0..5).</param>
+    /// <param name="allocationLength">Buffer allocation length (default 128).</param>
+    /// <param name="disableBlockDescriptors">True to set DBD bit (bit 3 of byte 1), omitting block descriptors from response.</param>
+    public static byte[] BuildModeSense10Cdb(byte pageCode, ushort allocationLength = 128, bool disableBlockDescriptors = true)
+    {
+        byte[] cdb = new byte[10];
+        cdb[0] = OpCodeModeSense10;
+        cdb[1] = (byte)(disableBlockDescriptors ? 0x08 : 0x00);
+        cdb[2] = (byte)(pageCode & 0x3F);
+        cdb[3] = 0x00;
+        cdb[4] = 0x00;
+        cdb[5] = 0x00;
+        cdb[6] = 0x00;
+        cdb[7] = (byte)(allocationLength >> 8);
+        cdb[8] = (byte)(allocationLength & 0xFF);
+        cdb[9] = 0x00; // Control
+        return cdb;
+    }
+
+    /// <summary>
+    /// Parses MMC GET CONFIGURATION response buffer into an <see cref="MmcWriteCapabilityProbe"/>.
+    /// </summary>
+    /// <param name="response">Raw byte buffer returned by GET CONFIGURATION (0x46).</param>
+    public static MmcWriteCapabilityProbe ParseGetConfigurationFeatures(ReadOnlySpan<byte> response)
+    {
+        if (response.Length < 8)
+        {
+            return new MmcWriteCapabilityProbe();
+        }
+
+        uint dataLength = BinaryPrimitives.ReadUInt32BigEndian(response.Slice(0, 4));
+        int totalLength = Math.Min(response.Length, (int)Math.Min((long)int.MaxValue, (long)dataLength + 4));
+
+        var featureCodes = new List<ushort>();
+        bool hasTao = false, taoTestWrite = false, taoBuf = false;
+        bool hasCdMastering = false, sao = false, rawDao = false, cdTextLeadIn = false, cdMasteringTestWrite = false, cdMasteringBuf = false;
+        bool hasDvdWrite = false, dvdTestWrite = false, dvdBuf = false;
+        bool hasLayerJump = false;
+        bool hasBdWrite = false;
+
+        int offset = 8;
+        while (offset + 4 <= totalLength)
+        {
+            ushort featureCode = BinaryPrimitives.ReadUInt16BigEndian(response.Slice(offset, 2));
+            byte additionalLength = response[offset + 3];
+            featureCodes.Add(featureCode);
+
+            int payloadLength = Math.Min((int)additionalLength, Math.Max(0, totalLength - (offset + 4)));
+            var payload = response.Slice(offset + 4, payloadLength);
+
+            if (featureCode == FeatureTrackAtOnce)
+            {
+                hasTao = true;
+                if (payload.Length >= 1)
+                {
+                    taoBuf = (payload[0] & 0x40) != 0;
+                    taoTestWrite = (payload[0] & 0x04) != 0;
+                }
+            }
+            else if (featureCode == FeatureCdMastering)
+            {
+                hasCdMastering = true;
+                if (payload.Length >= 1)
+                {
+                    cdMasteringBuf = (payload[0] & 0x40) != 0;
+                    sao = (payload[0] & 0x20) != 0;
+                    rawDao = (payload[0] & 0x08) != 0;
+                    cdMasteringTestWrite = (payload[0] & 0x04) != 0;
+                    cdTextLeadIn = sao;
+                }
+            }
+            else if (featureCode == FeatureDvdRecordableWrite)
+            {
+                hasDvdWrite = true;
+                if (payload.Length >= 1)
+                {
+                    dvdBuf = (payload[0] & 0x40) != 0;
+                    dvdTestWrite = (payload[0] & 0x04) != 0;
+                }
+            }
+            else if (featureCode == FeatureLayerJumpRecording)
+            {
+                hasLayerJump = true;
+            }
+            else if (featureCode == FeatureBdWrite)
+            {
+                hasBdWrite = true;
+            }
+
+            offset += 4 + additionalLength;
+        }
+
+        return new MmcWriteCapabilityProbe
+        {
+            HasTaoFeature = hasTao,
+            TaoSupportsTestWrite = taoTestWrite,
+            TaoSupportsBufferUnderrunFree = taoBuf,
+            HasCdMasteringFeature = hasCdMastering,
+            SupportsSao = sao,
+            SupportsRawDao = rawDao,
+            SupportsCdTextLeadIn = cdTextLeadIn,
+            CdMasteringSupportsTestWrite = cdMasteringTestWrite,
+            CdMasteringSupportsBufferUnderrunFree = cdMasteringBuf,
+            HasDvdWriteFeature = hasDvdWrite,
+            DvdSupportsTestWrite = dvdTestWrite,
+            DvdSupportsBufferUnderrunFree = dvdBuf,
+            HasLayerJumpFeature = hasLayerJump,
+            HasBdWriteFeature = hasBdWrite,
+            FeatureCodes = featureCodes
+        };
+    }
+
+    /// <summary>
+    /// Parses MMC MODE SENSE (10) Page 0x05 (Write Parameters) response buffer into an <see cref="MmcWriteCapabilityProbe"/>.
+    /// </summary>
+    /// <param name="modeSense10Response">Raw byte buffer returned by MODE SENSE (10) (0x5A) Page 0x05.</param>
+    public static MmcWriteCapabilityProbe ParseWriteParametersModePage(ReadOnlySpan<byte> modeSense10Response)
+    {
+        int pageOffset;
+
+        // Check if caller passed just the mode page (starts with Page Code 0x05, e.g. [0x05, length, ...])
+        if (modeSense10Response.Length >= 4 && (modeSense10Response[0] & 0x3F) == ModePageWriteParameters)
+        {
+            pageOffset = 0;
+        }
+        else if (modeSense10Response.Length >= 8)
+        {
+            ushort blockDescLen = BinaryPrimitives.ReadUInt16BigEndian(modeSense10Response.Slice(6, 2));
+            pageOffset = 8 + blockDescLen;
+        }
+        else
+        {
+            return new MmcWriteCapabilityProbe();
+        }
+
+        if (pageOffset + 3 > modeSense10Response.Length)
+        {
+            return new MmcWriteCapabilityProbe();
+        }
+
+        byte pageCode = (byte)(modeSense10Response[pageOffset] & 0x3F);
+        if (pageCode != ModePageWriteParameters)
+        {
+            return new MmcWriteCapabilityProbe();
+        }
+
+        byte b2 = modeSense10Response[pageOffset + 2];
+        bool bufe = (b2 & 0x40) != 0;
+        bool testWrite = (b2 & 0x10) != 0;
+        byte writeType = (byte)(b2 & 0x0F);
+
+        return new MmcWriteCapabilityProbe
+        {
+            ModePage05Present = true,
+            ModePage05BufferUnderrunFreeEnabled = bufe,
+            ModePage05TestWriteEnabled = testWrite,
+            ModePage05WriteType = writeType
+        };
     }
 
     /// <summary>

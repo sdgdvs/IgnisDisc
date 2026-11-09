@@ -121,6 +121,12 @@ public class DriveCapabilitiesDto
     public bool CanWriteDvdRam { get; init; }
     public bool SupportsTestWrite { get; init; }
     public bool SupportsBufferUnderrunProtection { get; init; }
+    public bool SupportsBufferUnderrunFree { get; init; }
+    public bool SupportsNativeTao { get; init; }
+    public bool SupportsNativeSao { get; init; }
+    public bool SupportsNativeRawDao { get; init; }
+    public bool SupportsLayerJump { get; init; }
+    public IReadOnlyList<string> MmcFeatureSummary { get; init; } = Array.Empty<string>();
     public int InternalBufferSize { get; init; }
     public IReadOnlyList<WriteSpeedDescriptor> SupportedWriteSpeeds { get; init; } = Array.Empty<WriteSpeedDescriptor>();
     public IReadOnlyList<DiscMediaType> SupportedMediaTypes { get; init; } = Array.Empty<DiscMediaType>();
@@ -161,7 +167,7 @@ public class MediaStatusDto
     public long FreeCapacityBytes { get; init; }
     public int SessionCount { get; init; }
     public int Sessions => SessionCount;
-    public string? MediaManufacturerId { get; init; }
+    public string? MediaManufacturerId { get; set; }
     public int LastRecordedLba { get; init; }
     public int NextWritableLba { get; init; } = -1;
     public DvdBookType? BookType { get; init; }

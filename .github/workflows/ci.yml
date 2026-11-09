@@ -28,12 +28,21 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Check support table sync
+        shell: pwsh
+        run: ./scripts/Sync-SupportTable.ps1 -CheckOnly
+
       - name: Build
         run: dotnet build CdBurner.sln --configuration Release -warnaserror
 
       # Every test runs against the built-in virtual drive; no optical hardware is needed.
       - name: Test
         run: dotnet test CdBurner.sln --configuration Release --no-build --logger "trx" --results-directory TestResults
+
+      - name: Verify Windows ARM64 build
+        run: |
+          dotnet publish src/CdBurner.Cli/CdBurner.Cli.csproj -c Release -r win-arm64 --self-contained false
+          dotnet publish src/CdBurner.App/CdBurner.App.csproj -c Release -r win-arm64 --self-contained false
 
       - name: Upload test results
         if: always()

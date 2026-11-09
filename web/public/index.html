@@ -104,25 +104,32 @@
               <thead>
                 <tr><th>Feature</th><th>Real drives</th><th>Notes</th></tr>
               </thead>
+              <!-- SUPPORT-TABLE-START -->
               <tbody>
                 <tr><td>Burn a data disc from files and folders</td><td>✅</td><td>ISO 9660 + Joliet + UDF 1.02 bridge</td></tr>
-                <tr><td>Burn an <code>.iso</code>; create <code>.iso</code> files</td><td>✅</td><td>Images are checked against an independent ISO reader in the test suite</td></tr>
+                <tr><td>Burn an existing <code>.iso</code></td><td>✅</td><td></td></tr>
+                <tr><td>Create <code>.iso</code> image files</td><td>✅</td><td>Validated against an independent reader (DiscUtils) in the test suite</td></tr>
                 <tr><td>Verify after burning</td><td>✅</td><td>Reads the disc back and compares SHA-256</td></tr>
                 <tr><td>Rip a data disc to <code>.iso</code> or <code>.bin</code> + <code>.cue</code></td><td>✅</td><td></td></tr>
-                <tr><td>Burn an audio CD (Disc-at-Once / Track-at-Once)</td><td>✅</td><td>From WAV, FLAC (including 24-bit and high sample rates), MP3 or M4A, a <code>.cue</code> sheet, or an <code>.m3u</code> / <code>.pls</code> playlist</td></tr>
-                <tr><td>Rip an audio CD to WAV or FLAC + <code>.cue</code></td><td>✅</td><td>AccurateRip check, drive read-offset detection, secure mode with C2 error pointers, optional MusicBrainz track names</td></tr>
-                <tr><td>Burn, verify or convert Nero, Alcohol 120% and CloneCD images</td><td>✅</td><td><code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; new in v1.09</td></tr>
-                <tr><td>Copy a disc (one or two drives, several copies)</td><td>⚠️</td><td>New in v1.09; tested on the virtual drive, real-drive reports welcome</td></tr>
-                <tr><td>Span a folder across several discs</td><td>✅</td><td>SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code></td></tr>
-                <tr><td>Append a session (multi-session)</td><td>✅</td><td></td></tr>
-                <tr><td>Bootable discs (BIOS + UEFI)</td><td>✅</td><td>Whether it boots depends on the boot loaders you supply</td></tr>
-                <tr><td>Erase rewritable discs; surface scan</td><td>✅</td><td>Quick or full erase</td></tr>
-                <tr><td>DVD-Video authoring</td><td>⚠️</td><td>Needs <code>ffmpeg.exe</code>; test on a standalone player before relying on it</td></tr>
-                <tr><td>Blu-ray (BD-R / BD-RE)</td><td>⚠️</td><td>Uses the same Windows burning service, but not yet tested on real Blu-ray media</td></tr>
-                <tr><td>CD-Text on burned audio CDs</td><td>❌</td><td>Windows' burning service cannot write it; titles are kept in <code>.cue</code> and project files</td></tr>
-                <tr><td>DVD+R book type (bitsetting)</td><td>❌</td><td>Needs drive-specific commands</td></tr>
-                <tr><td>Test write (simulation)</td><td>❌</td><td>Not offered by Windows' burning service</td></tr>
+                <tr><td>Burn an audio CD (Disc-at-Once / Track-at-Once)</td><td>✅</td><td>From WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; <code>.cue</code> sheets (per-track or single-file albums) and <code>.m3u</code>/<code>.m3u8</code>/<code>.pls</code> playlists; loudness leveling, crossfade, preview, printable jewel-case insert</td></tr>
+                <tr><td>Burn, verify or convert Nero, Alcohol 120% and CloneCD images</td><td>✅</td><td><code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; streamed, no size limit</td></tr>
+                <tr><td>Copy a disc (one or two drives, several copies)</td><td>⚠️</td><td>Swap prompts between copies; audio CDs copied track by track; real-drive reports welcome</td></tr>
+                <tr><td>Rip an audio CD to WAV or FLAC + <code>.cue</code></td><td>✅</td><td>Reads the real TOC and CD-Text; optional MusicBrainz track names</td></tr>
+                <tr><td>AccurateRip verification and read-offset correction</td><td>✅</td><td>Detects your drive's offset from a disc in the AccurateRip database</td></tr>
+                <tr><td>Secure audio ripping (C2 error pointers and re-reads)</td><td>✅</td><td>Flags suspect sectors; can be slow on badly scratched discs</td></tr>
+                <tr><td>Archive Studio: span folders across discs</td><td>✅</td><td>SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code></td></tr>
+                <tr><td>Quick or full erase of rewritable media</td><td>✅</td><td></td></tr>
+                <tr><td>Re-burn a used DVD+RW / DVD-RAM</td><td>✅</td><td>Asks before replacing the files on the disc (<code>--overwrite</code> on the command line); finalized CD-RW / sequential DVD-RW require <code>erase</code> first</td></tr>
+                <tr><td>Surface scan</td><td>✅</td><td>Per-track Full TOC (<code>0x02</code>) scan skips unrecorded multi-session gaps and auto-selects 2352B raw mode on audio tracks</td></tr>
+                <tr><td>Append a session (multi-session)</td><td>✅</td><td>Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions</td></tr>
+                <tr><td>Bootable discs (El Torito BIOS + UEFI)</td><td>✅</td><td>Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders</td></tr>
+                <tr><td>DVD-Video authoring</td><td>⚠️</td><td>Requires <code>ffmpeg.exe</code>; test on a standalone player before relying on it</td></tr>
+                <tr><td>Blu-ray (BD-R / BD-RE)</td><td>❌</td><td>Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first</td></tr>
+                <tr><td>CD-Text / ISRC on burned audio CDs</td><td>❌</td><td>IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and <code>.cue</code> files</td></tr>
+                <tr><td>DVD+R book type (bitsetting)</td><td>❌</td><td>Needs drive-vendor-specific commands; reports "not supported" instead of pretending</td></tr>
+                <tr><td>Test write (simulation)</td><td>❌</td><td>Not available through IMAPIv2</td></tr>
               </tbody>
+              <!-- SUPPORT-TABLE-END -->
             </table>
           </div>
           <div class="studio-footer">
@@ -235,7 +242,7 @@ PS C:\&gt; ignisdisc-cli.exe archive-verify --path H:\ --json</code></pre>
       <div class="footer-right">
         <a href="#download">Download</a>
         <a href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">GitHub (tether-works/IgnisDisc)</a>
-        <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">Security, Signing &amp; Privacy Policy</a>
+        <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">Security &amp; privacy</a>
         <a href="https://tetherworks.dev">More Projects</a>
       </div>
     </div>

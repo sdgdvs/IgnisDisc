@@ -1,3 +1,4 @@
+using System.Windows.Automation;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -36,6 +37,7 @@ public sealed class BurnTargetDialog : Window
         Width = 540;
         SizeToContent = SizeToContent.Height;
         WindowStartupLocation = Owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen;
+        System.Windows.Input.KeyboardNavigation.SetTabNavigation(this, System.Windows.Input.KeyboardNavigationMode.Cycle);
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
 
@@ -92,6 +94,7 @@ public sealed class BurnTargetDialog : Window
             FontWeight = FontWeights.SemiBold,
             Padding = new Thickness(10, 4, 10, 4)
         };
+        AutomationProperties.SetName(_driveCombo, "Burn To Optical Drive");
         _driveCombo.SelectionChanged += (_, _) => UpdateSelectedDriveDetails();
         Grid.SetColumn(_driveCombo, 0);
         driveRowGrid.Children.Add(_driveCombo);
@@ -104,6 +107,7 @@ public sealed class BurnTargetDialog : Window
             Margin = new Thickness(8, 0, 0, 0),
             ToolTip = "Re-scan optical drives and inserted disc status"
         };
+        AutomationProperties.SetName(refreshBtn, "Refresh optical drives");
         refreshBtn.Click += (_, _) => ReloadDrives( SelectedDrive );
         Grid.SetColumn(refreshBtn, 1);
         driveRowGrid.Children.Add(refreshBtn);
@@ -116,6 +120,7 @@ public sealed class BurnTargetDialog : Window
             Margin = new Thickness(6, 0, 0, 0),
             ToolTip = "Eject the selected drive tray"
         };
+        AutomationProperties.SetName(ejectBtn, "Eject selected drive tray");
         ejectBtn.Click += (_, _) =>
         {
             try
@@ -204,6 +209,7 @@ public sealed class BurnTargetDialog : Window
             IsCancel = true,
             Margin = new Thickness(0, 0, 10, 0)
         };
+        AutomationProperties.SetName(cancelBtn, "Cancel");
         cancelBtn.Click += (_, _) =>
         {
             ConfirmedRecorder = null;
@@ -222,6 +228,7 @@ public sealed class BurnTargetDialog : Window
             Background = TryFindBrush("AccentBrush", Color.FromRgb(255, 107, 53)),
             Foreground = TryFindBrush("AccentForegroundBrush", Colors.White)
         };
+        AutomationProperties.SetName(_burnButton, "Confirm and Start Burn");
         _burnButton.Click += (_, _) =>
         {
             if (SelectedDrive == null)

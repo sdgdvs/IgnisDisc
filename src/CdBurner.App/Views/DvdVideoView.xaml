@@ -61,6 +61,7 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            Margin="0,0,10,0" />
                 <TextBox Grid.Row="0" Grid.Column="1"
+                         AutomationProperties.Name="Source Movie(s) / Folder"
                          Text="{Binding VideoTsFolderPath, UpdateSourceTrigger=PropertyChanged}"
                          VerticalAlignment="Center"
                          Padding="8,6"
@@ -70,16 +71,19 @@
                          Margin="0,0,8,0" />
                 <Button Grid.Row="0" Grid.Column="2"
                         Content="🎬 Add Movie(s)..."
+                        AutomationProperties.Name="Add Movie(s)"
                         Command="{Binding AddMovieFilesCommand}"
                         VerticalAlignment="Center"
                         Margin="0,0,8,0" />
                 <Button Grid.Row="0" Grid.Column="3"
                         Content="📂 Browse Folder..."
+                        AutomationProperties.Name="Browse Folder"
                         Command="{Binding SelectVideoTsFolderCommand}"
                         VerticalAlignment="Center"
                         Margin="0,0,8,0" />
                 <Button Grid.Row="0" Grid.Column="4"
                         Content="🔍 Validate &amp; Plan Layout"
+                        AutomationProperties.Name="Validate &amp; Plan Layout"
                         Command="{Binding ValidateAndPlanLayoutCommand}"
                         Style="{StaticResource AccentButtonStyle}"
                         VerticalAlignment="Center" />
@@ -95,6 +99,7 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,8,0" />
                     <TextBox Width="130"
+                             AutomationProperties.Name="Volume Label"
                              Text="{Binding VolumeLabel, UpdateSourceTrigger=PropertyChanged}"
                              MaxLength="32"
                              Padding="6,4"
@@ -109,6 +114,7 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,8,0" />
                     <TextBox Width="160"
+                             AutomationProperties.Name="Menu Title"
                              Text="{Binding MenuTitle, UpdateSourceTrigger=PropertyChanged}"
                              Padding="6,4"
                              Background="{DynamicResource ControlBackgroundBrush}"
@@ -122,6 +128,7 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,8,0" />
                     <ComboBox Width="80"
+                              AutomationProperties.Name="Standard"
                               ItemsSource="{Binding AvailableStandards}"
                               SelectedItem="{Binding SelectedStandard}"
                               Margin="0,0,14,0" />
@@ -132,11 +139,13 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,8,0" />
                     <ComboBox Width="110"
+                              AutomationProperties.Name="Aspect Ratio"
                               ItemsSource="{Binding AvailableAspectRatios}"
                               SelectedItem="{Binding SelectedAspectRatio}"
                               Margin="0,0,14,0" />
 
                     <CheckBox Content="Auto Play Menu"
+                              AutomationProperties.Name="Auto Play Menu"
                               IsChecked="{Binding AutoCreatePlayMenu}"
                               VerticalAlignment="Center"
                               Foreground="{DynamicResource TextPrimaryBrush}"
@@ -228,6 +237,7 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    Margin="0,0,0,4" />
                         <ComboBox ItemsSource="{Binding CandidateLayerBreakLbas}"
+                                  AutomationProperties.Name="DVD-9 Layer Break (OTP)"
                                   SelectedItem="{Binding SelectedLayerBreakLba}"
                                   IsEnabled="{Binding IsDualLayerRequired}"
                                   ToolTip="16-sector aligned layer break transition address">
@@ -285,6 +295,7 @@
 
                 <!-- DataGrid -->
                 <DataGrid Grid.Row="1"
+                          AutomationProperties.Name="Physical Extent Map"
                           ItemsSource="{Binding ExtentLayoutRows}"
                           AutoGenerateColumns="False"
                           CanUserAddRows="False"
@@ -386,6 +397,7 @@
                                    Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
                     </Grid>
                     <ProgressBar Height="8"
+                                 AutomationProperties.Name="Burn Progress"
                                  Minimum="0"
                                  Maximum="100"
                                  Value="{Binding BurnProgress}"
@@ -401,6 +413,7 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,8,0" />
                     <ComboBox Width="250"
+                              AutomationProperties.Name="Burn To Optical Drive"
                               ItemsSource="{Binding AvailableRecorders}"
                               SelectedItem="{Binding SelectedRecorder}"
                               ToolTip="Select the optical drive to burn this DVD-Video disc to"
@@ -417,6 +430,7 @@
                     </ComboBox>
 
                     <Button Content="🛑 Cancel"
+                            AutomationProperties.Name="Cancel"
                             Command="{Binding CancelCommand}"
                             Background="#D83B01"
                             Foreground="White"
@@ -425,10 +439,12 @@
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
                             Margin="0,0,10,0" />
                     <Button Content="💾 Build DVD ISO..."
+                            AutomationProperties.Name="Build DVD ISO"
                             Command="{Binding BuildDvdIsoCommand}"
                             ToolTip="Build compliant DVD-Video ISO image with 32 KB ECC gap alignment"
                             Margin="0,0,10,0" />
                     <Button Content="🎬 Burn DVD-Video"
+                            AutomationProperties.Name="Burn DVD-Video"
                             Command="{Binding StartDvdBurnCommand}"
                             Style="{StaticResource AccentButtonStyle}"
                             ToolTip="Burn DVD-Video structure directly to selected optical recorder"

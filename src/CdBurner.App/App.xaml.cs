@@ -79,10 +79,22 @@ public partial class App : Application
             LogStartupIssue("Loading saved settings failed; defaults are in use", ex);
         }
 
+        // "Shut down" after burning: Windows' own shutdown.exe with a 60-second countdown that Windows announces and
+        // that `shutdown /a` cancels. Set only here, in the real app, so tests can never shut a machine down.
+        CdBurner.Core.Burning.PostBurnActionExecutor.DefaultShutdownInitiator = () =>
+        {
+            using var _ = System.Diagnostics.Process.Start(CdBurner.Core.Burning.PostBurnActionExecutor.CreateShutdownStartInfo());
+        };
+
         var mainWindow = Services.GetRequiredService<MainWindow>();
         MainWindow = mainWindow;
         mainWindow.Show();
         mainWindow.Activate();
+
+        if (mainVm.Settings.CheckForUpdatesOnStartup)
+        {
+            _ = mainVm.Settings.CheckForUpdatesOnStartupAsync();
+        }
 
         // Asynchronously enumerate any physical IMAPIv2 optical drives in the background after window is visible
         if (OperatingSystem.IsWindows())

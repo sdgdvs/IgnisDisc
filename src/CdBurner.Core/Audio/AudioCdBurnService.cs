@@ -272,6 +272,7 @@ public class AudioCdBurnService
             {
                 try { trk.PcmStream?.Dispose(); } catch { }
             }
+            compilation.ReleaseCachedAlbumBuffers();
         }
     }
 

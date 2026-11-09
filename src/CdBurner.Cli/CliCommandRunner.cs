@@ -163,6 +163,7 @@ public static class CliCommandRunner
             "verify" or "verify-disc" => await HandleVerifyAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "erase" or "erase-disc" => await HandleEraseAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "scan" or "scan-disc" => await HandleScanAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
+            "drive-report" or "drivereport" => HandleDriveReport(cmd, stdout, deviceService),
             _ => throw new CommandLineException($"Unknown command '{cmd.Subcommand}'. Use --help for usage information.")
         };
     }
@@ -200,6 +201,13 @@ public static class CliCommandRunner
                         canReadCd = canReadCd,
                         canReadDvd = canReadDvd,
                         supportedMediaTypes = caps.SupportedMediaTypes.Select(m => m.ToString()).ToList(),
+                        mmcFeatures = caps.MmcFeatureSummary,
+                        supportsNativeTao = caps.SupportsNativeTao,
+                        supportsNativeSao = caps.SupportsNativeSao,
+                        supportsNativeRawDao = caps.SupportsNativeRawDao,
+                        supportsTestWrite = caps.SupportsTestWrite,
+                        supportsBufferUnderrunFree = caps.SupportsBufferUnderrunFree,
+                        supportsLayerJump = caps.SupportsLayerJump,
                         supportedWriteSpeeds = caps.SupportedWriteSpeeds.Select(s => new
                         {
                             multiplier = s.Multiplier,
@@ -235,12 +243,37 @@ public static class CliCommandRunner
         return 0;
     }
 
+    private static int HandleDriveReport(CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService)
+    {
+        string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        var recorder = FindRecorder(deviceService, driveId);
+
+        var caps = recorder.GetCapabilities();
+        var media = recorder.WithManufacturerId(recorder.QueryMediaStatus());
+        string report = DriveCompatibilityReportBuilder.BuildMarkdownReport(recorder, caps, media);
+
+        if (cmd.IsJson)
+        {
+            var result = new
+            {
+                success = true,
+                driveId = recorder.UniqueId,
+                report = report
+            };
+            stdout.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            return 0;
+        }
+
+        stdout.WriteLine(report);
+        return 0;
+    }
+
     private static int HandleMediaInfo(CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService)
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
         var recorder = FindRecorder(deviceService, driveId);
 
-        var status = recorder.QueryMediaStatus();
+        var status = recorder.WithManufacturerId(recorder.QueryMediaStatus());
         var caps = recorder.GetCapabilities();
         // Overwrite-only media (DVD+RW, DVD-RAM) are never "finalized": each burn rewrites them from the start.
         bool isFinalized = status.MediaPresent && !status.IsBlank && !status.IsAppendable && !status.IsOverwriteOnly;
@@ -262,6 +295,8 @@ public static class CliCommandRunner
                 mediaPresent = status.MediaPresent,
                 mediaType = status.MediaType.ToString(),
                 mediaTypeName = status.MediaType.GetDisplayName(),
+                mediaManufacturerId = status.MediaManufacturerId,
+                mmcFeatures = caps.MmcFeatureSummary,
                 isBlank = status.IsBlank,
                 isRewritable = status.IsRewritable,
                 isAppendable = status.IsAppendable,
@@ -289,10 +324,18 @@ public static class CliCommandRunner
         }
 
         stdout.WriteLine($"Drive '{recorder.UniqueId}' ({recorder.VendorId} {recorder.ProductId}):");
+        if (caps.MmcFeatureSummary.Count > 0)
+        {
+            stdout.WriteLine($"  MMC Features:          {string.Join(", ", caps.MmcFeatureSummary)}");
+        }
         stdout.WriteLine($"  Media Present:         {(status.MediaPresent ? "Yes" : "No")}");
         if (status.MediaPresent)
         {
             stdout.WriteLine($"  Media Type:            {status.MediaType.GetDisplayName()}");
+            if (!string.IsNullOrWhiteSpace(status.MediaManufacturerId))
+            {
+                stdout.WriteLine($"  Media ID / ATIP:       {status.MediaManufacturerId}");
+            }
             stdout.WriteLine($"  Blank:                 {(status.IsBlank ? "Yes" : "No")}");
             stdout.WriteLine($"  Rewritable:            {(status.IsRewritable ? "Yes" : "No")}");
             stdout.WriteLine($"  Appendable:            {(status.IsAppendable ? "Yes" : "No")}");
@@ -1127,13 +1170,32 @@ public static class CliCommandRunner
             }
         }
 
+        string? coverPath = cmd.GetOption("cover") ?? cmd.GetOption("cover-art");
+        byte[]? coverBytes = null;
+        string? coverMime = null;
+        if (!string.IsNullOrWhiteSpace(coverPath))
+        {
+            if (!File.Exists(coverPath))
+            {
+                // Fail before ripping rather than silently producing FLACs without the requested cover.
+                throw new FileNotFoundException($"Cover image not found: '{coverPath}'.", coverPath);
+            }
+
+            coverBytes = await File.ReadAllBytesAsync(coverPath).ConfigureAwait(false);
+            coverMime = FlacEncoder.DetectImageMimeType(coverBytes)
+                ?? throw new InvalidDataException($"'{coverPath}' is not a JPEG, PNG, GIF or WebP image.");
+        }
+
         var options = new AudioRipOptions
         {
             ContinueOnUnreadableSector = cmd.HasFlag("continue-on-error"),
             TrackNumbersToRip = requestedTracks,
             MetadataOverride = metadataOverride,
             ReadOffsetSamples = readOffset,
-            SecureMode = cmd.HasFlag("secure")
+            SecureMode = cmd.HasFlag("secure"),
+            CalculateReplayGain = !cmd.HasFlag("no-replaygain"),
+            CoverArtBytes = coverBytes,
+            CoverArtMimeType = coverMime
         };
 
         var ripper = new AudioCdRipperService();
@@ -1229,6 +1291,11 @@ public static class CliCommandRunner
                     : albumPerformer;
                 string? isrc = info.Isrc;
 
+                string? trackGain = info.ReplayGainTrackGain.HasValue ? ReplayGainCalculator.FormatGainDb(info.ReplayGainTrackGain.Value) : null;
+                string? trackPeak = info.ReplayGainTrackPeak.HasValue ? ReplayGainCalculator.FormatPeak(info.ReplayGainTrackPeak.Value) : null;
+                string? albumGain = result.ReplayGainAlbumGain.HasValue ? ReplayGainCalculator.FormatGainDb(result.ReplayGainAlbumGain.Value) : null;
+                string? albumPeak = result.ReplayGainAlbumPeak.HasValue ? ReplayGainCalculator.FormatPeak(result.ReplayGainAlbumPeak.Value) : null;
+
                 var tags = new AudioTrackTags(
                     Title: trackTitle,
                     Artist: trackArtist,
@@ -1236,10 +1303,21 @@ public static class CliCommandRunner
                     TrackNumber: trackNumber,
                     TrackTotal: trackTotal,
                     Isrc: isrc,
-                    Date: null);
+                    Date: null,
+                    ReplayGainTrackGain: trackGain,
+                    ReplayGainTrackPeak: trackPeak,
+                    ReplayGainAlbumGain: albumGain,
+                    ReplayGainAlbumPeak: albumPeak,
+                    CoverArtBytes: options.CoverArtBytes,
+                    CoverArtMimeType: options.CoverArtMimeType);
 
                 string flacPath = Path.ChangeExtension(wavPath, ".flac");
                 await FlacEncoder.EncodeAsync(ffmpegPath!, wavPath, flacPath, tags).ConfigureAwait(false);
+
+                if (options.CoverArtBytes is { Length: > 0 })
+                {
+                    FlacEncoder.EmbedCoverArtAndReplayGain(flacPath, tags);
+                }
 
                 if (!cmd.HasFlag("keep-wav"))
                 {
@@ -1722,6 +1800,7 @@ public static class CliCommandRunner
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
         string? blockSizeStr = cmd.GetOption("block-size");
+        string? csvOutputPath = cmd.GetOption("csv") ?? cmd.GetOption("output");
 
         int blockSize = 256;
         if (!string.IsNullOrWhiteSpace(blockSizeStr) && int.TryParse(blockSizeStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bs) && bs > 0)
@@ -1735,6 +1814,13 @@ public static class CliCommandRunner
 
         var report = await scanService.ScanAsync(recorder, burnEngine, scanOptions).ConfigureAwait(false);
 
+        string? fullCsvPath = null;
+        if (!string.IsNullOrWhiteSpace(csvOutputPath))
+        {
+            fullCsvPath = Path.GetFullPath(csvOutputPath);
+            await report.ExportCsvAsync(fullCsvPath).ConfigureAwait(false);
+        }
+
         if (cmd.IsJson)
         {
             var jsonResult = new
@@ -1747,7 +1833,8 @@ public static class CliCommandRunner
                 damagedBlocks = report.DamagedBlocks,
                 minSpeedKbPerSec = report.MinSpeedKbPerSec,
                 maxSpeedKbPerSec = report.MaxSpeedKbPerSec,
-                averageSpeedKbPerSec = report.AverageSpeedKbPerSec
+                averageSpeedKbPerSec = report.AverageSpeedKbPerSec,
+                csvPath = fullCsvPath
             };
 
             stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
@@ -1762,6 +1849,10 @@ public static class CliCommandRunner
         stdout.WriteLine($"  Min Read Rate:      {report.MinSpeedKbPerSec:F1} KiB/s");
         stdout.WriteLine($"  Max Read Rate:      {report.MaxSpeedKbPerSec:F1} KiB/s");
         stdout.WriteLine($"  Average Read Rate:  {report.AverageSpeedKbPerSec:F1} KiB/s");
+        if (fullCsvPath != null)
+        {
+            stdout.WriteLine($"  CSV Export:         {fullCsvPath}");
+        }
 
         return report.DamagedBlocks == 0 ? 0 : 1;
     }
@@ -1892,6 +1983,8 @@ public static class CliCommandRunner
         stdout.WriteLine("Supported Commands:");
         stdout.WriteLine("  drives [--json]");
         stdout.WriteLine("      Lists physical and virtual optical drives and capabilities.");
+        stdout.WriteLine("  drive-report --drive <id> [--json]");
+        stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
         stdout.WriteLine("  media-info --drive <id> [--json]");
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
         stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--json]");
@@ -1918,7 +2011,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
         stdout.WriteLine("  erase --drive <id> [--full] [--json]");
         stdout.WriteLine("      Erases rewritable optical media (CD-RW, DVD-RW, DVD+RW, DVD-RAM).");
-        stdout.WriteLine("  scan --drive <id> [--block-size <sectors>] [--json]");
+        stdout.WriteLine("  scan --drive <id> [--block-size <sectors>] [--csv <file.csv>] [--json]");
         stdout.WriteLine("      Scans optical disc surface and benchmarks transfer rate curve.");
         stdout.WriteLine();
         stdout.WriteLine("General Options:");
@@ -1929,11 +2022,19 @@ public static class CliCommandRunner
 
     private static void PrintSubcommandHelp(string? subcommand, TextWriter stdout)
     {
+        if (string.Equals(subcommand, "drive-report", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(subcommand, "drivereport", StringComparison.OrdinalIgnoreCase))
+        {
+            stdout.WriteLine("  drive-report --drive <id> [--json]");
+            stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
+            return;
+        }
         if (string.Equals(subcommand, "rip-audio", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subcommand, "ripaudio", StringComparison.OrdinalIgnoreCase))
         {
-            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--secure] [--json]");
+            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--secure] [--cover <image>] [--no-replaygain] [--json]");
             stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+            stdout.WriteLine("      FLAC files get ReplayGain 2.0 tags (unless --no-replaygain) and, with --cover, embedded front cover art.");
             return;
         }
 

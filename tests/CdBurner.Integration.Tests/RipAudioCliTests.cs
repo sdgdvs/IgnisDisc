@@ -46,7 +46,7 @@ public sealed class RipAudioCliTests : IAsyncLifetime, IDisposable
 
     public async Task InitializeAsync()
     {
-        // 1. Generate 3 synthetic sine-wave PCM streams (matching Phase 15 first test)
+        // 1. Generate 3 synthetic sine-wave PCM streams (as in the audio burn tests)
         // Track 1: 440 Hz, 50 frames
         // Track 2: 880 Hz, 75 frames
         // Track 3: 1760 Hz, 100 frames

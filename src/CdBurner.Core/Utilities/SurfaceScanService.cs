@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
 
@@ -43,7 +45,7 @@ public sealed record SurfaceScanBlockResult(
     TimeSpan Elapsed);
 
 /// <summary>
-/// Comprehensive summary report of an optical disc surface scan and transfer benchmark.
+/// Summary report of an optical disc surface scan and transfer benchmark.
 /// </summary>
 /// <param name="TotalSectorsScanned">Total number of logical sectors tested across all blocks.</param>
 /// <param name="GoodBlocks">Number of blocks classified as healthy (<see cref="SectorHealthStatus.Good"/>).</param>
@@ -61,7 +63,51 @@ public sealed record SurfaceScanReport(
     double MinSpeedKbPerSec,
     double MaxSpeedKbPerSec,
     double AverageSpeedKbPerSec,
-    IReadOnlyList<SurfaceScanBlockResult> Blocks);
+    IReadOnlyList<SurfaceScanBlockResult> Blocks)
+{
+    /// <summary>
+    /// Serializes the block-by-block LBA transfer rate and health results to standard CSV format.
+    /// </summary>
+    public string ToCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("BlockIndex,StartLba,EndLba,SectorCount,Status,ReadSpeedKiBPerSec,ReadSpeedMultiplierX,ElapsedMs");
+        if (Blocks != null)
+        {
+            for (int i = 0; i < Blocks.Count; i++)
+            {
+                var b = Blocks[i];
+                int endLba = b.SectorCount > 0 ? b.StartLba + b.SectorCount - 1 : b.StartLba;
+                sb.Append(i.ToString(CultureInfo.InvariantCulture)).Append(',')
+                  .Append(b.StartLba.ToString(CultureInfo.InvariantCulture)).Append(',')
+                  .Append(endLba.ToString(CultureInfo.InvariantCulture)).Append(',')
+                  .Append(b.SectorCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+                  .Append(b.Status).Append(',')
+                  .Append(b.ReadSpeedKilobytesPerSec.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(b.ReadSpeedMultiplierX.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(b.Elapsed.TotalMilliseconds.ToString("F3", CultureInfo.InvariantCulture))
+                  .AppendLine();
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Writes the CSV transfer rate and sector health table to a file on disk.
+    /// </summary>
+    public async Task ExportCsvAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        string? dir = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        if (!string.IsNullOrEmpty(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        await File.WriteAllTextAsync(filePath, ToCsv(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken)
+            .ConfigureAwait(false);
+    }
+}
 
 /// <summary>
 /// Configuration parameters for an optical surface scan and read benchmark.

@@ -60,6 +60,7 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    FontWeight="SemiBold" />
                         <TextBox Grid.Column="1"
+                                 AutomationProperties.Name="Source Folder"
                                  Text="{Binding SourceFolder, UpdateSourceTrigger=PropertyChanged}"
                                  VerticalAlignment="Center"
                                  Padding="6,4"
@@ -68,6 +69,7 @@
                                  BorderBrush="{DynamicResource ControlBorderBrush}" />
                         <Button Grid.Column="2"
                                 Content="Browse..."
+                                AutomationProperties.Name="Browse Source Folder"
                                 Command="{Binding BrowseSourceCommand}"
                                 Margin="8,0,0,0"
                                 Padding="12,4" />
@@ -91,6 +93,7 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    FontWeight="SemiBold" />
                         <ComboBox Grid.Column="1"
+                                  AutomationProperties.Name="Media Type"
                                   ItemsSource="{Binding MediaOptions}"
                                   SelectedItem="{Binding SelectedMedia}"
                                   DisplayMemberPath="Name"
@@ -104,6 +107,7 @@
                                    FontWeight="SemiBold"
                                    Margin="0,0,10,0" />
                         <Slider Grid.Column="4"
+                                AutomationProperties.Name="Recovery Data Redundancy"
                                 Minimum="0"
                                 Maximum="30"
                                 Value="{Binding RedundancyPercent}"
@@ -142,6 +146,7 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    FontWeight="SemiBold" />
                         <TextBox Grid.Column="1"
+                                 AutomationProperties.Name="Staging Folder"
                                  Text="{Binding StagingFolder, UpdateSourceTrigger=PropertyChanged}"
                                  VerticalAlignment="Center"
                                  Padding="6,4"
@@ -150,6 +155,7 @@
                                  BorderBrush="{DynamicResource ControlBorderBrush}" />
                         <Button Grid.Column="2"
                                 Content="Browse..."
+                                AutomationProperties.Name="Browse Staging Folder"
                                 Command="{Binding BrowseStagingCommand}"
                                 Margin="8,0,0,0"
                                 Padding="12,4" />
@@ -165,12 +171,14 @@
 
                         <Button Grid.Column="0"
                                 Content="📋 Plan"
+                                AutomationProperties.Name="Plan"
                                 Command="{Binding PlanCommand}"
                                 Padding="16,6"
                                 Margin="0,0,10,0"
                                 FontWeight="SemiBold" />
                         <Button Grid.Column="1"
                                 Content="📦 Stage discs"
+                                AutomationProperties.Name="Stage discs"
                                 Command="{Binding StageCommand}"
                                 Style="{StaticResource AccentButtonStyle}"
                                 Padding="16,6"
@@ -223,6 +231,7 @@
                                    Margin="0,0,8,0" />
 
                         <ComboBox Grid.Column="2"
+                                  AutomationProperties.Name="Target Burner Drive"
                                   ItemsSource="{Binding AvailableRecorders}"
                                   SelectedItem="{Binding SelectedRecorder}"
                                   VerticalAlignment="Center">
@@ -238,6 +247,7 @@
 
                         <CheckBox Grid.Column="3"
                                   Content="Verify after burning"
+                                  AutomationProperties.Name="Verify after burning"
                                   IsChecked="{Binding VerifyAfterBurn}"
                                   VerticalAlignment="Center"
                                   Margin="16,0,0,0" />
@@ -290,6 +300,7 @@
 
                                                 <Button Grid.Column="1"
                                                         Content="🔥 Burn"
+                                                        AutomationProperties.Name="Burn Disc"
                                                         Command="{Binding DataContext.BurnDiscCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                         CommandParameter="{Binding}"
                                                         Padding="14,4"
@@ -337,6 +348,7 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    FontWeight="SemiBold" />
                         <TextBox Grid.Column="1"
+                                 AutomationProperties.Name="Verify Path"
                                  Text="{Binding VerifyPath, UpdateSourceTrigger=PropertyChanged}"
                                  VerticalAlignment="Center"
                                  Padding="6,4"
@@ -345,17 +357,20 @@
                                  BorderBrush="{DynamicResource ControlBorderBrush}" />
                         <Button Grid.Column="2"
                                 Content="Browse..."
+                                AutomationProperties.Name="Browse Verify Path"
                                 Command="{Binding BrowseVerifyFolderCommand}"
                                 Margin="8,0,0,0"
                                 Padding="12,4" />
                         <Button Grid.Column="3"
                                 Content="✔ Verify folder"
+                                AutomationProperties.Name="Verify folder"
                                 Command="{Binding VerifyCommand}"
                                 Style="{StaticResource AccentButtonStyle}"
                                 Margin="8,0,0,0"
                                 Padding="12,4" />
                         <Button Grid.Column="4"
                                 Content="💿 Verify disc in drive"
+                                AutomationProperties.Name="Verify disc in drive"
                                 Command="{Binding VerifyDriveCommand}"
                                 Margin="8,0,0,0"
                                 Padding="12,4" />
@@ -377,6 +392,7 @@
 
                         <Button Grid.Column="1"
                                 Content="🛠 Repair"
+                                AutomationProperties.Name="Repair"
                                 Command="{Binding RepairCommand}"
                                 Visibility="{Binding CanRepair, Converter={StaticResource BoolToVis}}"
                                 ToolTip="Repairs a copied folder using its PAR2 recovery data. Discs are read-only: copy the disc to a folder first."
@@ -393,6 +409,7 @@
                             MinHeight="60"
                             MaxHeight="140">
                         <ListBox ItemsSource="{Binding VerificationProblems}"
+                                 AutomationProperties.Name="Verification Problems"
                                  FontFamily="Consolas, Courier New, monospace"
                                  FontSize="12"
                                  Background="Transparent"
@@ -427,6 +444,7 @@
                                Margin="0,0,16,0" />
 
                     <ProgressBar Grid.Column="1"
+                                 AutomationProperties.Name="Archive Progress"
                                  Minimum="0"
                                  Maximum="100"
                                  Value="{Binding Progress}"
@@ -437,6 +455,7 @@
 
                     <Button Grid.Column="2"
                             Content="🛑 Cancel"
+                            AutomationProperties.Name="Cancel"
                             Command="{Binding CancelCommand}"
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
                             Padding="12,4" />

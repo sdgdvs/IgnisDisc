@@ -18,7 +18,7 @@
     </UserControl.Resources>
 
     <Grid Margin="16">
-        <TabControl Background="Transparent" BorderThickness="0">
+        <TabControl KeyboardNavigation.TabNavigation="Local" Background="Transparent" BorderThickness="0">
             <!-- ========================================================================= -->
             <!-- TAB 1: AUDIO CD MASTERING STUDIO                                         -->
             <!-- ========================================================================= -->
@@ -66,6 +66,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,8,0" />
                             <TextBox Grid.Row="0" Grid.Column="1"
+                                     AutomationProperties.Name="Album Title"
                                      Text="{Binding AlbumTitle, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="6,4"
                                      Background="{DynamicResource ControlBackgroundBrush}"
@@ -80,6 +81,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,8,0" />
                             <TextBox Grid.Row="0" Grid.Column="4"
+                                     AutomationProperties.Name="Performer"
                                      Text="{Binding AlbumPerformer, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="6,4"
                                      Background="{DynamicResource ControlBackgroundBrush}"
@@ -96,6 +98,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <TextBox Width="150"
+                                         AutomationProperties.Name="Album Songwriter"
                                          Text="{Binding AlbumSongwriter, UpdateSourceTrigger=PropertyChanged}"
                                          Padding="6,4"
                                          Background="{DynamicResource ControlBackgroundBrush}"
@@ -108,6 +111,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <TextBox Width="120"
+                                         AutomationProperties.Name="UPC/EAN"
                                          Text="{Binding UpcEanCode, UpdateSourceTrigger=PropertyChanged}"
                                          MaxLength="13"
                                          Padding="6,4"
@@ -127,23 +131,27 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <RadioButton Content="Gapless DAO"
+                                             AutomationProperties.Name="Gapless DAO"
                                              IsChecked="{Binding RecordingMode, Converter={StaticResource RecordingModeConverter}, ConverterParameter=DiscAtOnceGapless}"
-                                             ToolTip="Disc-at-Once: seamless continuous gapless audio"
+                                             ToolTip="Disc-at-Once: the whole disc in one pass, with no forced 2-second gaps"
                                              VerticalAlignment="Center"
                                              Margin="0,0,10,0" />
                                 <RadioButton Content="TAO"
+                                             AutomationProperties.Name="TAO"
                                              IsChecked="{Binding RecordingMode, Converter={StaticResource RecordingModeConverter}, ConverterParameter=TrackAtOnce}"
                                              ToolTip="Track-at-Once: 2-second link blocks between tracks"
                                              VerticalAlignment="Center"
                                              Margin="0,0,16,0" />
 
                                 <CheckBox Content="Normalize Peaks"
+                                          AutomationProperties.Name="Normalize Peaks"
                                           IsChecked="{Binding NormalizeAllTracks}"
                                           ToolTip="Apply -0.1 dBFS peak normalization across all audio tracks"
                                           VerticalAlignment="Center"
                                           Margin="0,0,12,0" />
 
                                 <CheckBox Content="Level Loudness (RMS)"
+                                          AutomationProperties.Name="Level Loudness (RMS)"
                                           IsChecked="{Binding UseRmsLoudnessLeveling}"
                                           ToolTip="ReplayGain / EBU-style perceptual RMS loudness leveling (-14 dBFS) across all tracks"
                                           VerticalAlignment="Center"
@@ -154,6 +162,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,6,0" />
                                 <TextBox Width="42"
+                                         AutomationProperties.Name="Crossfade (s)"
                                          Text="{Binding CrossfadeSeconds, UpdateSourceTrigger=PropertyChanged}"
                                          Padding="4,2"
                                          TextAlignment="Center"
@@ -198,6 +207,7 @@
 
                             <ProgressBar Grid.Row="1"
                                          Height="8"
+                                         AutomationProperties.Name="Disc Usage"
                                          Minimum="0"
                                          Maximum="100"
                                          Value="{Binding DiscUsagePercent, Mode=OneWay}"
@@ -220,35 +230,43 @@
 
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
                                 <Button Content="🎵+ Add Audio / FLAC / CUE / Playlist..."
+                                        AutomationProperties.Name="Add Audio / FLAC / CUE / Playlist"
                                         Command="{Binding AddAudioFilesCommand}"
                                         ToolTip="Add FLAC, WAV, MP3, M4A/AAC, OGG, WMA, CUE sheets, or M3U/M3U8/PLS playlists"
                                         Margin="0,0,6,0" />
                                 <Button Content="▶️ Preview"
+                                        AutomationProperties.Name="Preview"
                                         Command="{Binding PreviewSelectedTrackCommand}"
                                         ToolTip="Listen to a Red Book preview of the selected track"
                                         Margin="0,0,4,0" />
                                 <Button Content="⏹️ Stop"
+                                        AutomationProperties.Name="Stop Preview"
                                         Command="{Binding StopPreviewCommand}"
                                         Visibility="{Binding IsPreviewPlaying, Converter={StaticResource BoolToVis}}"
                                         ToolTip="Stop audio preview playback"
                                         Margin="0,0,8,0" />
                                 <Button Content="❌ Remove"
+                                        AutomationProperties.Name="Remove"
                                         Command="{Binding RemoveTrackCommand}"
                                         ToolTip="Remove selected audio track"
                                         Margin="0,0,6,0" />
                                 <Button Content="🗑️ Clear All"
+                                        AutomationProperties.Name="Clear All"
                                         Command="{Binding ClearAllTracksCommand}"
                                         ToolTip="Remove all tracks from compilation"
                                         Margin="0,0,10,0" />
                                 <Button Content="⬆️"
+                                        AutomationProperties.Name="Move Track Up"
                                         Command="{Binding MoveTrackUpCommand}"
                                         ToolTip="Move selected track earlier in sequence"
                                         Margin="0,0,4,0" />
                                 <Button Content="⬇️"
+                                        AutomationProperties.Name="Move Track Down"
                                         Command="{Binding MoveTrackDownCommand}"
                                         ToolTip="Move selected track later in sequence"
                                         Margin="0,0,10,0" />
                                 <Button Content="🖨️ Export Cover &amp; Tracklist..."
+                                        AutomationProperties.Name="Export Cover &amp; Tracklist"
                                         Command="{Binding ExportCoverSheetCommand}"
                                         ToolTip="Generate a printable 120mm x 120mm CD Jewel Case Front Booklet, 150mm x 118mm Rear Tray Inlay, and Track Sheet" />
                             </StackPanel>
@@ -270,6 +288,7 @@
                             BorderThickness="1">
                         <Grid>
                             <DataGrid ItemsSource="{Binding Tracks}"
+                                      AutomationProperties.Name="Audio Tracks"
                                       SelectedItem="{Binding SelectedTrack}"
                                       AllowDrop="True"
                                       PreviewDragOver="OnPreviewDragOver"
@@ -358,6 +377,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <ProgressBar Height="6"
+                                             AutomationProperties.Name="Burn Progress"
                                              Minimum="0"
                                              Maximum="100"
                                              Value="{Binding BurnProgress}"
@@ -372,6 +392,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <ComboBox Width="260"
+                                          AutomationProperties.Name="Burn To Optical Drive"
                                           ItemsSource="{Binding AvailableRecorders}"
                                           SelectedItem="{Binding SelectedRecorder}"
                                           ToolTip="Select the optical drive to burn this Audio CD to">
@@ -389,6 +410,7 @@
 
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="🛑 Cancel Burn"
+                                        AutomationProperties.Name="Cancel Burn"
                                         Command="{Binding CancelBurnCommand}"
                                         Background="#D83B01"
                                         Foreground="White"
@@ -399,6 +421,7 @@
                                         FontSize="14"
                                         Margin="0,0,8,0" />
                                 <Button Content="🔥 Burn Audio CD"
+                                        AutomationProperties.Name="Burn Audio CD"
                                         Command="{Binding StartAudioBurnCommand}"
                                         Style="{StaticResource AccentButtonStyle}"
                                         Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"
@@ -445,6 +468,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,10,0" />
                             <TextBox Grid.Column="1"
+                                     AutomationProperties.Name="Output Folder"
                                      Text="{Binding RipOutputFolder, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="8,6"
                                      Background="{DynamicResource ControlBackgroundBrush}"
@@ -453,6 +477,7 @@
                                      Margin="0,0,8,0" />
                             <Button Grid.Column="2"
                                     Content="📂 Browse..."
+                                    AutomationProperties.Name="Browse Output Folder"
                                     Command="{Binding BrowseRipOutputFolderCommand}"
                                     VerticalAlignment="Center" />
                         </Grid>
@@ -483,6 +508,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,10,0" />
                                 <TextBox Grid.Column="1"
+                                         AutomationProperties.Name="Read offset (samples)"
                                          Text="{Binding ReadOffsetSamples, UpdateSourceTrigger=PropertyChanged}"
                                          Padding="8,6"
                                          Background="{DynamicResource ControlBackgroundBrush}"
@@ -492,6 +518,7 @@
                                          ToolTip="Drive read offset correction in samples (-10000 to +10000) for sample-accurate ripping" />
                                 <Button Grid.Column="2"
                                         Content="🔎 Detect"
+                                        AutomationProperties.Name="Detect Read Offset"
                                         Command="{Binding DetectReadOffsetCommand}"
                                         VerticalAlignment="Center"
                                         ToolTip="Detect drive read offset using an inserted commercial Audio CD against AccurateRip" />
@@ -500,21 +527,25 @@
                             <!-- CheckBoxes -->
                             <WrapPanel Orientation="Horizontal">
                                 <CheckBox Content="Secure rip (C2 re-reads)"
+                                          AutomationProperties.Name="Secure rip (C2 re-reads)"
                                           IsChecked="{Binding SecureRip}"
                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                           Margin="0,2,20,2"
                                           ToolTip="Use C2 error pointers to verify audio sectors and re-read corrupted samples." />
                                 <CheckBox Content="Look up track names (MusicBrainz)"
+                                          AutomationProperties.Name="Look up track names (MusicBrainz)"
                                           IsChecked="{Binding LookupMetadata}"
                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                           Margin="0,2,20,2"
                                           ToolTip="Fetch album and track titles from MusicBrainz before ripping." />
                                 <CheckBox Content="Verify with AccurateRip"
+                                          AutomationProperties.Name="Verify with AccurateRip"
                                           IsChecked="{Binding VerifyAccurateRip}"
                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                           Margin="0,2,20,2"
                                           ToolTip="Cross-reference extracted track checksums with the online AccurateRip database." />
                                 <CheckBox Content="Continue past unreadable sectors"
+                                          AutomationProperties.Name="Continue past unreadable sectors"
                                           IsChecked="{Binding ContinueOnUnreadable}"
                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                           Margin="0,2,0,2"
@@ -574,6 +605,7 @@
                                     </Style>
                                 </ScrollViewer.Style>
                                 <TextBox Text="{Binding RipReport, Mode=OneWay}"
+                                         AutomationProperties.Name="Rip Report"
                                          IsReadOnly="True"
                                          TextWrapping="Wrap"
                                          FontFamily="Consolas"
@@ -606,6 +638,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <ProgressBar Height="6"
+                                             AutomationProperties.Name="Rip Progress"
                                              Minimum="0"
                                              Maximum="100"
                                              Value="{Binding BurnProgress}"
@@ -620,6 +653,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <ComboBox Width="260"
+                                          AutomationProperties.Name="Rip From Optical Drive"
                                           ItemsSource="{Binding AvailableRecorders}"
                                           SelectedItem="{Binding SelectedRecorder}"
                                           ToolTip="Select the optical drive containing the Audio CD to rip">
@@ -637,6 +671,7 @@
 
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="🛑 Cancel Rip"
+                                        AutomationProperties.Name="Cancel Rip"
                                         Command="{Binding CancelBurnCommand}"
                                         Background="#D83B01"
                                         Foreground="White"
@@ -647,6 +682,7 @@
                                         FontSize="14"
                                         Margin="0,0,8,0" />
                                 <Button Content="💿 Rip Audio CD"
+                                        AutomationProperties.Name="Rip Audio CD"
                                         Command="{Binding RipAudioCdCommand}"
                                         Style="{StaticResource AccentButtonStyle}"
                                         Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"

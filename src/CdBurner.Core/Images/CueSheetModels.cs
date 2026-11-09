@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using CdBurner.Core.Primitives;
 
 namespace CdBurner.Core.Images;
@@ -37,6 +38,11 @@ public record CueTrack(
 {
     public IReadOnlyList<string> Flags { get; init; } = Flags ?? Array.Empty<string>();
     public IReadOnlyList<CueIndex> Indices { get; init; } = Indices ?? Array.Empty<CueIndex>();
+
+    /// <summary>
+    /// Indicates whether this track contains Red Book CD-DA audio (true) or Yellow Book / XA data (false).
+    /// </summary>
+    public bool IsAudio => DataType == CueTrackDataType.Audio;
 
     public virtual bool Equals(CueTrack? other)
     {
@@ -113,6 +119,16 @@ public record CueSheet(
 {
     public IReadOnlyList<CueFileEntry> Files { get; init; } = Files ?? Array.Empty<CueFileEntry>();
     public IReadOnlyDictionary<string, string> Remarks { get; init; } = Remarks ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Flattens all tracks across all file entries in this CUE sheet in sequential disc order.
+    /// </summary>
+    public IReadOnlyList<CueTrack> Tracks => Files.SelectMany(f => f.Tracks).ToList();
+
+    /// <summary>
+    /// Indicates whether this CUE sheet represents a Mixed-Mode or Enhanced CD (carrying both audio and data tracks).
+    /// </summary>
+    public bool IsMixedMode => Tracks.Any(t => t.IsAudio) && Tracks.Any(t => !t.IsAudio);
 
     public virtual bool Equals(CueSheet? other)
     {

@@ -55,6 +55,21 @@ public class AudioRipOptions
     /// false, when the engine or drive does not support C2 error pointers.
     /// </summary>
     public bool SecureMode { get; set; }
+
+    /// <summary>
+    /// Whether to calculate track and album ReplayGain tags during ripping. Default is true.
+    /// </summary>
+    public bool CalculateReplayGain { get; init; } = true;
+
+    /// <summary>
+    /// Optional front cover art image bytes to embed into ripped FLAC files.
+    /// </summary>
+    public byte[]? CoverArtBytes { get; init; }
+
+    /// <summary>
+    /// Optional MIME type of the cover art image (e.g. "image/jpeg", "image/png"). Default is "image/jpeg".
+    /// </summary>
+    public string? CoverArtMimeType { get; init; }
 }
 
 /// <summary>
@@ -79,7 +94,9 @@ public sealed record AudioTrackRipInfo(
     int SuspectSectors = 0,
     string Title = "",
     string Performer = "",
-    string? Isrc = null);
+    string? Isrc = null,
+    double? ReplayGainTrackGain = null,
+    double? ReplayGainTrackPeak = null);
 
 /// <summary>
 /// Discovered audio track descriptor extracted from optical medium TOC or session metadata.
@@ -119,6 +136,12 @@ public class AudioCdRipResult
     /// <summary>True if the rip used C2-based secure extraction (requested and supported by the drive).</summary>
     public bool SecureModeUsed { get; init; }
 
+    /// <summary>Calculated album ReplayGain in dB, if requested.</summary>
+    public double? ReplayGainAlbumGain { get; init; }
+
+    /// <summary>Calculated album peak amplitude (0.0 to 1.0), if requested.</summary>
+    public double? ReplayGainAlbumPeak { get; init; }
+
     public static AudioCdRipResult Succeeded(
         IReadOnlyList<string> filePaths,
         int totalSectors,
@@ -127,7 +150,9 @@ public class AudioCdRipResult
         CdTextAlbumMetadata? cdText = null,
         IReadOnlyList<AudioTrackRipInfo>? trackInfos = null,
         IReadOnlyList<int>? badSectorLbas = null,
-        bool secureModeUsed = false) => new()
+        bool secureModeUsed = false,
+        double? replayGainAlbumGain = null,
+        double? replayGainAlbumPeak = null) => new()
     {
         SecureModeUsed = secureModeUsed,
         Success = true,
@@ -138,7 +163,9 @@ public class AudioCdRipResult
         CueSheetPath = cueSheetPath,
         CdText = cdText,
         TrackInfos = trackInfos ?? Array.Empty<AudioTrackRipInfo>(),
-        BadSectorLbas = badSectorLbas ?? Array.Empty<int>()
+        BadSectorLbas = badSectorLbas ?? Array.Empty<int>(),
+        ReplayGainAlbumGain = replayGainAlbumGain,
+        ReplayGainAlbumPeak = replayGainAlbumPeak
     };
 
     public static AudioCdRipResult Failed(string error, Exception? ex = null) => new()
@@ -419,6 +446,7 @@ public class AudioCdRipperService
         var sw = Stopwatch.StartNew();
         var rippedFilePaths = new List<string>(tracksToRip.Count);
         var trackInfos = new List<AudioTrackRipInfo>(tracksToRip.Count);
+        var replayGainResults = new List<ReplayGainResult>(tracksToRip.Count);
         var badSectorLbas = new List<int>();
         int totalSectorsRead = 0;
 
@@ -593,6 +621,24 @@ public class AudioCdRipperService
             }
 
             rippedFilePaths.Add(targetWavPath);
+
+            double? trackGain = null;
+            double? trackPeak = null;
+            if (options.CalculateReplayGain && File.Exists(targetWavPath))
+            {
+                try
+                {
+                    using var s = new FileStream(targetWavPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    var rg = ReplayGainCalculator.CalculateTrackReplayGain(s);
+                    trackGain = rg.GainDb;
+                    trackPeak = rg.PeakAmplitude;
+                    replayGainResults.Add(rg);
+                }
+                catch
+                {
+                }
+            }
+
             trackInfos.Add(new AudioTrackRipInfo(
                 track.TrackNumber,
                 targetWavPath,
@@ -605,8 +651,22 @@ public class AudioCdRipperService
                 trackSuspect,
                 track.Title,
                 track.Performer,
-                track.Isrc));
+                track.Isrc,
+                trackGain,
+                trackPeak));
             totalSectorsRead += track.SectorCount;
+        }
+
+        // Calculate album ReplayGain across all ripped tracks
+        double? albumGain = null;
+        double? albumPeak = null;
+        // Album gain gates the 400 ms blocks of every ripped track together (ReplayGain 2.0), so only compute it
+        // when every track was measured; a partial album would give a wrong album value.
+        if (options.CalculateReplayGain && replayGainResults.Count > 0 && replayGainResults.Count == trackInfos.Count)
+        {
+            var albumResult = ReplayGainCalculator.CalculateAlbumReplayGain(replayGainResults);
+            albumGain = albumResult.AlbumGainDb;
+            albumPeak = albumResult.AlbumPeakAmplitude;
         }
 
         // Generate companion CUE sheet
@@ -649,6 +709,16 @@ public class AudioCdRipperService
         }
 
         sw.Stop();
-        return AudioCdRipResult.Succeeded(rippedFilePaths, totalSectorsRead, sw.Elapsed, cueSheetPath, cdText, trackInfos, badSectorLbas, secureReader != null);
+        return AudioCdRipResult.Succeeded(
+            rippedFilePaths,
+            totalSectorsRead,
+            sw.Elapsed,
+            cueSheetPath,
+            cdText,
+            trackInfos,
+            badSectorLbas,
+            secureReader != null,
+            albumGain,
+            albumPeak);
     }
 }

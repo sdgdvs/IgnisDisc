@@ -12,8 +12,7 @@
     <Title>IgnisDisc Optical Studio Setup</Title>
     <RootNamespace>CdBurner.Setup</RootNamespace>
     <UseWPF>true</UseWPF>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <ApplicationIcon>IgnisDisc.ico</ApplicationIcon>
     <DebugType>embedded</DebugType>
   </PropertyGroup>

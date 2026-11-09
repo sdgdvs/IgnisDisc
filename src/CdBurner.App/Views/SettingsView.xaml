@@ -23,7 +23,9 @@
                 <RowDefinition Height="Auto" />
                 <!-- Row 2: Appearance & System Card -->
                 <RowDefinition Height="Auto" />
-                <!-- Row 3: Action Buttons Footer -->
+                <!-- Row 3: Updates & Network Card -->
+                <RowDefinition Height="Auto" />
+                <!-- Row 4: Action Buttons Footer -->
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
@@ -57,6 +59,7 @@
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                         <ComboBox Grid.Column="1"
+                                  AutomationProperties.Name="Default Target Optical Drive"
                                   ItemsSource="{Binding AvailableRecorders}"
                                   SelectedItem="{Binding SelectedRecorder}">
                             <ComboBox.ItemTemplate>
@@ -83,6 +86,7 @@
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                         <ComboBox Grid.Column="1"
+                                  AutomationProperties.Name="Default Write Speed Multiplier"
                                   ItemsSource="{Binding AvailableSpeeds}"
                                   SelectedItem="{Binding DefaultWriteSpeedMultiplier}" />
                         <TextBlock Grid.Column="2"
@@ -94,16 +98,19 @@
 
                     <!-- Verify After Burn -->
                     <CheckBox Content="Automatically verify media after burn completion"
+                              AutomationProperties.Name="Automatically verify media after burn completion"
                               IsChecked="{Binding VerifyAfterBurnByDefault}"
                               Margin="0,0,0,8" />
 
                     <!-- Eject After Burn -->
                     <CheckBox Content="Eject optical drive tray when burn completes"
+                              AutomationProperties.Name="Eject optical drive tray when burn completes"
                               IsChecked="{Binding EjectAfterBurnByDefault}"
                               Margin="0,0,0,8" />
 
                     <!-- Buffer Underrun Protection -->
                     <CheckBox Content="Enable buffer underrun protection (BURN-Proof / Burn-Free)"
+                              AutomationProperties.Name="Enable buffer underrun protection (BURN-Proof / Burn-Free)"
                               IsChecked="{Binding EnableBurnFreeByDefault}" />
                 </StackPanel>
             </Border>
@@ -129,7 +136,8 @@
                     <TextBlock Text="Temporary Scratch / ISO Staging Directory:"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,0,4" />
-                    <TextBox Text="{Binding TempStagingDirectory, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox AutomationProperties.Name="Temporary Scratch / ISO Staging Directory"
+                             Text="{Binding TempStagingDirectory, UpdateSourceTrigger=PropertyChanged}"
                              Padding="8,5"
                              Background="{DynamicResource ControlBackgroundBrush}"
                              Foreground="{DynamicResource TextPrimaryBrush}"
@@ -140,7 +148,8 @@
                     <TextBlock Text="FFmpeg Transcoder Executable Path (DVD-Video):"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,0,4" />
-                    <TextBox Text="{Binding FfmpegExecutablePath, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox AutomationProperties.Name="FFmpeg Transcoder Executable Path"
+                             Text="{Binding FfmpegExecutablePath, UpdateSourceTrigger=PropertyChanged}"
                              Padding="8,5"
                              Background="{DynamicResource ControlBackgroundBrush}"
                              Foreground="{DynamicResource TextPrimaryBrush}"
@@ -176,12 +185,14 @@
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                         <ComboBox Grid.Column="1"
+                                  AutomationProperties.Name="Visual Theme Mode"
                                   ItemsSource="{Binding AvailableThemes}"
                                   SelectedItem="{Binding ThemeMode}" />
                     </Grid>
 
                     <!-- Virtual Drive Simulator Toggle -->
                     <CheckBox Content="Enable software-defined virtual optical drive emulator"
+                              AutomationProperties.Name="Enable software-defined virtual optical drive emulator"
                               IsChecked="{Binding EnableVirtualDrive}"
                               Margin="0,0,0,12" />
 
@@ -196,6 +207,7 @@
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                         <TextBox Grid.Column="1"
+                                 AutomationProperties.Name="Diagnostic Ring Buffer Capacity"
                                  Text="{Binding LogRingBufferCapacity, UpdateSourceTrigger=PropertyChanged}"
                                  Padding="8,5"
                                  Background="{DynamicResource ControlBackgroundBrush}"
@@ -206,10 +218,49 @@
             </Border>
 
             <!-- ========================================================================= -->
-            <!-- ROW 3: ACTION BUTTONS FOOTER                                              -->
+            <!-- ROW 3: UPDATES & NETWORK (OPT-IN)                                        -->
             <!-- ========================================================================= -->
-            <DockPanel Grid.Row="3" LastChildFill="False">
+            <Border Grid.Row="3"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="🌐 GitHub Releases &amp; Updates"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <!-- Opt-in Checkbox -->
+                    <CheckBox Content="Check for newer versions automatically on startup (strictly opt-in)"
+                              AutomationProperties.Name="Check for newer versions automatically on startup"
+                              IsChecked="{Binding CheckForUpdatesOnStartup}"
+                              Margin="0,0,0,12" />
+
+                    <!-- Manual check button and status -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="Check for Updates Now"
+                                AutomationProperties.Name="Check for Updates Now"
+                                Command="{Binding CheckForUpdatesCommand}"
+                                Padding="16,6"
+                                Margin="0,0,12,0" />
+                        <TextBlock Text="{Binding UpdateStatusMessage}"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontSize="12" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ========================================================================= -->
+            <!-- ROW 4: ACTION BUTTONS FOOTER                                              -->
+            <!-- ========================================================================= -->
+            <DockPanel Grid.Row="4" LastChildFill="False">
                 <Button Content="Save Settings"
+                        AutomationProperties.Name="Save Settings"
                         Command="{Binding SaveSettingsCommand}"
                         Padding="20,8"
                         Background="{DynamicResource AccentBrush}"
@@ -218,6 +269,7 @@
                         Margin="0,0,12,0" />
 
                 <Button Content="Reset to Defaults"
+                        AutomationProperties.Name="Reset to Defaults"
                         Command="{Binding ResetSettingsCommand}"
                         Padding="16,8"
                         Margin="0,0,16,0" />

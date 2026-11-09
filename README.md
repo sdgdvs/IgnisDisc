@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-lightgrey.svg)]()
 [![.NET](https://img.shields.io/badge/.NET-10-blue.svg)](https://dotnet.microsoft.com/)
 
-A free, open-source CD / DVD / Blu-ray burning and mastering tool for Windows 10 and 11, with a WPF desktop app
+A free, open-source CD and DVD burning and mastering tool for Windows 10 and 11, with a WPF desktop app
 (`IgnisDisc.exe`) and a scriptable command-line tool (`ignisdisc-cli.exe`). It burns through Windows' own
 burning API (IMAPIv2), reads discs through SCSI pass-through, and ships a virtual optical drive so the whole
 pipeline can be tested without hardware or blank media.
@@ -15,6 +15,7 @@ pipeline can be tested without hardware or blank media.
 
 ## What works today
 
+<!-- SUPPORT-TABLE-START -->
 | Feature | Physical drives | Virtual drive | Notes |
 | --- | :---: | :---: | --- |
 | Burn data disc from files / folders | ✅ | ✅ | ISO 9660 + Joliet + UDF 1.02 bridge |
@@ -35,9 +36,11 @@ pipeline can be tested without hardware or blank media.
 | Append a session (multi-session) | ✅ | ✅ | Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions |
 | Bootable discs (El Torito BIOS + UEFI) | ✅ | ✅ | Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders |
 | DVD-Video authoring | ⚠️ | ✅ | Requires `ffmpeg.exe`; test on a standalone player before relying on it |
+| Blu-ray (BD-R / BD-RE) | ❌ | — | Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first |
 | CD-Text / ISRC on burned audio CDs | ❌ | ✅ | IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and `.cue` files |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
 | Test-write / simulation | ❌ | ✅ | Not available through IMAPIv2 |
+<!-- SUPPORT-TABLE-END -->
 
 ✅ supported · ⚠️ works but needs more real-hardware testing · ❌ not available on physical drives yet
 
@@ -51,10 +54,10 @@ Reading from physical drives uses SCSI pass-through when Windows allows it and f
 ## Install
 
 Download `IgnisDisc-Setup.exe` (per-user install, no admin rights) or the portable `.zip` from the Releases page.
-The builds are currently unsigned while [SignPath Foundation](https://signpath.org) certificate provisioning is in
-progress, so Windows SmartScreen may show a warning on first run. See [SECURITY.md](SECURITY.md) for SHA-256
-verification, our code-signing policy, and our privacy policy (no telemetry; network requests occur only when you
-explicitly trigger MusicBrainz or AccurateRip lookups).
+The builds are not code-signed yet, so Windows SmartScreen may show a warning on first run; check the SHA-256 checksum
+listed on the release page first. IgnisDisc has no telemetry. It goes online only to look up an audio CD
+(MusicBrainz titles, AccurateRip checksums — both on by default when ripping and switchable off) and, if you turn it
+on, to check GitHub for a newer release. [SECURITY.md](SECURITY.md) lists exactly what is sent.
 
 ---
 

@@ -59,6 +59,7 @@
                                Margin="0,0,10,0" />
 
                     <ComboBox Grid.Column="1"
+                              AutomationProperties.Name="Target Drive"
                               ItemsSource="{Binding AvailableRecorders}"
                               SelectedItem="{Binding SelectedRecorder}">
                         <ComboBox.ItemTemplate>
@@ -71,11 +72,17 @@
                         </ComboBox.ItemTemplate>
                     </ComboBox>
 
-                    <Button Grid.Column="2"
-                            Content="↻ Refresh Capabilities"
-                            Command="{Binding RefreshCapabilitiesCommand}"
-                            Margin="10,0,0,0"
-                            Padding="12,5" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
+                        <Button Content="↻ Refresh Capabilities"
+                                AutomationProperties.Name="Refresh Capabilities"
+                                Command="{Binding RefreshCapabilitiesCommand}"
+                                Margin="0,0,8,0"
+                                Padding="12,5" />
+                        <Button Content="📋 Compatibility Report"
+                                AutomationProperties.Name="Generate Compatibility Report"
+                                Command="{Binding GenerateCompatibilityReportCommand}"
+                                Padding="12,5" />
+                    </StackPanel>
 
                     <TextBlock Grid.Column="3"
                                Text="{Binding StatusMessage}"
@@ -136,6 +143,19 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="Media Type:" Foreground="{DynamicResource TextMutedBrush}" />
                             <TextBlock Grid.Column="1" Text="{Binding MediaDetails.MediaType, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
+                        </Grid>
+
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Media ID / ATIP:" Foreground="{DynamicResource TextMutedBrush}" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding MediaDetails.MediaManufacturerId, Mode=OneWay, TargetNullValue='N/A'}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding MediaDetails.MediaManufacturerId, Mode=OneWay}" />
                         </Grid>
 
                         <Grid Margin="0,0,0,8">
@@ -205,6 +225,28 @@
                                 <TextBlock Text="DVD-RAM" FontSize="11" Foreground="{Binding Capabilities.CanWriteDvdRam, Converter={StaticResource BooleanToBrushConverter}}" />
                             </Border>
                         </WrapPanel>
+                        <!-- MMC Recording Features Badges -->
+                        <TextBlock Text="MMC Recording Features:" Foreground="{DynamicResource TextMutedBrush}" Margin="0,8,0,6" />
+                        <WrapPanel>
+                            <Border Background="{DynamicResource RibbonBackgroundBrush}" CornerRadius="4" Padding="6,2" Margin="2">
+                                <TextBlock Text="TAO" FontSize="11" Foreground="{Binding Capabilities.SupportsNativeTao, Converter={StaticResource BooleanToBrushConverter}}" />
+                            </Border>
+                            <Border Background="{DynamicResource RibbonBackgroundBrush}" CornerRadius="4" Padding="6,2" Margin="2">
+                                <TextBlock Text="SAO" FontSize="11" Foreground="{Binding Capabilities.SupportsNativeSao, Converter={StaticResource BooleanToBrushConverter}}" />
+                            </Border>
+                            <Border Background="{DynamicResource RibbonBackgroundBrush}" CornerRadius="4" Padding="6,2" Margin="2">
+                                <TextBlock Text="Raw DAO" FontSize="11" Foreground="{Binding Capabilities.SupportsNativeRawDao, Converter={StaticResource BooleanToBrushConverter}}" />
+                            </Border>
+                            <Border Background="{DynamicResource RibbonBackgroundBrush}" CornerRadius="4" Padding="6,2" Margin="2">
+                                <TextBlock Text="Test Write" FontSize="11" Foreground="{Binding Capabilities.SupportsTestWrite, Converter={StaticResource BooleanToBrushConverter}}" />
+                            </Border>
+                            <Border Background="{DynamicResource RibbonBackgroundBrush}" CornerRadius="4" Padding="6,2" Margin="2">
+                                <TextBlock Text="BURN-Free" FontSize="11" Foreground="{Binding Capabilities.SupportsBufferUnderrunFree, Converter={StaticResource BooleanToBrushConverter}}" />
+                            </Border>
+                            <Border Background="{DynamicResource RibbonBackgroundBrush}" CornerRadius="4" Padding="6,2" Margin="2">
+                                <TextBlock Text="Layer Jump" FontSize="11" Foreground="{Binding Capabilities.SupportsLayerJump, Converter={StaticResource BooleanToBrushConverter}}" />
+                            </Border>
+                        </WrapPanel>
                     </StackPanel>
                 </Border>
 
@@ -230,21 +272,25 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                             <RadioButton Content="Quick Erase (TOC / PMA Blank)"
+                                         AutomationProperties.Name="Quick Erase (TOC / PMA Blank)"
                                          IsChecked="{Binding IsFullEraseSelected, Converter={StaticResource InverseBooleanConverter}}"
                                          GroupName="EraseTypeGroup"
                                          Margin="0,0,16,0" />
                             <RadioButton Content="Full Erase (Complete Zero-Fill)"
+                                         AutomationProperties.Name="Full Erase (Complete Zero-Fill)"
                                          IsChecked="{Binding IsFullEraseSelected}"
                                          GroupName="EraseTypeGroup" />
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
                             <Button Content="Erase Rewritable Disc"
+                                    AutomationProperties.Name="Erase Rewritable Disc"
                                     Command="{Binding EraseDiscCommand}"
                                     IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
                                     Padding="16,6"
                                     HorizontalAlignment="Left" />
                             <Button Content="🛑 Cancel"
+                                    AutomationProperties.Name="Cancel Erase"
                                     Command="{Binding CancelCommand}"
                                     Background="#D83B01"
                                     Foreground="White"
@@ -280,10 +326,12 @@
                                        VerticalAlignment="Center"
                                        Foreground="{DynamicResource TextSecondaryBrush}" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="Target Book Type"
                                       ItemsSource="{Binding AvailableBookTypes}"
                                       SelectedItem="{Binding SelectedBookType}" />
                             <Button Grid.Column="2"
                                     Content="Apply Bitsetting"
+                                    AutomationProperties.Name="Apply Bitsetting"
                                     Command="{Binding ApplyBookTypeCommand}"
                                     IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
                                     Margin="10,0,0,0"
@@ -339,18 +387,26 @@
 
                         <ComboBox Grid.Column="2"
                                   Width="90"
+                                  AutomationProperties.Name="Block Size (Sectors)"
                                   ItemsSource="{Binding AvailableBlockSizes}"
                                   SelectedItem="{Binding ScanBlockSizeSectors}"
                                   VerticalAlignment="Center" />
 
                         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
                             <Button Content="Start Surface Scan"
+                                    AutomationProperties.Name="Start Surface Scan"
                                     Command="{Binding StartSurfaceScanCommand}"
                                     IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}"
                                     Padding="16,6"
                                     Background="{DynamicResource AccentBrush}"
                                     Foreground="{DynamicResource AccentForegroundBrush}" />
+                            <Button Content="📈 Export Scan CSV"
+                                    AutomationProperties.Name="Export Scan CSV"
+                                    Command="{Binding ExportScanCsvCommand}"
+                                    Padding="12,6"
+                                    Margin="8,0,0,0" />
                             <Button Content="🛑 Cancel Scan"
+                                    AutomationProperties.Name="Cancel Scan"
                                     Command="{Binding CancelCommand}"
                                     Background="#D83B01"
                                     Foreground="White"
@@ -363,6 +419,7 @@
 
                     <!-- Progress Bar -->
                     <ProgressBar Grid.Row="1"
+                                 AutomationProperties.Name="Scan Progress"
                                  Height="8"
                                  Minimum="0"
                                  Maximum="100"

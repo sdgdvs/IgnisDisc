@@ -81,6 +81,28 @@ public sealed class V108_AuditRegressionTests : IDisposable
         AssertWithinOneLsb(ExpectedRedBook(left, right, 24), pcm);
     }
 
+    [Theory]
+    [InlineData(8)]  // Left-Side
+    [InlineData(9)]  // Right-Side
+    [InlineData(10)] // Mid-Side
+    public void Flac32_StereoDecorrelation_RejectedWithClearMessage(int assignment)
+    {
+        // 32-bit FLAC with stereo decorrelation requires a 33-bit side channel which overflows Int32,
+        // and per roadmap must be rejected with a clear message rather than decoded into corrupted audio.
+        const int n = 512;
+        var left = new int[n];
+        var right = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            left[i] = i * 1000;
+            right[i] = -i * 1000;
+        }
+
+        byte[] flac = FlacTestEncoder.Encode(44100, 32, new[] { left, right }, blockSize: 512, assignment, Sub.Verbatim);
+        var ex = Assert.Throws<InvalidDataException>(() => FlacFileCodec.DecodeToRedBookPcm(new MemoryStream(flac)));
+        Assert.Contains("32-bit FLAC with stereo decorrelation is not supported", ex.Message);
+    }
+
     [Fact]
     public void Flac_WastedBitsSubframes_AreShiftedBack()
     {
@@ -906,7 +928,7 @@ internal static class FlacTestEncoder
         BinaryPrimitives.WriteUInt64BigEndian(si.AsSpan(14), packed);
         output.AddRange(si);
 
-        int sizeCode = bps switch { 8 => 1, 12 => 2, 16 => 4, 20 => 5, 24 => 6, _ => 0 };
+        int sizeCode = bps switch { 8 => 1, 12 => 2, 16 => 4, 20 => 5, 24 => 6, 32 => 7, _ => 0 };
         int frameNo = 0;
         for (int start = 0; start < total; start += blockSize, frameNo++)
         {

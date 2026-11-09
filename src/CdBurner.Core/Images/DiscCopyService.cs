@@ -17,8 +17,9 @@ public sealed class DiscCopyOptions
     public int CopyCount { get; set; } = 1;
 
     /// <summary>
-    /// When true, reads and writes raw 2,352-byte sectors (.bin + .cue) to preserve Audio CD tracks,
-    /// CD-Text, or mixed-mode layouts. When false, auto-detects Audio CDs and uses 2,048-byte ISO mode for data discs.
+    /// Data discs only: stage the source as raw 2,352-byte sectors (.bin + .cue) instead of an .iso. The copy is still
+    /// burned from the extracted 2,048-byte user data, because IMAPIv2's data writer cannot write raw sectors.
+    /// Audio CDs ignore this and are always copied track by track.
     /// </summary>
     public bool RawCloneMode { get; set; }
 
@@ -62,6 +63,8 @@ public sealed record DiscCopyResult
     public int SectorsPerDisc { get; init; }
     public int TotalSectorsWritten { get; init; }
     public bool WasAudioCd { get; init; }
+    public bool IsMixedMode { get; init; }
+    public string? WarningMessage { get; init; }
     public string? StagedImagePath { get; init; }
     public TimeSpan TotalTime { get; init; }
     public string? ErrorMessage { get; init; }
@@ -152,9 +155,22 @@ public sealed class DiscCopyService
         string? stagedPath = null;
         try
         {
-            // Detect whether source disc is an Audio CD via reflection/session inspection or AudioCdRipperService
-            bool isAudioDisc = IsSourceAudioCd(sourceRecorder);
+            var (isAudioDisc, isMixedMode) = InspectSourceDiscLayout(sourceRecorder);
+            // Windows' burning service (IMAPIv2) cannot write a data track and audio tracks in one pass, so an Enhanced
+            // CD copy keeps only the audio. Say so up front rather than pretending to clone it.
+            const string mixedModeWarning = "Mixed-mode / Enhanced CD detected: only the audio tracks are copied. Copying the data track as well needs the native drive-command writer, which is not available yet.";
 
+            if (isMixedMode)
+            {
+                progress?.Report(new BurnProgressSnapshot
+                {
+                    CurrentActionDescription = mixedModeWarning,
+                    BufferLevelPercent = 100.0
+                });
+            }
+
+            // Audio CDs are always copied track by track: Raw Clone Mode applies to data discs only (IMAPIv2's data
+            // writer cannot write raw 2,352-byte sectors).
             if (isAudioDisc)
             {
                 string audioRipDir = !string.IsNullOrWhiteSpace(options.CustomStagingImagePath)
@@ -235,6 +251,8 @@ public sealed class DiscCopyService
                     SectorsPerDisc = sectorsPerDisc,
                     TotalSectorsWritten = totalSectors,
                     WasAudioCd = true,
+                    IsMixedMode = isMixedMode,
+                    WarningMessage = isMixedMode ? mixedModeWarning : null,
                     StagedImagePath = options.KeepStagedImage ? stagedPath : null,
                     TotalTime = sw.Elapsed
                 };
@@ -294,7 +312,10 @@ public sealed class DiscCopyService
                     BurnOperationResult burnRes;
                     if (rawMode)
                     {
-                        await using var fs = new FileStream(stagedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+                        // The staged .bin holds raw 2,352-byte sectors (kept for the user when KeepStagedImage is on).
+                        // The data writer takes 2,048-byte user data, so extract it on the fly; writing the raw bytes
+                        // as data would produce an unreadable disc.
+                        await using var fs = LegacyDiscImageConverter.OpenIsoUserDataStream(stagedPath);
                         burnRes = await _burnEngine.BurnDataStreamAsync(
                             targetRecorder,
                             fs,
@@ -367,7 +388,8 @@ public sealed class DiscCopyService
                     CopiesCompleted = completed,
                     SectorsPerDisc = sectorsPerDisc,
                     TotalSectorsWritten = totalSectors,
-                    WasAudioCd = false,
+                    WasAudioCd = isAudioDisc,
+                    IsMixedMode = isMixedMode,
                     StagedImagePath = options.KeepStagedImage ? stagedPath : null,
                     TotalTime = sw.Elapsed
                 };
@@ -403,7 +425,14 @@ public sealed class DiscCopyService
     /// Detects a Red Book Audio CD in <paramref name="recorder"/>. Physical drives (<see cref="IDiscTocProvider"/>, e.g.
     /// the IMAPI recorder) are classified from the real Table of Contents; virtual drives from their mounted medium.
     /// </summary>
-    public static bool IsSourceAudioCd(IDiscRecorderBackend recorder)
+    public static bool IsSourceAudioCd(IDiscRecorderBackend recorder) =>
+        InspectSourceDiscLayout(recorder).IsAudioDisc;
+
+    /// <summary>
+    /// Inspects the disc Table of Contents or mounted medium to classify whether the disc has audio tracks,
+    /// and whether it is a mixed-mode or Enhanced CD (containing both audio and data tracks).
+    /// </summary>
+    public static (bool IsAudioDisc, bool IsMixedMode) InspectSourceDiscLayout(IDiscRecorderBackend recorder)
     {
         ArgumentNullException.ThrowIfNull(recorder);
 
@@ -415,7 +444,9 @@ public sealed class DiscCopyService
                 var toc = tocProvider.ReadTableOfContents();
                 if (toc.Count > 0)
                 {
-                    return toc.Any(t => t.IsAudio);
+                    bool hasAudio = toc.Any(t => t.IsAudio);
+                    bool hasData = toc.Any(t => !t.IsAudio);
+                    return (hasAudio, hasAudio && hasData);
                 }
             }
             catch
@@ -433,6 +464,8 @@ public sealed class DiscCopyService
                 var sessionsProp = medium.GetType().GetProperty("Sessions");
                 if (sessionsProp?.GetValue(medium) is System.Collections.IEnumerable sessions)
                 {
+                    bool hasAudio = false;
+                    bool hasData = false;
                     foreach (object session in sessions)
                     {
                         var tracksProp = session.GetType().GetProperty("Tracks");
@@ -441,12 +474,17 @@ public sealed class DiscCopyService
                             foreach (object track in tracks)
                             {
                                 var isAudioProp = track.GetType().GetProperty("IsAudio");
-                                if (isAudioProp?.GetValue(track) is bool isAudio && isAudio)
+                                if (isAudioProp?.GetValue(track) is bool isAudio)
                                 {
-                                    return true;
+                                    if (isAudio) hasAudio = true;
+                                    else hasData = true;
                                 }
                             }
                         }
+                    }
+                    if (hasAudio || hasData)
+                    {
+                        return (hasAudio, hasAudio && hasData);
                     }
                 }
             }
@@ -455,6 +493,6 @@ public sealed class DiscCopyService
         {
         }
 
-        return false;
+        return (false, false);
     }
 }

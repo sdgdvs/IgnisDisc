@@ -6,6 +6,7 @@ using System.Windows.Input;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Audio;
+using CdBurner.Core.Images;
 using CdBurner.Core.Persistence;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Audio;
@@ -736,6 +737,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         public List<string> DrmProtectedFiles { get; } = new();
         public List<(string FilePath, string Reason)> UnreadableFiles { get; } = new();
         public HashSet<string> VisitedPlaylists { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<string> MixedModeNotices { get; } = new();
         public int AddedCount { get; set; }
         public bool TrackLimitReached { get; set; }
     }
@@ -830,6 +832,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             {
                 try
                 {
+                    var cueSheet = CueSheetParser.ParseFile(path);
+                    bool isMixed = cueSheet.IsMixedMode;
+                    int audioTrackCount = cueSheet.Tracks.Count(t => t.IsAudio);
+                    int dataTrackCount = cueSheet.Tracks.Count(t => !t.IsAudio);
+
                     var tempComp = new AudioCdCompilation
                     {
                         AlbumTitle = AlbumTitle,
@@ -839,11 +846,16 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                         DefaultPreGapFrames = DefaultPreGapFrames
                     };
 
-                    int cueAdded = tempComp.ImportCueSheet(path, _audioDecoder);
+                    int cueAdded = tempComp.ImportCueSheet(cueSheet, Path.GetDirectoryName(path) ?? string.Empty, _audioDecoder);
                     if (cueAdded == 0)
                     {
                         unreadableFiles.Add((path, "CUE sheet contains no Red Book AUDIO tracks."));
                         continue;
+                    }
+
+                    if (isMixed)
+                    {
+                        ctx.MixedModeNotices.Add($"Imported {audioTrackCount} audio track(s) from mixed-mode CUE (skipped {dataTrackCount} data track(s)).");
                     }
 
                     if ((string.IsNullOrWhiteSpace(AlbumTitle) || AlbumTitle == "Untitled Album") &&
@@ -1056,7 +1068,18 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         // The status line always reports what was added AND what was skipped, so a playlist with
         // 10 good tracks and 1 missing file reads "Added 10 ... Skipped 1 ..." rather than only the failure.
         var parts = new List<string>();
-        if (addedCount > 0) parts.Add($"Added {addedCount} audio track(s). Total: {Tracks.Count}.");
+        if (ctx.MixedModeNotices.Count > 0)
+        {
+            parts.AddRange(ctx.MixedModeNotices);
+        }
+        else if (addedCount > 0)
+        {
+            parts.Add($"Added {addedCount} audio track(s). Total: {Tracks.Count}.");
+        }
+        if (addedCount > 0 && ctx.MixedModeNotices.Count > 0)
+        {
+            parts.Add($"Total: {Tracks.Count}.");
+        }
         if (drmProtectedFiles.Count > 0) parts.Add($"Skipped {drmProtectedFiles.Count} DRM-protected Apple Music file(s). Use DRM-free tracks.");
         if (unreadableFiles.Count > 0) parts.Add($"Skipped {unreadableFiles.Count} unsupported, missing or corrupt audio file(s).");
         if (ctx.TrackLimitReached) parts.Add($"Audio CD compilation has reached the Red Book limit of {AudioCdCompilation.MaxTracks} tracks.");

@@ -26,3 +26,38 @@ public interface IDiscTocProvider
     /// </summary>
     byte[]? ReadCdTextPacks() => null;
 }
+
+
+/// <summary>
+/// Optional capability for recorders that can read the inserted disc's manufacturer ID (CD-R/RW ATIP, DVD+R/RW ADIP,
+/// DVD-R/RW pre-recorded lead-in, BD disc information). Kept out of <see cref="IDiscRecorderBackend.QueryMediaStatus"/>
+/// because it sends extra drive commands; call it only where the ID is shown (Drive Utilities, media-info, drive report).
+/// </summary>
+public interface IMediaManufacturerIdProvider
+{
+    /// <summary>Returns a readable media ID such as "MCC 004 (Mitsubishi Chemical Corp.)", or null if unavailable.</summary>
+    string? ReadMediaManufacturerId(CdBurner.Core.Primitives.DiscMediaType mediaType);
+}
+
+/// <summary>Helpers for <see cref="IMediaManufacturerIdProvider"/>.</summary>
+public static class MediaManufacturerIdExtensions
+{
+    /// <summary>
+    /// Fills <see cref="MediaStatusDto.MediaManufacturerId"/> from the recorder when it can read one. Never throws.
+    /// </summary>
+    public static MediaStatusDto WithManufacturerId(this IDiscRecorderBackend recorder, MediaStatusDto status)
+    {
+        if (status.MediaPresent && string.IsNullOrWhiteSpace(status.MediaManufacturerId) && recorder is IMediaManufacturerIdProvider provider)
+        {
+            try
+            {
+                status.MediaManufacturerId = provider.ReadMediaManufacturerId(status.MediaType);
+            }
+            catch
+            {
+            }
+        }
+
+        return status;
+    }
+}

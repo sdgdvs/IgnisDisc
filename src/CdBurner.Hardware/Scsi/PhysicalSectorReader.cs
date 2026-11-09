@@ -427,6 +427,169 @@ public static partial class PhysicalSectorReader
     private const int AudioWithC2Size = OpticalConstants.RawSectorSize + C2PointerBytes;
     private const int CacheFlushSectors = 1024; // ~2.4 MB: larger than the read cache of typical consumer drives
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, MmcWriteCapabilityProbe> WriteCapabilitiesCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Queries drive recording features via MMC GET CONFIGURATION (0x46) and Write Parameters Mode Page 0x05 (0x5A).
+    /// Safe to call on any volume or platform; never throws if the drive is not present or SCSI pass-through fails.
+    /// </summary>
+    public static MmcWriteCapabilityProbe ProbeWriteCapabilities(string? volumePath)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return new MmcWriteCapabilityProbe();
+        }
+
+        if (WriteCapabilitiesCache.TryGetValue(volumePath, out var cached))
+        {
+            return cached;
+        }
+
+        try
+        {
+            using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+            if (handle == null || handle.IsInvalid)
+            {
+                return new MmcWriteCapabilityProbe();
+            }
+
+            using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+
+            // 1. GET CONFIGURATION (RT = 0, starting feature 0, 4096 bytes)
+            byte[] configBuffer = new byte[4096];
+            byte[] configCdb = MmcCommandBuilder.BuildGetConfigurationCdb(0, 4096);
+            var configResult = transport.ExecuteCommand(configCdb, configBuffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(5));
+
+            var probe = configResult.IsSuccess && configResult.DataTransferLength >= 8
+                ? MmcCommandBuilder.ParseGetConfigurationFeatures(configBuffer.AsSpan(0, (int)configResult.DataTransferLength))
+                : new MmcWriteCapabilityProbe();
+
+            // 2. MODE SENSE (10) Page 0x05 (Write Parameters)
+            byte[] modeBuffer = new byte[128];
+            byte[] modeCdb = MmcCommandBuilder.BuildModeSense10Cdb(MmcCommandBuilder.ModePageWriteParameters, 128, disableBlockDescriptors: true);
+            var modeResult = transport.ExecuteCommand(modeCdb, modeBuffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(5));
+
+            if (modeResult.IsSuccess && modeResult.DataTransferLength >= 4)
+            {
+                var modeProbe = MmcCommandBuilder.ParseWriteParametersModePage(modeBuffer.AsSpan(0, (int)modeResult.DataTransferLength));
+                if (modeProbe.ModePage05Present)
+                {
+                    probe = probe with
+                    {
+                        ModePage05Present = true,
+                        ModePage05BufferUnderrunFreeEnabled = modeProbe.ModePage05BufferUnderrunFreeEnabled,
+                        ModePage05TestWriteEnabled = modeProbe.ModePage05TestWriteEnabled,
+                        ModePage05WriteType = modeProbe.ModePage05WriteType
+                    };
+                }
+            }
+
+            if (probe.FeatureCodes.Count > 0 || probe.ModePage05Present)
+            {
+                WriteCapabilitiesCache[volumePath] = probe;
+            }
+
+            return probe;
+        }
+        catch
+        {
+            return new MmcWriteCapabilityProbe();
+        }
+    }
+
+    /// <summary>
+    /// Reads the physical optical media Manufacturer ID (MID) / ATIP / ADIP lead-in signature via SCSI pass-through.
+    /// Queries READ TOC/PMA/ATIP (0x43 Format 0x04) for CD-R/RW, READ DISC STRUCTURE (0xAD Format 0x0E / 0x11) for DVD±R/RW,
+    /// and READ DISC STRUCTURE (0xAD MediaType 1 Format 0x00) for Blu-ray. Never writes to the disc or throws.
+    /// </summary>
+    public static MmcMediaIdInfo? ProbeMediaManufacturerInfo(string? volumePath, DiscMediaType mediaType = DiscMediaType.Unknown)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+            if (handle == null || handle.IsInvalid)
+            {
+                return null;
+            }
+
+            using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+            var timeout = TimeSpan.FromSeconds(5);
+
+            // 1. CD-R / CD-RW ATIP (READ TOC/PMA/ATIP 0x43, Format 0x04, MSF=true)
+            if (mediaType is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.CdRom or DiscMediaType.Unknown)
+            {
+                byte[] atipBuf = new byte[32];
+                byte[] atipCdb = MmcCommandBuilder.BuildReadTocPmaAtipCdb(MmcCommandBuilder.TocFormatAtip, 0, (ushort)atipBuf.Length, msf: true);
+                var atipRes = transport.ExecuteCommand(atipCdb, atipBuf, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, timeout);
+                if (atipRes.IsSuccess && atipRes.DataTransferLength >= 12)
+                {
+                    var parsedAtip = MmcMediaIdInspector.ParseCdAtip(atipBuf.AsSpan(0, (int)atipRes.DataTransferLength));
+                    if (parsedAtip != null)
+                    {
+                        return parsedAtip;
+                    }
+                }
+            }
+
+            // 2. DVD+R / DVD+RW / DVD+R DL ADIP (READ DISC STRUCTURE 0xAD, MediaType 0, Format 0x11)
+            if (mediaType is DiscMediaType.DvdPlusR or DiscMediaType.DvdPlusRw or DiscMediaType.DvdPlusRDualLayer or DiscMediaType.DvdRom or DiscMediaType.Unknown)
+            {
+                byte[] adipBuf = new byte[64];
+                byte[] adipCdb = MmcCommandBuilder.BuildReadDiscStructureCdb(0x11, (ushort)adipBuf.Length, mediaType: 0);
+                var adipRes = transport.ExecuteCommand(adipCdb, adipBuf, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, timeout);
+                if (adipRes.IsSuccess && adipRes.DataTransferLength >= 35)
+                {
+                    var parsedAdip = MmcMediaIdInspector.ParseDvdAdip(adipBuf.AsSpan(0, (int)adipRes.DataTransferLength));
+                    if (parsedAdip != null)
+                    {
+                        return parsedAdip;
+                    }
+                }
+            }
+
+            // 3. DVD-R / DVD-RW / DVD-R DL Pre-recorded Lead-In (READ DISC STRUCTURE 0xAD, MediaType 0, Format 0x0E)
+            if (mediaType is DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdMinusRDualLayer or DiscMediaType.DvdRam or DiscMediaType.DvdRom or DiscMediaType.Unknown)
+            {
+                byte[] preBuf = new byte[68];
+                byte[] preCdb = MmcCommandBuilder.BuildReadDiscStructureCdb(0x0E, (ushort)preBuf.Length, mediaType: 0);
+                var preRes = transport.ExecuteCommand(preCdb, preBuf, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, timeout);
+                if (preRes.IsSuccess && preRes.DataTransferLength >= 35)
+                {
+                    var parsedPre = MmcMediaIdInspector.ParseDvdPreRecordedLeadIn(preBuf.AsSpan(0, (int)preRes.DataTransferLength));
+                    if (parsedPre != null)
+                    {
+                        return parsedPre;
+                    }
+                }
+            }
+
+            // 4. Blu-ray BD-R / BD-RE Disc Information (READ DISC STRUCTURE 0xAD, MediaType 1, Format 0x00)
+            byte[] bdBuf = new byte[128];
+            byte[] bdCdb = MmcCommandBuilder.BuildReadDiscStructureCdb(0x00, (ushort)bdBuf.Length, mediaType: 1);
+            var bdRes = transport.ExecuteCommand(bdCdb, bdBuf, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, timeout);
+            if (bdRes.IsSuccess && bdRes.DataTransferLength >= 113)
+            {
+                var parsedBd = MmcMediaIdInspector.ParseBdDiscInfo(bdBuf.AsSpan(0, (int)bdRes.DataTransferLength));
+                if (parsedBd != null)
+                {
+                    return parsedBd;
+                }
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> C2SupportCache =
         new(StringComparer.OrdinalIgnoreCase);
 

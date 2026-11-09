@@ -116,6 +116,7 @@
 
                     <!-- Drive DropDown -->
                     <ComboBox Width="280"
+                              AutomationProperties.Name="Burn To Optical Drive"
                               ItemsSource="{Binding AvailableRecorders}"
                               SelectedItem="{Binding SelectedRecorder}">
                         <ComboBox.ItemTemplate>
@@ -141,6 +142,7 @@
 
                     <!-- Refresh Button -->
                     <Button Content="↻ Refresh"
+                            AutomationProperties.Name="Scan and re-enumerate optical recorders"
                             Command="{Binding RefreshDrivesCommand}"
                             ToolTip="Scan and re-enumerate optical recorders"
                             Margin="8,0,0,0" />
@@ -169,10 +171,12 @@
 
                     <!-- Tray Buttons -->
                     <Button Content="⏏ Eject"
+                            AutomationProperties.Name="Eject drive tray or unmount media"
                             Command="{Binding EjectTrayCommand}"
                             ToolTip="Open drive tray or unmount media"
                             Margin="8,0,0,0" />
                     <Button Content="📥 Close"
+                            AutomationProperties.Name="Close drive tray and load media"
                             Command="{Binding CloseTrayCommand}"
                             ToolTip="Close drive tray and load media"
                             Margin="4,0,0,0" />
@@ -188,6 +192,7 @@
                                Margin="0,0,8,0" />
 
                     <ComboBox Width="130"
+                              AutomationProperties.Name="Optical Write Speed"
                               ItemsSource="{Binding AvailableWriteSpeeds}"
                               SelectedItem="{Binding SelectedWriteSpeed}">
                         <ComboBox.ItemTemplate>
@@ -209,16 +214,19 @@
                                Foreground="{DynamicResource TextMutedBrush}"
                                Margin="0,0,6,0" />
                     <Button Content="CD-R"
+                            AutomationProperties.Name="Mount blank 700 MB CD-R into virtual drive"
                             Command="{Binding MountVirtualBlankCdRCommand}"
                             ToolTip="Mount blank 700 MB CD-R into virtual drive"
                             Padding="8,4"
                             Margin="2,0" />
                     <Button Content="CD-RW"
+                            AutomationProperties.Name="Mount blank 700 MB CD-RW rewritable into virtual drive"
                             Command="{Binding MountVirtualBlankCdRwCommand}"
                             ToolTip="Mount blank 700 MB CD-RW rewritable into virtual drive"
                             Padding="8,4"
                             Margin="2,0" />
                     <Button Content="DVD-R"
+                            AutomationProperties.Name="Mount blank 4.7 GB DVD-R into virtual drive"
                             Command="{Binding MountVirtualBlankDvdRCommand}"
                             ToolTip="Mount blank 4.7 GB DVD-R into virtual drive"
                             Padding="8,4"
@@ -245,7 +253,7 @@
                     BorderBrush="{DynamicResource CardBorderBrush}"
                     BorderThickness="0,0,1,0"
                     Padding="4,12">
-                <StackPanel>
+                <StackPanel KeyboardNavigation.TabNavigation="Local">
                     <TextBlock Text="OPTICAL MASTERING"
                                FontSize="10"
                                FontWeight="Bold"
@@ -254,6 +262,7 @@
 
                     <!-- Tab 1: Data Disc -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Data Disc workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=DataDisc}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.DataDisc}">
@@ -265,6 +274,7 @@
 
                     <!-- Tab 2: Audio CD -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Audio CD workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=AudioCd}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.AudioCd}">
@@ -276,6 +286,7 @@
 
                     <!-- Tab 3: DVD-Video -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="DVD-Video workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=DvdVideo}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.DvdVideo}">
@@ -287,6 +298,7 @@
 
                     <!-- Tab 4: Disc Image Studio -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Disc Image Studio workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=ImageStudio}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.ImageStudio}">
@@ -298,6 +310,7 @@
 
                     <!-- Tab: Archive Studio -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Archive Studio workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=Archive}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.Archive}">
@@ -317,6 +330,7 @@
 
                     <!-- Tab 5: Drive Utilities -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Drive Utilities workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=DriveUtilities}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.DriveUtilities}">
@@ -328,6 +342,7 @@
 
                     <!-- Tab 6: Virtual Drive -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Virtual Drive workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=VirtualDrive}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.VirtualDrive}">
@@ -339,6 +354,7 @@
 
                     <!-- Tab 7: Settings -->
                     <RadioButton Style="{StaticResource NavigationRailButtonStyle}"
+                                 AutomationProperties.Name="Settings workspace"
                                  IsChecked="{Binding SelectedNavigationTab, Converter={StaticResource NavigationTabToBooleanConverter}, ConverterParameter=Settings}"
                                  Command="{Binding NavigateCommand}"
                                  CommandParameter="{x:Static vm:NavigationTab.Settings}">
@@ -413,6 +429,7 @@
                     </Grid>
 
                     <ProgressBar Grid.Row="1"
+                                 AutomationProperties.Name="Disc Capacity Usage Meter"
                                  Height="10"
                                  Minimum="0"
                                  Maximum="100"

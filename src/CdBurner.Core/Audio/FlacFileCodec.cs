@@ -5,6 +5,40 @@ using CdBurner.Core.Primitives;
 namespace CdBurner.Core.Audio;
 
 /// <summary>
+/// Probed format and Vorbis Comment / Picture metadata from a FLAC bitstream.
+/// </summary>
+public sealed record FlacMetadata
+{
+    public string FilePath { get; init; } = string.Empty;
+    public string FormatName { get; init; } = "FLAC";
+    public int Channels { get; init; }
+    public int SampleRate { get; init; }
+    public int BitsPerSample { get; init; }
+    public TimeSpan Duration { get; init; }
+    public long TotalSamples { get; init; }
+    public long TotalPcmBytes { get; init; }
+    public long TotalRedBookBytes { get; init; }
+    public int TotalFrames => (int)((TotalRedBookBytes + 2351) / 2352);
+    public string? Title { get; init; }
+    public string? Artist { get; init; }
+    public string? Album { get; init; }
+    public string? AlbumArtist { get; init; }
+    public string? Songwriter { get; init; }
+    public string? Composer { get; init; }
+    public string? Isrc { get; init; }
+    public string? Date { get; init; }
+    public int? TrackNumber { get; init; }
+    public int? TrackTotal { get; init; }
+    public string? ReplayGainTrackGain { get; init; }
+    public string? ReplayGainTrackPeak { get; init; }
+    public string? ReplayGainAlbumGain { get; init; }
+    public string? ReplayGainAlbumPeak { get; init; }
+    public bool HasEmbeddedCoverArt { get; init; }
+    public byte[]? CoverArtBytes { get; init; }
+    public string? CoverArtMimeType { get; init; }
+}
+
+/// <summary>
 /// Pure C# RFC 9639 Free Lossless Audio Codec (FLAC) parser, Vorbis Comment tag reader, and lossless PCM decoder.
 /// Supports 8/12/16/20/24/32-bit sample depths, arbitrary sample rates, mono/stereo/multichannel streams,
 /// prepended ID3v2 headers of any size, and automatic conversion to canonical Red Book CD-DA PCM (44.1 kHz, 16-bit Stereo).
@@ -74,9 +108,11 @@ public static class FlacFileCodec
         ms.Write(FlacMagic);
 
         // 2. STREAMINFO metadata block (type 0, 34 bytes)
+        bool hasPictureBlock = tags?.CoverArtBytes is { Length: > 0 };
         bool hasVorbisBlock = tags != null || !string.IsNullOrWhiteSpace(songwriter) || !string.IsNullOrWhiteSpace(composer);
+        bool hasAnyMetadata = hasVorbisBlock || hasPictureBlock;
         Span<byte> streamInfoBlock = stackalloc byte[4 + 34];
-        streamInfoBlock[0] = hasVorbisBlock ? (byte)0x00 : (byte)0x80; // isLast flag + type 0
+        streamInfoBlock[0] = hasAnyMetadata ? (byte)0x00 : (byte)0x80; // isLast flag + type 0
         streamInfoBlock[1] = 0;
         streamInfoBlock[2] = 0;
         streamInfoBlock[3] = 34;
@@ -92,7 +128,7 @@ public static class FlacFileCodec
         // 16-byte MD5 signature left as 0 (valid per RFC 9639 when uncomputed)
         ms.Write(streamInfoBlock);
 
-        // 3. Optional VORBIS_COMMENT metadata block (type 4, isLast = true)
+        // 3. Optional VORBIS_COMMENT metadata block (type 4)
         if (hasVorbisBlock)
         {
             var comments = new List<string>();
@@ -105,6 +141,10 @@ public static class FlacFileCodec
                 if (tags.TrackTotal > 0) comments.Add($"TRACKTOTAL={tags.TrackTotal}");
                 if (!string.IsNullOrWhiteSpace(tags.Isrc)) comments.Add($"ISRC={tags.Isrc}");
                 if (!string.IsNullOrWhiteSpace(tags.Date)) comments.Add($"DATE={tags.Date}");
+                if (!string.IsNullOrWhiteSpace(tags.ReplayGainTrackGain)) comments.Add($"REPLAYGAIN_TRACK_GAIN={tags.ReplayGainTrackGain}");
+                if (!string.IsNullOrWhiteSpace(tags.ReplayGainTrackPeak)) comments.Add($"REPLAYGAIN_TRACK_PEAK={tags.ReplayGainTrackPeak}");
+                if (!string.IsNullOrWhiteSpace(tags.ReplayGainAlbumGain)) comments.Add($"REPLAYGAIN_ALBUM_GAIN={tags.ReplayGainAlbumGain}");
+                if (!string.IsNullOrWhiteSpace(tags.ReplayGainAlbumPeak)) comments.Add($"REPLAYGAIN_ALBUM_PEAK={tags.ReplayGainAlbumPeak}");
             }
             if (!string.IsNullOrWhiteSpace(songwriter)) comments.Add($"SONGWRITER={songwriter}");
             if (!string.IsNullOrWhiteSpace(composer)) comments.Add($"COMPOSER={composer}");
@@ -129,12 +169,48 @@ public static class FlacFileCodec
 
             byte[] vcArray = vcBody.ToArray();
             Span<byte> vcHeader = stackalloc byte[4];
-            vcHeader[0] = 0x84; // isLast (0x80) | blockType 4 (VORBIS_COMMENT)
+            bool isLastVc = !hasPictureBlock;
+            vcHeader[0] = (byte)((isLastVc ? 0x80 : 0x00) | 0x04); // blockType 4 (VORBIS_COMMENT)
             vcHeader[1] = (byte)((vcArray.Length >> 16) & 0xFF);
             vcHeader[2] = (byte)((vcArray.Length >> 8) & 0xFF);
             vcHeader[3] = (byte)(vcArray.Length & 0xFF);
             ms.Write(vcHeader);
             ms.Write(vcArray);
+        }
+
+        // 3b. Optional METADATA_BLOCK_PICTURE block (type 6, isLast = true)
+        if (hasPictureBlock && tags?.CoverArtBytes != null)
+        {
+            string mime = !string.IsNullOrWhiteSpace(tags.CoverArtMimeType) ? tags.CoverArtMimeType : "image/jpeg";
+            byte[] mimeBytes = Encoding.ASCII.GetBytes(mime);
+            using var picMs = new MemoryStream(32 + mimeBytes.Length + tags.CoverArtBytes.Length);
+            Span<byte> u32 = stackalloc byte[4];
+
+            BinaryPrimitives.WriteUInt32BigEndian(u32, 3); // Cover (front)
+            picMs.Write(u32);
+
+            BinaryPrimitives.WriteUInt32BigEndian(u32, (uint)mimeBytes.Length);
+            picMs.Write(u32);
+            picMs.Write(mimeBytes);
+
+            BinaryPrimitives.WriteUInt32BigEndian(u32, 0); // Description len
+            picMs.Write(u32);
+
+            Span<byte> zeros16 = stackalloc byte[16];
+            picMs.Write(zeros16);
+
+            BinaryPrimitives.WriteUInt32BigEndian(u32, (uint)tags.CoverArtBytes.Length);
+            picMs.Write(u32);
+            picMs.Write(tags.CoverArtBytes);
+
+            byte[] picArray = picMs.ToArray();
+            Span<byte> picHeader = stackalloc byte[4];
+            picHeader[0] = 0x86; // isLast (0x80) | blockType 6 (PICTURE)
+            picHeader[1] = (byte)((picArray.Length >> 16) & 0xFF);
+            picHeader[2] = (byte)((picArray.Length >> 8) & 0xFF);
+            picHeader[3] = (byte)(picArray.Length & 0xFF);
+            ms.Write(picHeader);
+            ms.Write(picArray);
         }
 
         // 4. Write audio frames using SUBFRAME_VERBATIM
@@ -313,7 +389,16 @@ public static class FlacFileCodec
                 Songwriter = info.Songwriter,
                 Composer = info.Composer,
                 Isrc = info.Isrc,
-                TrackNumber = info.TrackNumber
+                Date = info.Date,
+                TrackNumber = info.TrackNumber,
+                TrackTotal = info.TrackTotal,
+                ReplayGainTrackGain = info.ReplayGainTrackGain,
+                ReplayGainTrackPeak = info.ReplayGainTrackPeak,
+                ReplayGainAlbumGain = info.ReplayGainAlbumGain,
+                ReplayGainAlbumPeak = info.ReplayGainAlbumPeak,
+                HasEmbeddedCoverArt = info.HasEmbeddedCoverArt,
+                CoverArtBytes = info.CoverArtBytes,
+                CoverArtMimeType = info.CoverArtMimeType
             };
         }
         finally
@@ -323,6 +408,62 @@ public static class FlacFileCodec
                 stream.Position = initialPos;
             }
         }
+    }
+
+    /// <summary>
+    /// Inspects and parses the format, Vorbis Comment tags, ReplayGain tags, and embedded cover art of a FLAC file.
+    /// </summary>
+    public static FlacMetadata ProbeMetadata(string filePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        if (!File.Exists(filePath))
+        {
+            throw new FileNotFoundException($"FLAC audio file not found: '{filePath}'.", filePath);
+        }
+
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return ProbeMetadata(stream, filePath);
+    }
+
+    /// <summary>
+    /// Parses format, Vorbis Comment tags, ReplayGain tags, and embedded cover art from a FLAC stream.
+    /// </summary>
+    public static FlacMetadata ProbeMetadata(Stream stream, string filePath = "")
+    {
+        var meta = ReadMetadata(stream, filePath);
+        long samples = meta.Channels > 0 && meta.BitsPerSample > 0
+            ? meta.TotalPcmBytes / (meta.Channels * Math.Max(1, (meta.BitsPerSample + 7) / 8))
+            : 0;
+
+        return new FlacMetadata
+        {
+            FilePath = meta.FilePath,
+            FormatName = meta.FormatName,
+            Channels = meta.Channels,
+            SampleRate = meta.SampleRate,
+            BitsPerSample = meta.BitsPerSample,
+            Duration = meta.Duration,
+            TotalSamples = samples,
+            TotalPcmBytes = meta.TotalPcmBytes,
+            TotalRedBookBytes = meta.TotalRedBookBytes,
+            Title = meta.Title,
+            Artist = meta.Artist,
+            Album = meta.Album,
+            AlbumArtist = meta.AlbumArtist,
+            Songwriter = meta.Songwriter,
+            Composer = meta.Composer,
+            Isrc = meta.Isrc,
+            Date = meta.Date,
+            TrackNumber = meta.TrackNumber,
+            TrackTotal = meta.TrackTotal,
+            ReplayGainTrackGain = meta.ReplayGainTrackGain,
+            ReplayGainTrackPeak = meta.ReplayGainTrackPeak,
+            ReplayGainAlbumGain = meta.ReplayGainAlbumGain,
+            ReplayGainAlbumPeak = meta.ReplayGainAlbumPeak,
+            HasEmbeddedCoverArt = meta.HasEmbeddedCoverArt,
+            CoverArtBytes = meta.CoverArtBytes,
+            CoverArtMimeType = meta.CoverArtMimeType
+        };
     }
 
     /// <summary>
@@ -399,7 +540,16 @@ public static class FlacFileCodec
         public string? Songwriter { get; set; }
         public string? Composer { get; set; }
         public string? Isrc { get; set; }
+        public string? Date { get; set; }
         public int? TrackNumber { get; set; }
+        public int? TrackTotal { get; set; }
+        public string? ReplayGainTrackGain { get; set; }
+        public string? ReplayGainTrackPeak { get; set; }
+        public string? ReplayGainAlbumGain { get; set; }
+        public string? ReplayGainAlbumPeak { get; set; }
+        public bool HasEmbeddedCoverArt { get; set; }
+        public byte[]? CoverArtBytes { get; set; }
+        public string? CoverArtMimeType { get; set; }
     }
 
     private static bool SkipId3v2AndVerifyFlacSignature(Stream stream)
@@ -528,6 +678,11 @@ public static class FlacFileCodec
                 byte[] buf = ReadExactBytes(stream, length);
                 ParseVorbisComments(buf, info);
             }
+            else if (blockType == 6 && length > 0 && length <= 32 * 1024 * 1024) // METADATA_BLOCK_PICTURE
+            {
+                byte[] buf = ReadExactBytes(stream, length);
+                ParsePictureBlock(buf, info);
+            }
             else
             {
                 SkipBytes(stream, length);
@@ -616,12 +771,85 @@ public static class FlacFileCodec
             else if (key.Equals("TRACKNUMBER", StringComparison.OrdinalIgnoreCase) ||
                      key.Equals("TRACK", StringComparison.OrdinalIgnoreCase))
             {
-                string numPart = val.Split('/')[0].Trim();
-                if (int.TryParse(numPart, out int tn) && tn > 0)
+                string[] parts = val.Split('/');
+                if (int.TryParse(parts[0].Trim(), out int tn) && tn > 0)
                 {
                     info.TrackNumber ??= tn;
                 }
+                if (parts.Length > 1 && int.TryParse(parts[1].Trim(), out int tt) && tt > 0)
+                {
+                    info.TrackTotal ??= tt;
+                }
             }
+            else if (key.Equals("TRACKTOTAL", StringComparison.OrdinalIgnoreCase) ||
+                     key.Equals("TOTALTRACKS", StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(val, out int tt) && tt > 0)
+                {
+                    info.TrackTotal ??= tt;
+                }
+            }
+            else if (key.Equals("DATE", StringComparison.OrdinalIgnoreCase) ||
+                     key.Equals("YEAR", StringComparison.OrdinalIgnoreCase))
+            {
+                info.Date ??= val;
+            }
+            else if (key.Equals("REPLAYGAIN_TRACK_GAIN", StringComparison.OrdinalIgnoreCase))
+            {
+                info.ReplayGainTrackGain ??= val;
+            }
+            else if (key.Equals("REPLAYGAIN_TRACK_PEAK", StringComparison.OrdinalIgnoreCase))
+            {
+                info.ReplayGainTrackPeak ??= val;
+            }
+            else if (key.Equals("REPLAYGAIN_ALBUM_GAIN", StringComparison.OrdinalIgnoreCase))
+            {
+                info.ReplayGainAlbumGain ??= val;
+            }
+            else if (key.Equals("REPLAYGAIN_ALBUM_PEAK", StringComparison.OrdinalIgnoreCase))
+            {
+                info.ReplayGainAlbumPeak ??= val;
+            }
+        }
+    }
+
+    private static void ParsePictureBlock(ReadOnlySpan<byte> block, ParsedFlacInfo info)
+    {
+        if (block.Length < 32) return;
+
+        int pos = 0;
+        uint pictureType = BinaryPrimitives.ReadUInt32BigEndian(block.Slice(pos, 4));
+        pos += 4;
+
+        int mimeLen = (int)BinaryPrimitives.ReadUInt32BigEndian(block.Slice(pos, 4));
+        pos += 4;
+        if (mimeLen < 0 || mimeLen > block.Length - pos) return;
+
+        string mime = Encoding.ASCII.GetString(block.Slice(pos, mimeLen));
+        pos += mimeLen;
+
+        if (pos + 4 > block.Length) return;
+        int descLen = (int)BinaryPrimitives.ReadUInt32BigEndian(block.Slice(pos, 4));
+        pos += 4;
+        if (descLen < 0 || descLen > block.Length - pos) return;
+        pos += descLen;
+
+        if (pos + 16 > block.Length) return;
+        pos += 16; // width (4), height (4), depth (4), colors (4)
+
+        if (pos + 4 > block.Length) return;
+        int dataLen = (int)BinaryPrimitives.ReadUInt32BigEndian(block.Slice(pos, 4));
+        pos += 4;
+        if (dataLen < 0 || dataLen > block.Length - pos) return;
+
+        byte[] pictureData = block.Slice(pos, dataLen).ToArray();
+
+        // Prefer Cover (front, type 3) or take first picture block
+        if (!info.HasEmbeddedCoverArt || pictureType == 3)
+        {
+            info.HasEmbeddedCoverArt = true;
+            info.CoverArtBytes = pictureData;
+            info.CoverArtMimeType = mime;
         }
     }
 
@@ -781,7 +1009,7 @@ public static class FlacFileCodec
                     if (subBps > 32)
                     {
                         // A 33-bit side channel (32-bit source with stereo decorrelation) cannot be held in Int32.
-                        throw new NotSupportedException(
+                        throw new InvalidDataException(
                             "32-bit FLAC with stereo decorrelation is not supported. Re-encode the file at 24-bit or lower.");
                     }
 

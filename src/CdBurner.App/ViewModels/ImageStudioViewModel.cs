@@ -29,6 +29,8 @@ public class ImageStudioViewModel : ObservableObject
     private readonly DiscRipperService _ripperService;
     private readonly DiscVerificationService _verificationService;
     private readonly DiscCopyService _copyService;
+    private readonly BurnQueueService _burnQueueService;
+    private PostBurnAction _selectedPostBurnAction = PostBurnAction.None;
 
     private string _sourceImagePath = string.Empty;
     private string _detectedImageFormat = "No Image Loaded";
@@ -326,6 +328,18 @@ public class ImageStudioViewModel : ObservableObject
         }
     }
 
+    private string? _legacyConvertOutputPath;
+
+    /// <summary>
+    /// Explicit target output path (.iso or .bin/.cue) for legacy and image format conversions.
+    /// If null or omitted, prompts via file dialog in interactive sessions or uses default converted extension.
+    /// </summary>
+    public string? LegacyConvertOutputPath
+    {
+        get => _legacyConvertOutputPath;
+        set => SetProperty(ref _legacyConvertOutputPath, value);
+    }
+
     /// <summary>
     /// Source optical drive for 1-Click Disc Copy operations.
     /// </summary>
@@ -451,6 +465,7 @@ public class ImageStudioViewModel : ObservableObject
                 VerifyDiscAgainstImageCommand.RaiseCanExecuteChanged();
                 ConvertLegacyImageToIsoCommand?.RaiseCanExecuteChanged();
                 CopyDiscCommand?.RaiseCanExecuteChanged();
+                RunBurnQueueCommand?.RaiseCanExecuteChanged();
                 CancelCommand?.RaiseCanExecuteChanged();
             }
         }
@@ -512,6 +527,27 @@ public class ImageStudioViewModel : ObservableObject
     /// <summary>
     /// Result of the most recent disc verification operation.
     /// </summary>
+    /// <summary>
+    /// Sequential burn queue items scheduled for batch burning.
+    /// </summary>
+    public ObservableCollection<BurnQueueItem> BurnQueueItems { get; } = new();
+
+    /// <summary>
+    /// Action to execute automatically after a burn or queue completes.
+    /// </summary>
+    public PostBurnAction SelectedPostBurnAction
+    {
+        get => _selectedPostBurnAction;
+        set => SetProperty(ref _selectedPostBurnAction, value);
+    }
+
+    /// <summary>
+    /// Available after-burn action options.
+    /// </summary>
+    public IReadOnlyList<PostBurnActionOption> AvailablePostBurnActions { get; } = Enum.GetValues<PostBurnAction>()
+        .Select(a => new PostBurnActionOption(a, PostBurnActionExecutor.GetDisplayName(a)))
+        .ToList();
+
     public VerificationResult? LastVerificationResult
     {
         get => _lastVerificationResult;
@@ -565,6 +601,26 @@ public class ImageStudioViewModel : ObservableObject
     /// <summary>
     /// Executes a 1-Click Disc-to-Disc Copy (single-drive swap or drive-to-drive) with optional multi-copy batching.
     /// </summary>
+    /// <summary>
+    /// Adds an image to the sequential burn queue.
+    /// </summary>
+    public RelayCommand AddToBurnQueueCommand { get; }
+
+    /// <summary>
+    /// Removes an item from the sequential burn queue.
+    /// </summary>
+    public RelayCommand RemoveFromBurnQueueCommand { get; }
+
+    /// <summary>
+    /// Clears all items from the sequential burn queue.
+    /// </summary>
+    public RelayCommand ClearBurnQueueCommand { get; }
+
+    /// <summary>
+    /// Executes all items in the sequential burn queue on the selected drive.
+    /// </summary>
+    public AsyncRelayCommand RunBurnQueueCommand { get; }
+
     public AsyncRelayCommand CopyDiscCommand { get; }
 
     /// <summary>
@@ -588,6 +644,7 @@ public class ImageStudioViewModel : ObservableObject
         _ripperService = new DiscRipperService();
         _verificationService = new DiscVerificationService();
         _copyService = new DiscCopyService(_burnEngine, _audioBurnService.AudioDecoder);
+        _burnQueueService = new BurnQueueService(_burnEngine, _dataBurnService);
 
         try
         {
@@ -608,6 +665,17 @@ public class ImageStudioViewModel : ObservableObject
         BrowseRipTargetFileCommand = new RelayCommand(BrowseRipTargetFile);
         ConvertLegacyImageToIsoCommand = new AsyncRelayCommand(async p => await ConvertLegacyImageToIsoAsync(p as string), _ => !IsBusy && IsLegacyImageLoaded);
         CopyDiscCommand = new AsyncRelayCommand(async _ => await CopyDiscAsync(), _ => !IsBusy);
+        AddToBurnQueueCommand = new RelayCommand(p => AddToBurnQueue(p));
+        RemoveFromBurnQueueCommand = new RelayCommand(p => RemoveFromBurnQueue(p));
+        ClearBurnQueueCommand = new RelayCommand(() =>
+        {
+            BurnQueueItems.Clear();
+            RunBurnQueueCommand?.RaiseCanExecuteChanged();
+        });
+        RunBurnQueueCommand = new AsyncRelayCommand(
+            async p => await RunBurnQueueAsync(p as string),
+            _ => !IsBusy && BurnQueueItems.Count > 0);
+        BurnQueueItems.CollectionChanged += (_, _) => RunBurnQueueCommand.RaiseCanExecuteChanged();
         ClearOperationLogCommand = new RelayCommand(() => OperationLogEntries.Clear());
         CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => IsBusy);
 
@@ -648,7 +716,7 @@ public class ImageStudioViewModel : ObservableObject
         }
 
         string ext = Path.GetExtension(SourceImagePath).ToLowerInvariant();
-        IsLegacyImageLoaded = LegacyDiscImageConverter.IsLegacyImageFile(SourceImagePath);
+        IsLegacyImageLoaded = LegacyDiscImageConverter.IsLegacyImageFile(SourceImagePath) || ext is ".iso" or ".cue";
         if (ext == ".iso")
         {
             var fi = new FileInfo(SourceImagePath);
@@ -796,55 +864,137 @@ public class ImageStudioViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Converts a loaded legacy image (.nrg, .mdf/.mds, .ccd/.img) to a standard 2,048-byte Mode 1 .iso file.
+    /// Converts a loaded disc image (.iso, .cue, .nrg, .mdf/.mds, .ccd/.img) to standard ISO (.iso) or CDRWIN (.bin + .cue).
     /// </summary>
-    public async Task<string?> ConvertLegacyImageToIsoAsync(string? outputIsoPath = null, CancellationToken ct = default)
+    public async Task<string?> ConvertLegacyImageAsync(string? outputPath = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(SourceImagePath) || !File.Exists(SourceImagePath))
         {
-            StatusMessage = "Source legacy image file does not exist.";
+            StatusMessage = "Source disc image file does not exist.";
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(outputIsoPath))
+        string sourceExt = Path.GetExtension(SourceImagePath).ToLowerInvariant();
+        string? effectiveOutputPath = outputPath ?? LegacyConvertOutputPath;
+
+        if (string.IsNullOrWhiteSpace(effectiveOutputPath))
         {
             if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
-                var sfd = new SaveFileDialog
+                var sfd = new SaveFileDialog();
+                if (sourceExt == ".cue")
                 {
-                    Title = "Convert Legacy Disc Image to Standard ISO",
-                    Filter = "Standard ISO 9660 Image (*.iso)|*.iso",
-                    FileName = Path.ChangeExtension(Path.GetFileName(SourceImagePath), ".iso")
-                };
+                    sfd.Title = "Convert CUE Sheet to Standard ISO";
+                    sfd.Filter = "Standard ISO 9660 Image (*.iso)|*.iso";
+                    sfd.FileName = Path.ChangeExtension(Path.GetFileName(SourceImagePath), ".iso");
+                }
+                else if (sourceExt == ".iso")
+                {
+                    sfd.Title = "Convert ISO to CDRWIN BIN/CUE";
+                    sfd.Filter = "CDRWIN Binary Image (*.bin)|*.bin|Companion CUE Sheet (*.cue)|*.cue";
+                    sfd.FileName = Path.ChangeExtension(Path.GetFileName(SourceImagePath), ".bin");
+                }
+                else
+                {
+                    sfd.Title = "Convert Disc Image to ISO or BIN/CUE";
+                    sfd.Filter = "Standard ISO 9660 Image (*.iso)|*.iso|CDRWIN Binary Image (*.bin)|*.bin|Companion CUE Sheet (*.cue)|*.cue";
+                    sfd.FileName = Path.ChangeExtension(Path.GetFileName(SourceImagePath), ".iso");
+                }
+
                 if (sfd.ShowDialog() != true || string.IsNullOrWhiteSpace(sfd.FileName))
                 {
                     return null;
                 }
-                outputIsoPath = sfd.FileName;
+                effectiveOutputPath = sfd.FileName;
             }
             else
             {
-                outputIsoPath = Path.ChangeExtension(SourceImagePath, ".converted.iso");
+                effectiveOutputPath = sourceExt == ".iso"
+                    ? Path.ChangeExtension(SourceImagePath, ".converted.bin")
+                    : Path.ChangeExtension(SourceImagePath, ".converted.iso");
             }
         }
 
+        string targetExt = Path.GetExtension(effectiveOutputPath).ToLowerInvariant();
+        bool targetIsBinCue = targetExt is ".bin" or ".cue";
+
         IsBusy = true;
         BurnProgress = 0;
-        StatusMessage = $"Converting '{Path.GetFileName(SourceImagePath)}' to standard ISO...";
-        AppendLog($"Converting legacy image '{Path.GetFileName(SourceImagePath)}' -> '{Path.GetFileName(outputIsoPath)}'...");
+        AppendLog($"Converting image '{Path.GetFileName(SourceImagePath)}' -> '{Path.GetFileName(effectiveOutputPath)}'...");
 
         try
         {
             var progress = CreateOperationProgress(text => StatusMessage = text);
-            int sectors = await LegacyDiscImageConverter.ConvertToIsoAsync(SourceImagePath, outputIsoPath, progress, ct);
-            EndOperationProgress();
-            BurnProgress = 100.0;
-            StatusMessage = $"Converted to '{Path.GetFileName(outputIsoPath)}' ({sectors:N0} Mode 1 sectors).";
-            AppendLog($"Conversion complete: {sectors:N0} sectors written to '{outputIsoPath}'.");
-            return outputIsoPath;
+
+            if (targetIsBinCue)
+            {
+                string outputBinPath = targetExt == ".cue"
+                    ? Path.ChangeExtension(effectiveOutputPath, ".bin")
+                    : effectiveOutputPath;
+                string outputCuePath = targetExt == ".bin"
+                    ? Path.ChangeExtension(effectiveOutputPath, ".cue")
+                    : effectiveOutputPath;
+
+                StatusMessage = $"Converting '{Path.GetFileName(SourceImagePath)}' to BIN/CUE...";
+                var doubleProgress = new Progress<double>(fraction =>
+                {
+                    BurnProgress = Math.Min(100.0, fraction * 100.0);
+                });
+
+                int sectors = await LegacyDiscImageConverter.ConvertImageToBinCueAsync(
+                    SourceImagePath,
+                    outputBinPath,
+                    outputCuePath,
+                    doubleProgress,
+                    ct);
+
+                EndOperationProgress();
+                BurnProgress = 100.0;
+                StatusMessage = $"Converted to '{Path.GetFileName(outputBinPath)}' and '{Path.GetFileName(outputCuePath)}' ({sectors:N0} sectors).";
+                AppendLog($"Conversion complete: {sectors:N0} sectors written to '{outputBinPath}' and companion '{outputCuePath}'.");
+                return effectiveOutputPath;
+            }
+            else
+            {
+                StatusMessage = $"Converting '{Path.GetFileName(SourceImagePath)}' to standard ISO...";
+                if (sourceExt == ".cue")
+                {
+                    var doubleProgress = new Progress<double>(fraction =>
+                    {
+                        BurnProgress = Math.Min(100.0, fraction * 100.0);
+                    });
+
+                    int sectors = await LegacyDiscImageConverter.ConvertBinCueToIsoAsync(
+                        SourceImagePath,
+                        effectiveOutputPath,
+                        doubleProgress,
+                        ct);
+
+                    EndOperationProgress();
+                    BurnProgress = 100.0;
+                    StatusMessage = $"Converted to '{Path.GetFileName(effectiveOutputPath)}' ({sectors:N0} Mode 1 sectors).";
+                    AppendLog($"Conversion complete: {sectors:N0} sectors written to '{effectiveOutputPath}'.");
+                    return effectiveOutputPath;
+                }
+                else
+                {
+                    int sectors = await LegacyDiscImageConverter.ConvertToIsoAsync(
+                        SourceImagePath,
+                        effectiveOutputPath,
+                        progress,
+                        ct);
+
+                    EndOperationProgress();
+                    BurnProgress = 100.0;
+                    StatusMessage = $"Converted to '{Path.GetFileName(effectiveOutputPath)}' ({sectors:N0} Mode 1 sectors).";
+                    AppendLog($"Conversion complete: {sectors:N0} sectors written to '{effectiveOutputPath}'.");
+                    return effectiveOutputPath;
+                }
+            }
         }
         catch (Exception ex)
         {
+            EndOperationProgress();
             StatusMessage = $"Conversion failed: {ex.Message}";
             AppendLog($"Conversion failed: {ex.Message}");
             return null;
@@ -854,6 +1004,12 @@ public class ImageStudioViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    /// <summary>
+    /// Converts a loaded legacy image (.nrg, .mdf/.mds, .ccd/.img) or CUE sheet to a standard 2,048-byte Mode 1 .iso file.
+    /// </summary>
+    public Task<string?> ConvertLegacyImageToIsoAsync(string? outputIsoPath = null, CancellationToken ct = default) =>
+        ConvertLegacyImageAsync(outputIsoPath, ct);
 
     private void BrowseRipTargetFile()
     {
@@ -869,6 +1025,183 @@ public class ImageStudioViewModel : ObservableObject
         if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
         {
             RipTargetFilePath = dlg.FileName;
+        }
+    }
+
+    #endregion
+
+    #region Burn Queue Operations
+
+    /// <summary>
+    /// Adds an image file or explicit queue item to the sequential burn queue.
+    /// </summary>
+    public void AddToBurnQueue(object? parameter = null)
+    {
+        if (parameter is BurnQueueItem directItem)
+        {
+            BurnQueueItems.Add(directItem);
+            AppendLog($"Added '{Path.GetFileName(directItem.ImagePath)}' to burn queue.");
+            return;
+        }
+
+        string? path = parameter as string;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            path = SourceImagePath;
+        }
+
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                var dlg = new OpenFileDialog
+                {
+                    Title = "Select Disc Image to Queue",
+                    Filter = "Disc Images (*.iso;*.nrg;*.mdf;*.ccd;*.bin)|*.iso;*.nrg;*.mdf;*.ccd;*.bin|All Files (*.*)|*.*"
+                };
+                if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+                {
+                    path = dlg.FileName;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+        {
+            var item = new BurnQueueItem(
+                ImagePath: path,
+                WriteSpeedMultiplier: SelectedWriteSpeed?.Multiplier,
+                VerifyAfterBurn: VerifyAfterBurn,
+                CloseDisc: true);
+
+            BurnQueueItems.Add(item);
+            AppendLog($"Queued '{Path.GetFileName(path)}' (Queue length: {BurnQueueItems.Count}).");
+        }
+    }
+
+    /// <summary>
+    /// Removes a specified item (or the last item) from the burn queue.
+    /// </summary>
+    public void RemoveFromBurnQueue(object? parameter = null)
+    {
+        if (parameter is BurnQueueItem item && BurnQueueItems.Contains(item))
+        {
+            BurnQueueItems.Remove(item);
+            AppendLog($"Removed '{Path.GetFileName(item.ImagePath)}' from burn queue.");
+        }
+        else if (BurnQueueItems.Count > 0)
+        {
+            var last = BurnQueueItems[^1];
+            BurnQueueItems.RemoveAt(BurnQueueItems.Count - 1);
+            AppendLog($"Removed '{Path.GetFileName(last.ImagePath)}' from burn queue.");
+        }
+    }
+
+    /// <summary>
+    /// Sequentially executes all items in the burn queue.
+    /// </summary>
+    public async Task<BurnQueueResult> RunBurnQueueAsync(string? driveId = null, CancellationToken ct = default)
+    {
+        if (BurnQueueItems.Count == 0)
+        {
+            StatusMessage = "Burn queue is empty.";
+            return new BurnQueueResult { Success = false, ErrorMessage = StatusMessage };
+        }
+
+        var recorder = ResolveRecorder(driveId);
+        if (recorder == null)
+        {
+            StatusMessage = "No optical recorder drive selected or available.";
+            return new BurnQueueResult { Success = false, ErrorMessage = StatusMessage };
+        }
+
+        // Auto-mount blank media in virtual drive if empty
+        if (recorder is VirtualDiscRecorder vRec)
+        {
+            var mediaStatus = vRec.QueryMediaStatus();
+            if (!mediaStatus.MediaPresent || (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable))
+            {
+                vRec.InsertMedia(CreateBlankVirtualMediumFor(new MediaStatusDto { UsedSectors = 2000 }));
+            }
+        }
+
+        _activeCts?.Dispose();
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var linkedToken = _activeCts.Token;
+
+        IsBusy = true;
+        BurnProgress = 0;
+        StatusMessage = $"Starting burn queue ({BurnQueueItems.Count} items) on {recorder.VolumePath} ({recorder.ProductId})...";
+        AppendLog($"Burn queue started: {BurnQueueItems.Count} items on {recorder.UniqueId}.");
+
+        try
+        {
+            var progress = CreateOperationProgress(text => StatusMessage = text);
+
+            Func<int, BurnQueueItem, CancellationToken, Task<bool>>? promptCallback = null;
+            if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                promptCallback = async (index, nextItem, cancellationToken) =>
+                {
+                    AppendLog($"Prompting for disc swap before queue item #{index + 1} ('{Path.GetFileName(nextItem.ImagePath)}')...");
+                    var res = await ShowMessageOnUiThreadAsync(
+                        $"Burn queue: disc {index + 1} of {BurnQueueItems.Count}.\n\nInsert a blank disc for '{Path.GetFileName(nextItem.ImagePath)}' and click OK.",
+                        System.Windows.MessageBoxButton.OKCancel,
+                        System.Windows.MessageBoxImage.Information);
+                    return res == System.Windows.MessageBoxResult.OK;
+                };
+            }
+            else if (recorder is VirtualDiscRecorder vRecorder)
+            {
+                promptCallback = (index, nextItem, cancellationToken) =>
+                {
+                    vRecorder.InsertMedia(CreateBlankVirtualMediumFor(new MediaStatusDto { UsedSectors = 2000 }));
+                    return Task.FromResult(true);
+                };
+            }
+
+            var queueResult = await _burnQueueService.ExecuteQueueAsync(
+                recorder,
+                BurnQueueItems.ToList(),
+                promptForNextDiscAsync: promptCallback,
+                progress: progress,
+                postBurnAction: SelectedPostBurnAction,
+                continueOnError: false,
+                cancellationToken: linkedToken);
+
+            EndOperationProgress();
+
+            if (queueResult.Success)
+            {
+                StatusMessage = $"Burn queue completed successfully ({queueResult.CompletedItems}/{queueResult.TotalItems} images in {queueResult.TotalTime:mm\\:ss}).";
+                BurnProgress = 100.0;
+                AppendLog(StatusMessage);
+            }
+            else
+            {
+                StatusMessage = $"Burn queue finished with errors: {queueResult.ErrorMessage} ({queueResult.CompletedItems}/{queueResult.TotalItems} completed).";
+                AppendLog(StatusMessage);
+            }
+
+            return queueResult;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Burn queue cancelled by user.";
+            AppendLog(StatusMessage);
+            return new BurnQueueResult { Success = false, ErrorMessage = StatusMessage, Items = BurnQueueItems.ToList() };
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Burn queue error: {ex.Message}";
+            AppendLog(StatusMessage);
+            return new BurnQueueResult { Success = false, ErrorMessage = ex.Message, Items = BurnQueueItems.ToList() };
+        }
+        finally
+        {
+            _activeCts?.Dispose();
+            _activeCts = null;
+            IsBusy = false;
         }
     }
 
@@ -1033,6 +1366,9 @@ public class ImageStudioViewModel : ObservableObject
                     await VerifyDiscAgainstImageAsync(recorder.UniqueId, linkedToken);
                     StatusMessage = VerificationStatusText;
                 }
+
+                // After verification, never before it: ejecting first would leave nothing to verify.
+                PostBurnActionExecutor.Execute(SelectedPostBurnAction, recorder);
             }
             else
             {

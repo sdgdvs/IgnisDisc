@@ -5,4 +5,8 @@
     <AssemblyName>CdBurner.Core</AssemblyName>
   </PropertyGroup>
 
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
+
 </Project>

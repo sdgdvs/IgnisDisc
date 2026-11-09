@@ -1,0 +1,178 @@
+[
+  {
+    "featureMarkdown": "Burn data disc from files / folders",
+    "featureHtml": "Burn a data disc from files and folders",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "ISO 9660 + Joliet + UDF 1.02 bridge",
+    "notesHtml": "ISO 9660 + Joliet + UDF 1.02 bridge"
+  },
+  {
+    "featureMarkdown": "Burn an existing `.iso`",
+    "featureHtml": "Burn an existing <code>.iso</code>",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "",
+    "notesHtml": ""
+  },
+  {
+    "featureMarkdown": "Create `.iso` image files",
+    "featureHtml": "Create <code>.iso</code> image files",
+    "physical": "✅",
+    "virtual": "—",
+    "notesMarkdown": "Validated against an independent reader (DiscUtils) in the test suite",
+    "notesHtml": "Validated against an independent reader (DiscUtils) in the test suite"
+  },
+  {
+    "featureMarkdown": "Verify after burn",
+    "featureHtml": "Verify after burning",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "SHA-256 readback",
+    "notesHtml": "Reads the disc back and compares SHA-256"
+  },
+  {
+    "featureMarkdown": "Rip data disc to `.iso` / `.bin` + `.cue`",
+    "featureHtml": "Rip a data disc to <code>.iso</code> or <code>.bin</code> + <code>.cue</code>",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "",
+    "notesHtml": ""
+  },
+  {
+    "featureMarkdown": "Burn audio CD (Disc-at-Once / Track-at-Once)",
+    "featureHtml": "Burn an audio CD (Disc-at-Once / Track-at-Once)",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling, crossfade, preview, printable jewel-case insert",
+    "notesHtml": "From WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; <code>.cue</code> sheets (per-track or single-file albums) and <code>.m3u</code>/<code>.m3u8</code>/<code>.pls</code> playlists; loudness leveling, crossfade, preview, printable jewel-case insert"
+  },
+  {
+    "featureMarkdown": "Burn / verify / convert legacy images",
+    "featureHtml": "Burn, verify or convert Nero, Alcohol 120% and CloneCD images",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit",
+    "notesHtml": "<code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; streamed, no size limit"
+  },
+  {
+    "featureMarkdown": "Disc copy (one or two drives, multi-copy)",
+    "featureHtml": "Copy a disc (one or two drives, several copies)",
+    "physical": "⚠️",
+    "virtual": "✅",
+    "notesMarkdown": "Swap prompts between copies; audio CDs copied track by track",
+    "notesHtml": "Swap prompts between copies; audio CDs copied track by track; real-drive reports welcome"
+  },
+  {
+    "featureMarkdown": "Rip audio CD to `.wav` / `.flac` + `.cue`",
+    "featureHtml": "Rip an audio CD to WAV or FLAC + <code>.cue</code>",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Reads the real TOC and CD-Text; optional MusicBrainz track names",
+    "notesHtml": "Reads the real TOC and CD-Text; optional MusicBrainz track names"
+  },
+  {
+    "featureMarkdown": "AccurateRip verification + read-offset correction",
+    "featureHtml": "AccurateRip verification and read-offset correction",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Detects your drive's offset from a disc in the AccurateRip database",
+    "notesHtml": "Detects your drive's offset from a disc in the AccurateRip database"
+  },
+  {
+    "featureMarkdown": "Secure audio ripping (C2 error pointers + re-reads)",
+    "featureHtml": "Secure audio ripping (C2 error pointers and re-reads)",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Flags suspect sectors; can be slow on badly scratched discs",
+    "notesHtml": "Flags suspect sectors; can be slow on badly scratched discs"
+  },
+  {
+    "featureMarkdown": "Archive Studio: span folders across discs",
+    "featureHtml": "Archive Studio: span folders across discs",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`)",
+    "notesHtml": "SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code>"
+  },
+  {
+    "featureMarkdown": "Quick / full erase of rewritable media",
+    "featureHtml": "Quick or full erase of rewritable media",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "",
+    "notesHtml": ""
+  },
+  {
+    "featureMarkdown": "Re-burn a used DVD+RW / DVD-RAM",
+    "featureHtml": "Re-burn a used DVD+RW / DVD-RAM",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Asks before replacing the files on the disc (`--overwrite` on the command line); finalized CD-RW / sequential DVD-RW require `erase` first",
+    "notesHtml": "Asks before replacing the files on the disc (<code>--overwrite</code> on the command line); finalized CD-RW / sequential DVD-RW require <code>erase</code> first"
+  },
+  {
+    "featureMarkdown": "Surface scan",
+    "featureHtml": "Surface scan",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Per-track Full TOC (`0x02`) scan skips unrecorded multi-session gaps and auto-selects 2352B raw mode on audio tracks",
+    "notesHtml": "Per-track Full TOC (<code>0x02</code>) scan skips unrecorded multi-session gaps and auto-selects 2352B raw mode on audio tracks"
+  },
+  {
+    "featureMarkdown": "Append a session (multi-session)",
+    "featureHtml": "Append a session (multi-session)",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions",
+    "notesHtml": "Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions"
+  },
+  {
+    "featureMarkdown": "Bootable discs (El Torito BIOS + UEFI)",
+    "featureHtml": "Bootable discs (El Torito BIOS + UEFI)",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders",
+    "notesHtml": "Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders"
+  },
+  {
+    "featureMarkdown": "DVD-Video authoring",
+    "featureHtml": "DVD-Video authoring",
+    "physical": "⚠️",
+    "virtual": "✅",
+    "notesMarkdown": "Requires `ffmpeg.exe`; test on a standalone player before relying on it",
+    "notesHtml": "Requires <code>ffmpeg.exe</code>; test on a standalone player before relying on it"
+  },
+  {
+    "featureMarkdown": "Blu-ray (BD-R / BD-RE)",
+    "featureHtml": "Blu-ray (BD-R / BD-RE)",
+    "physical": "❌",
+    "virtual": "—",
+    "notesMarkdown": "Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first",
+    "notesHtml": "Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first"
+  },
+  {
+    "featureMarkdown": "CD-Text / ISRC on burned audio CDs",
+    "featureHtml": "CD-Text / ISRC on burned audio CDs",
+    "physical": "❌",
+    "virtual": "✅",
+    "notesMarkdown": "IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and `.cue` files",
+    "notesHtml": "IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and <code>.cue</code> files"
+  },
+  {
+    "featureMarkdown": "DVD+R book type (bitsetting)",
+    "featureHtml": "DVD+R book type (bitsetting)",
+    "physical": "❌",
+    "virtual": "✅",
+    "notesMarkdown": "Needs drive-vendor-specific commands; reports \"not supported\" instead of pretending",
+    "notesHtml": "Needs drive-vendor-specific commands; reports \"not supported\" instead of pretending"
+  },
+  {
+    "featureMarkdown": "Test-write / simulation",
+    "featureHtml": "Test write (simulation)",
+    "physical": "❌",
+    "virtual": "✅",
+    "notesMarkdown": "Not available through IMAPIv2",
+    "notesHtml": "Not available through IMAPIv2"
+  }
+]

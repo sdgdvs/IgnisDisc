@@ -60,6 +60,8 @@ public static class LegacyDiscImageConverter
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
         return ext switch
         {
+            ".iso" => InspectIso(filePath),
+            ".bin" => InspectRawBin(filePath),
             ".nrg" => InspectNrg(filePath),
             ".ccd" => InspectCloneCdCcd(filePath),
             ".img" => InspectCloneCdImg(filePath),
@@ -97,6 +99,308 @@ public static class LegacyDiscImageConverter
 
         await using var outStream = new FileStream(outputIsoPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
         return await ExtractMode1IsoStreamAsync(info, outStream, progress, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Converts a disc image (.iso, .nrg, .mdf/.mds, .ccd/.img) into a companion CDRWIN (.bin + .cue) pair.
+    /// Streams 2,048-byte user data sectors out to <paramref name="outputBinPath"/> (or preserves raw 2,352-byte
+    /// sectors when the source image is already raw) and writes the companion .cue sheet.
+    /// </summary>
+    public static async Task<int> ConvertImageToBinCueAsync(
+        string sourcePath,
+        string outputBinPath,
+        string? outputCuePath = null,
+        IProgress<double>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputBinPath);
+
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException($"Source disc image file not found: '{sourcePath}'.", sourcePath);
+        }
+
+        string ext = Path.GetExtension(sourcePath).ToLowerInvariant();
+        if (ext is not (".iso" or ".nrg" or ".mdf" or ".mds" or ".ccd" or ".img" or ".bin"))
+        {
+            throw new NotSupportedException($"Unsupported disc image extension '{ext}' for BIN/CUE conversion.");
+        }
+
+        var info = Inspect(sourcePath);
+        if (info.IsAudioDisc)
+        {
+            throw new InvalidOperationException(
+                $"Cannot convert Red Book Audio image '{Path.GetFileName(sourcePath)}' to a data BIN/CUE image.");
+        }
+
+        if (info.TrackCount > 1)
+        {
+            // The output cue describes one data track. Writing a multi-track (mixed-mode) image under it would label
+            // audio sectors as data, so refuse rather than produce a broken image.
+            throw new NotSupportedException(
+                $"'{Path.GetFileName(sourcePath)}' has {info.TrackCount} tracks. Only single-track data images can be converted to BIN/CUE.");
+        }
+
+        outputCuePath ??= Path.ChangeExtension(outputBinPath, ".cue");
+        if (string.Equals(outputBinPath, outputCuePath, StringComparison.OrdinalIgnoreCase))
+        {
+            outputBinPath = Path.ChangeExtension(outputBinPath, ".bin");
+        }
+
+        string fullSource = Path.GetFullPath(sourcePath);
+        string fullPayload = Path.GetFullPath(info.BinaryPayloadPath);
+        foreach (string output in new[] { outputBinPath, outputCuePath })
+        {
+            string fullOutput = Path.GetFullPath(output);
+            if (string.Equals(fullOutput, fullSource, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(fullOutput, fullPayload, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException($"The output file '{output}' would overwrite the source image. Choose another name.");
+            }
+        }
+
+        string? binDir = Path.GetDirectoryName(outputBinPath);
+        if (!string.IsNullOrEmpty(binDir) && !Directory.Exists(binDir))
+        {
+            Directory.CreateDirectory(binDir);
+        }
+
+        string? cueDir = Path.GetDirectoryName(outputCuePath);
+        if (!string.IsNullOrEmpty(cueDir) && !Directory.Exists(cueDir))
+        {
+            Directory.CreateDirectory(cueDir);
+        }
+
+        string trackMode = "MODE1/2048";
+        int srcSectorSize = info.SectorSizeBytes;
+        int outSectorSize = OpticalConstants.DataSectorSize;
+
+        if (info.SectorSizeBytes == SectorSize2336)
+        {
+            trackMode = "MODE2/2336";
+            outSectorSize = SectorSize2336;
+        }
+        else if (info.IsRaw2352 || info.SectorSizeBytes is OpticalConstants.RawSectorSize or SectorSize2448)
+        {
+            outSectorSize = OpticalConstants.RawSectorSize;
+            await using (var probeFs = new FileStream(info.BinaryPayloadPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true))
+            {
+                probeFs.Position = info.PayloadOffsetBytes;
+                byte[] probeBuf = new byte[32];
+                int r = await probeFs.ReadAsync(probeBuf.AsMemory(0, 32), cancellationToken).ConfigureAwait(false);
+                bool isMode2 = r > 15 && probeBuf[15] == 2;
+                trackMode = isMode2 ? "MODE2/2352" : "MODE1/2352";
+            }
+        }
+        else
+        {
+            outSectorSize = OpticalConstants.DataSectorSize;
+            trackMode = "MODE1/2048";
+        }
+
+        string binFileName = Path.GetFileName(outputBinPath);
+        string cueContent = $"""
+            FILE "{binFileName}" BINARY
+              TRACK 01 {trackMode}
+                INDEX 01 00:00:00
+
+            """;
+
+        // No byte-order mark: CDRWIN-era tools and many burners reject a .cue that starts with one.
+        await File.WriteAllTextAsync(outputCuePath, cueContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken).ConfigureAwait(false);
+
+        await using var src = new FileStream(info.BinaryPayloadPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+        src.Position = Math.Clamp(info.PayloadOffsetBytes, 0, src.Length);
+
+        await using var dest = new FileStream(outputBinPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
+
+        int totalSectors = info.SectorCount;
+        byte[] sectorBuf = new byte[Math.Max(srcSectorSize, outSectorSize)];
+        int writtenSectors = 0;
+
+        while (writtenSectors < totalSectors)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int readTotal = 0;
+            while (readTotal < srcSectorSize)
+            {
+                int r = await src.ReadAsync(sectorBuf.AsMemory(readTotal, srcSectorSize - readTotal), cancellationToken).ConfigureAwait(false);
+                if (r == 0) break;
+                readTotal += r;
+            }
+
+            if (readTotal == 0) break;
+            if (readTotal < srcSectorSize)
+            {
+                Array.Clear(sectorBuf, readTotal, srcSectorSize - readTotal);
+            }
+
+            await dest.WriteAsync(sectorBuf.AsMemory(0, outSectorSize), cancellationToken).ConfigureAwait(false);
+            writtenSectors++;
+
+            if (progress != null && (writtenSectors % 64 == 0 || writtenSectors == totalSectors))
+            {
+                progress.Report(Math.Min(1.0, (double)writtenSectors / totalSectors));
+            }
+        }
+
+        await dest.FlushAsync(cancellationToken).ConfigureAwait(false);
+        progress?.Report(1.0);
+        return writtenSectors;
+    }
+
+    /// <summary>
+    /// Converts a CDRWIN (.bin + .cue) image pair into a standard 2,048-byte Mode 1 / Mode 2 Form 1 ISO 9660 file (.iso).
+    /// Extracts the first data track from the CUE sheet, streaming 2,048-byte user data sectors and stripping headers/trailers.
+    /// </summary>
+    public static async Task<int> ConvertBinCueToIsoAsync(
+        string cuePath,
+        string outputIsoPath,
+        IProgress<double>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cuePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputIsoPath);
+
+        if (!File.Exists(cuePath))
+        {
+            throw new FileNotFoundException($"CUE sheet file not found: '{cuePath}'.", cuePath);
+        }
+
+        var cueSheet = CueSheetParser.ParseFile(cuePath);
+
+        CueFileEntry? dataFile = null;
+        CueTrack? dataTrack = null;
+        foreach (var file in cueSheet.Files)
+        {
+            foreach (var track in file.Tracks)
+            {
+                if (!track.IsAudio)
+                {
+                    dataFile = file;
+                    dataTrack = track;
+                    break;
+                }
+            }
+            if (dataTrack != null) break;
+        }
+
+        if (dataTrack == null || dataFile == null)
+        {
+            throw new InvalidDataException($"CUE sheet '{Path.GetFileName(cuePath)}' contains only audio tracks and has no data track to convert to ISO.");
+        }
+
+        string binPath = dataFile.FileName;
+        if (!Path.IsPathRooted(binPath))
+        {
+            string cueDir = Path.GetDirectoryName(cuePath) ?? string.Empty;
+            binPath = Path.Combine(cueDir, binPath);
+        }
+
+        if (!File.Exists(binPath))
+        {
+            throw new FileNotFoundException($"Binary payload file referenced in CUE sheet not found: '{binPath}'.", binPath);
+        }
+
+        long fileLen = new FileInfo(binPath).Length;
+        int sectorSize = dataTrack.DataType switch
+        {
+            CueTrackDataType.Mode1_2048 => OpticalConstants.DataSectorSize,
+            CueTrackDataType.Mode2_2336 => SectorSize2336,
+            CueTrackDataType.Mode1_2352 or CueTrackDataType.Mode2_2352 => OpticalConstants.RawSectorSize,
+            _ => OpticalConstants.DataSectorSize
+        };
+
+        if (fileLen > 0 && fileLen % SectorSize2448 == 0 && fileLen % OpticalConstants.RawSectorSize != 0)
+        {
+            sectorSize = SectorSize2448;
+        }
+
+        int startFrame = 0;
+        var idx01 = dataTrack.Indices.FirstOrDefault(i => i.IndexNumber == 1);
+        if (idx01 != null)
+        {
+            startFrame = idx01.Position.ToFrameCount();
+        }
+
+        int trackIndex = -1;
+        for (int i = 0; i < dataFile.Tracks.Count; i++)
+        {
+            if (ReferenceEquals(dataFile.Tracks[i], dataTrack) || dataFile.Tracks[i].TrackNumber == dataTrack.TrackNumber)
+            {
+                trackIndex = i;
+                break;
+            }
+        }
+
+        int sectorCount;
+        if (trackIndex >= 0 && trackIndex + 1 < dataFile.Tracks.Count)
+        {
+            var nextTrack = dataFile.Tracks[trackIndex + 1];
+            var nextIdx = nextTrack.Indices.OrderBy(idx => idx.IndexNumber).FirstOrDefault();
+            if (nextIdx != null && nextIdx.Position.ToFrameCount() > startFrame)
+            {
+                sectorCount = nextIdx.Position.ToFrameCount() - startFrame;
+            }
+            else
+            {
+                int totalFrames = (int)(fileLen / sectorSize);
+                sectorCount = Math.Max(0, totalFrames - startFrame);
+            }
+        }
+        else
+        {
+            int totalFrames = (int)(fileLen / sectorSize);
+            sectorCount = Math.Max(0, totalFrames - startFrame);
+        }
+
+        string? outDir = Path.GetDirectoryName(outputIsoPath);
+        if (!string.IsNullOrEmpty(outDir) && !Directory.Exists(outDir))
+        {
+            Directory.CreateDirectory(outDir);
+        }
+
+        await using var src = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+        src.Position = (long)startFrame * sectorSize;
+
+        await using var dest = new FileStream(outputIsoPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
+
+        byte[] sectorBuf = new byte[sectorSize];
+        int writtenSectors = 0;
+
+        while (writtenSectors < sectorCount)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int readTotal = 0;
+            while (readTotal < sectorSize)
+            {
+                int r = await src.ReadAsync(sectorBuf.AsMemory(readTotal, sectorSize - readTotal), cancellationToken).ConfigureAwait(false);
+                if (r == 0) break;
+                readTotal += r;
+            }
+
+            if (readTotal == 0) break;
+            if (readTotal < sectorSize)
+            {
+                Array.Clear(sectorBuf, readTotal, sectorSize - readTotal);
+            }
+
+            int userOffset = GetUserDataOffset(sectorBuf, sectorSize);
+            await dest.WriteAsync(sectorBuf.AsMemory(userOffset, OpticalConstants.DataSectorSize), cancellationToken).ConfigureAwait(false);
+            writtenSectors++;
+
+            if (progress != null && (writtenSectors % 64 == 0 || writtenSectors == sectorCount))
+            {
+                progress.Report(Math.Min(1.0, (double)writtenSectors / sectorCount));
+            }
+        }
+
+        await dest.FlushAsync(cancellationToken).ConfigureAwait(false);
+        progress?.Report(1.0);
+        return writtenSectors;
     }
 
     /// <summary>
@@ -319,6 +623,49 @@ public static class LegacyDiscImageConverter
     #endregion
 
     #region Format Inspectors
+
+    private static LegacyDiscImageInfo InspectIso(string isoPath)
+    {
+        using var fs = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        long len = fs.Length;
+        int sectors = OpticalConstants.BytesToSectors(len, OpticalConstants.DataSectorSize);
+        return new LegacyDiscImageInfo(
+            SourceFilePath: isoPath,
+            BinaryPayloadPath: isoPath,
+            FormatName: "Standard ISO 9660 Image (.iso)",
+            PayloadOffsetBytes: 0,
+            PayloadLengthBytes: len,
+            SectorSizeBytes: OpticalConstants.DataSectorSize,
+            SectorCount: sectors,
+            IsRaw2352: false,
+            IsAudioDisc: false,
+            TrackCount: 1);
+    }
+
+    private static LegacyDiscImageInfo InspectRawBin(string binPath)
+    {
+        using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        bool hasIsoVolume = TryProbeIsoGeometry(fs, 0, fs.Length, out _, out _);
+        var (sectorSize, offset, len) = ProbeOrGuessGeometry(fs);
+        bool isRaw = sectorSize != OpticalConstants.DataSectorSize;
+        int sectors = OpticalConstants.BytesToSectors(len, sectorSize);
+
+        // A raw 2,352-byte .bin with no ISO 9660 volume descriptor is almost always CD-DA audio. Treat it as audio so
+        // it is never burned or converted as if its sectors were data.
+        bool looksLikeAudio = isRaw && !hasIsoVolume;
+
+        return new LegacyDiscImageInfo(
+            SourceFilePath: binPath,
+            BinaryPayloadPath: binPath,
+            FormatName: isRaw ? $"Raw Sector Binary Image (.bin, {sectorSize} B)" : "Raw ISO Sector Image (.bin, 2048 B)",
+            PayloadOffsetBytes: offset,
+            PayloadLengthBytes: len,
+            SectorSizeBytes: sectorSize,
+            SectorCount: sectors,
+            IsRaw2352: isRaw,
+            IsAudioDisc: looksLikeAudio,
+            TrackCount: 1);
+    }
 
     private static LegacyDiscImageInfo InspectNrg(string nrgPath)
     {

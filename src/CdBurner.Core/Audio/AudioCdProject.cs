@@ -14,7 +14,8 @@ public enum AudioRecordingMode
     TrackAtOnce,
 
     /// <summary>
-    /// Disc-at-Once (DAO): Writes all tracks gaplessly in a continuous laser pass, enabling seamless transitions and Lead-In CD-Text.
+    /// Disc-at-Once (DAO): writes all tracks in one pass with no forced gaps between them. (Lead-in CD-Text needs the
+    /// planned native writer; IMAPIv2 cannot write it on physical drives.)
     /// </summary>
     DiscAtOnceGapless
 }
@@ -68,6 +69,11 @@ public record AudioCdTrackItem(
     public int? SourceFrameCount { get; init; }
 
     /// <summary>
+    /// Optional back-reference to the single-file album source caching the decoded PCM for this track's slice.
+    /// </summary>
+    public SingleFileAlbumSource? AlbumSource { get; init; }
+
+    /// <summary>
     /// Total duration of this track in 2,352-byte Red Book frames (75 fps).
     /// </summary>
     public int DurationFrames
@@ -75,6 +81,38 @@ public record AudioCdTrackItem(
         get
         {
             if (_durationFrames > 0) return _durationFrames;
+
+            // 1. Fast path: if the slice frame count was known from the CUE sheet, return it immediately
+            // without decoding the album or opening streams.
+            if (SourceFrameCount.HasValue && SourceFrameCount.Value > 0)
+            {
+                _durationFrames = SourceFrameCount.Value;
+                return _durationFrames;
+            }
+
+            // 2. Sliced track running to the end of the file (SourceStartFrame set, SourceFrameCount null):
+            // probe the file's header metadata instead of decoding the entire audio file synchronously.
+            if (SourceStartFrame.HasValue && !string.IsNullOrWhiteSpace(SourceFilePath) && File.Exists(SourceFilePath))
+            {
+                try
+                {
+                    AudioFormatMetadata? meta = FlacFileCodec.IsFlacFile(SourceFilePath)
+                        ? FlacFileCodec.ProbeAudioFile(SourceFilePath)
+                        : WavFileCodec.ProbeAudioFile(SourceFilePath);
+
+                    if (meta != null && meta.TotalFrames > 0)
+                    {
+                        _durationFrames = Math.Max(0, meta.TotalFrames - SourceStartFrame.Value);
+                        return _durationFrames;
+                    }
+                }
+                catch
+                {
+                    // Fall back to stream factory below if header probing fails
+                }
+            }
+
+            // 3. Fallback: custom stream factory
             if (CustomPcmStreamFactory != null)
             {
                 try
@@ -112,7 +150,9 @@ public record AudioCdTrackItem(
 /// </summary>
 public sealed class SingleFileAlbumSource
 {
-    private readonly Lazy<byte[]> _pcm;
+    private readonly object _sync = new();
+    private byte[]? _pcm;
+    private readonly IAudioDecoder? _audioDecoder;
 
     /// <summary>
     /// Creates a lazily decoded album source for <paramref name="filePath"/>.
@@ -121,7 +161,7 @@ public sealed class SingleFileAlbumSource
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         FilePath = filePath;
-        _pcm = new Lazy<byte[]>(() => DecodeSectorAligned(filePath, audioDecoder), LazyThreadSafetyMode.ExecutionAndPublication);
+        _audioDecoder = audioDecoder;
     }
 
     /// <summary>
@@ -130,14 +170,45 @@ public sealed class SingleFileAlbumSource
     public string FilePath { get; }
 
     /// <summary>
-    /// Whether the album has already been decoded.
+    /// Whether the album has already been decoded and is currently cached in memory.
     /// </summary>
-    public bool IsDecoded => _pcm.IsValueCreated;
+    public bool IsDecoded
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _pcm != null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Releases the cached decoded PCM buffer (~800 MB) from memory.
+    /// If accessed again, the audio will be re-decoded lazily on demand.
+    /// </summary>
+    public void ReleaseDecodedBuffer()
+    {
+        lock (_sync)
+        {
+            _pcm = null;
+        }
+    }
+
+    private byte[] GetOrDecodePcm()
+    {
+        lock (_sync)
+        {
+            if (_pcm != null) return _pcm;
+            _pcm = DecodeSectorAligned(FilePath, _audioDecoder);
+            return _pcm;
+        }
+    }
 
     /// <summary>
     /// Total decoded length in 75 fps frames (decodes on first access).
     /// </summary>
-    public int TotalFrames => _pcm.Value.Length / OpticalConstants.RawSectorSize;
+    public int TotalFrames => GetOrDecodePcm().Length / OpticalConstants.RawSectorSize;
 
     /// <summary>
     /// Returns a factory that opens the slice [<paramref name="startFrame"/>, +<paramref name="frameCount"/>) as a read-only stream.
@@ -145,7 +216,7 @@ public sealed class SingleFileAlbumSource
     /// </summary>
     public Func<Stream> CreateSliceFactory(int startFrame, int? frameCount) => () =>
     {
-        byte[] all = _pcm.Value;
+        byte[] all = GetOrDecodePcm();
         int totalFrames = all.Length / OpticalConstants.RawSectorSize;
         int start = Math.Clamp(startFrame, 0, totalFrames);
         int remaining = totalFrames - start;
@@ -401,7 +472,20 @@ public class AudioCdCompilation
     /// </summary>
     public void ClearTracks()
     {
+        ReleaseCachedAlbumBuffers();
         _tracks.Clear();
+    }
+
+    /// <summary>
+    /// Releases decoded in-memory PCM buffers for all single-file album sources in this compilation.
+    /// Buffers will be re-decoded on demand if accessed again.
+    /// </summary>
+    public void ReleaseCachedAlbumBuffers()
+    {
+        foreach (var track in _tracks)
+        {
+            track.AlbumSource?.ReleaseDecodedBuffer();
+        }
     }
 
     /// <summary>
@@ -655,7 +739,8 @@ public class AudioCdCompilation
                         Composer = Composer,
                         DurationFrames = displayFrames,
                         SourceStartFrame = startFrame,
-                        SourceFrameCount = sliceFrameCount
+                        SourceFrameCount = sliceFrameCount,
+                        AlbumSource = album
                     });
                     added++;
                 }

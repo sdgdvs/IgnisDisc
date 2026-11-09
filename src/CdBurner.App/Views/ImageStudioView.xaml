@@ -17,7 +17,7 @@
     </UserControl.Resources>
 
     <Grid Margin="16">
-        <TabControl Background="Transparent" BorderThickness="0">
+        <TabControl KeyboardNavigation.TabNavigation="Local" Background="Transparent" BorderThickness="0">
             <!-- ========================================================================= -->
             <!-- TAB 1: BURN DISC IMAGE (.ISO / .CUE)                                     -->
             <!-- ========================================================================= -->
@@ -57,6 +57,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,10,0" />
                             <TextBox Grid.Row="0" Grid.Column="1"
+                                     AutomationProperties.Name="Source Image"
                                      Text="{Binding SourceImagePath, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="8,6"
                                      Background="{DynamicResource ControlBackgroundBrush}"
@@ -65,11 +66,13 @@
                                      Margin="0,0,8,0" />
                             <Button Grid.Row="0" Grid.Column="2"
                                     Content="📂 Browse..."
+                                    AutomationProperties.Name="Browse Source Image"
                                     Command="{Binding BrowseImageCommand}"
                                     VerticalAlignment="Center"
                                     Margin="0,0,8,0" />
                             <Button Grid.Row="0" Grid.Column="3"
                                     Content="🔍 Inspect"
+                                    AutomationProperties.Name="Inspect Image"
                                     Command="{Binding InspectImageCommand}"
                                     VerticalAlignment="Center" />
 
@@ -78,10 +81,12 @@
                                         Margin="0,10,0,0"
                                         VerticalAlignment="Center">
                                 <CheckBox Content="Verify media bit-for-bit after burn completes"
+                                          AutomationProperties.Name="Verify media bit-for-bit after burn completes"
                                           IsChecked="{Binding VerifyAfterBurn}"
                                           VerticalAlignment="Center"
                                           Margin="0,0,20,0" />
-                                <Button Content="🔄 Convert Legacy Image (.nrg/.mdf/.ccd) to .ISO..."
+                                <Button Content="🔄 Convert Image (BIN/CUE ↔ ISO, Legacy)..."
+                                        AutomationProperties.Name="Convert Legacy Image to ISO"
                                         Command="{Binding ConvertLegacyImageToIsoCommand}"
                                         Visibility="{Binding IsLegacyImageLoaded, Converter={StaticResource BoolToVis}}"
                                         Padding="12,4"
@@ -158,7 +163,8 @@
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                     <TextBlock Text="Drive Buf:" FontSize="10" Foreground="{DynamicResource TextMutedBrush}" Width="52" />
-                                    <ProgressBar Width="70" Height="6" Minimum="0" Maximum="100" Value="{Binding DeviceBufferPercent}" Margin="0,0,6,0" />
+                                    <ProgressBar Width="70" Height="6" Minimum="0" Maximum="100" Value="{Binding DeviceBufferPercent}" Margin="0,0,6,0"
+                                                 AutomationProperties.Name="Drive Buffer" />
                                     <TextBlock Text="{Binding DeviceBufferPercent, StringFormat='{}{0:F0}%'}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" />
                                 </StackPanel>
                             </StackPanel>
@@ -184,6 +190,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            VerticalAlignment="Center" />
                                 <Button Content="🧹 Clear Log"
+                                        AutomationProperties.Name="Clear Log"
                                         Command="{Binding ClearOperationLogCommand}"
                                         HorizontalAlignment="Right"
                                         DockPanel.Dock="Right"
@@ -191,6 +198,7 @@
                                         FontSize="11" />
                             </DockPanel>
                             <ListBox Grid.Row="1"
+                                     AutomationProperties.Name="Operation Log"
                                      ItemsSource="{Binding OperationLogEntries}"
                                      FontFamily="Consolas, Courier New, monospace"
                                      FontSize="11.5"
@@ -220,6 +228,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <ProgressBar Height="6"
+                                             AutomationProperties.Name="Burn Progress"
                                              Minimum="0"
                                              Maximum="100"
                                              Value="{Binding BurnProgress}"
@@ -234,6 +243,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <ComboBox Width="260"
+                                          AutomationProperties.Name="Burn To Optical Drive"
                                           ItemsSource="{Binding AvailableRecorders}"
                                           SelectedItem="{Binding SelectedRecorder}"
                                           ToolTip="Select the optical drive to burn this image to">
@@ -251,6 +261,7 @@
 
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="🛑 Cancel"
+                                        AutomationProperties.Name="Cancel Burn"
                                         Command="{Binding CancelCommand}"
                                         Background="#D83B01"
                                         Foreground="White"
@@ -259,7 +270,14 @@
                                         Padding="18,10"
                                         FontSize="14"
                                         Margin="0,0,8,0" />
+                                <Button Content="➕ Add to Queue"
+                                        AutomationProperties.Name="Add Image to Burn Queue"
+                                        Command="{Binding AddToBurnQueueCommand}"
+                                        Padding="16,10"
+                                        FontSize="14"
+                                        Margin="0,0,8,0" />
                                 <Button Content="🔥 Burn Image to Disc"
+                                        AutomationProperties.Name="Burn Image to Disc"
                                         Command="{Binding BurnImageToDiscCommand}"
                                         Style="{StaticResource AccentButtonStyle}"
                                         Padding="24,10"
@@ -310,6 +328,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,10,0" />
                             <TextBox Grid.Row="0" Grid.Column="1"
+                                     AutomationProperties.Name="Destination File"
                                      Text="{Binding RipTargetFilePath, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="8,6"
                                      Background="{DynamicResource ControlBackgroundBrush}"
@@ -318,6 +337,7 @@
                                      Margin="0,0,8,0" />
                             <Button Grid.Row="0" Grid.Column="2"
                                     Content="📂 Browse..."
+                                    AutomationProperties.Name="Browse Destination File"
                                     Command="{Binding BrowseRipTargetFileCommand}"
                                     VerticalAlignment="Center" />
 
@@ -331,10 +351,12 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,12,0" />
                                 <RadioButton Content="Standard ISO Image (Mode 1 / 2,048 B)"
+                                             AutomationProperties.Name="Standard ISO Image (Mode 1 / 2,048 B)"
                                              IsChecked="{Binding RipRawBinCueMode, Converter={StaticResource InverseBooleanConverter}}"
                                              GroupName="RipModeGroup"
                                              Margin="0,0,16,0" />
                                 <RadioButton Content="Raw BIN + CUE Sheet (2,352 B / Mixed-Mode)"
+                                             AutomationProperties.Name="Raw BIN + CUE Sheet (2,352 B / Mixed-Mode)"
                                              IsChecked="{Binding RipRawBinCueMode}"
                                              GroupName="RipModeGroup" />
                             </StackPanel>
@@ -405,6 +427,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <ProgressBar Height="6"
+                                             AutomationProperties.Name="Rip Progress"
                                              Minimum="0"
                                              Maximum="100"
                                              Value="{Binding BurnProgress}"
@@ -414,6 +437,7 @@
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="🛑 Cancel"
+                                        AutomationProperties.Name="Cancel Rip"
                                         Command="{Binding CancelCommand}"
                                         Background="#D83B01"
                                         Foreground="White"
@@ -423,6 +447,7 @@
                                         FontSize="14"
                                         Margin="0,0,8,0" />
                                 <Button Content="💿 Rip Disc to Image"
+                                        AutomationProperties.Name="Rip Disc to Image"
                                         Command="{Binding RipDiscToImageCommand}"
                                         Style="{StaticResource AccentButtonStyle}"
                                         Padding="24,10"
@@ -473,6 +498,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,10,0" />
                             <TextBox Grid.Row="0" Grid.Column="1"
+                                     AutomationProperties.Name="Reference Image"
                                      Text="{Binding SourceImagePath, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="8,6"
                                      Background="{DynamicResource ControlBackgroundBrush}"
@@ -481,11 +507,13 @@
                                      Margin="0,0,8,0" />
                             <Button Grid.Row="0" Grid.Column="2"
                                     Content="📂 Browse..."
+                                    AutomationProperties.Name="Browse Reference Image"
                                     Command="{Binding BrowseImageCommand}"
                                     VerticalAlignment="Center"
                                     Margin="0,0,8,0" />
                             <StackPanel Grid.Row="0" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="🛑 Cancel"
+                                        AutomationProperties.Name="Cancel Verify"
                                         Command="{Binding CancelCommand}"
                                         Background="#D83B01"
                                         Foreground="White"
@@ -493,6 +521,7 @@
                                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
                                         Margin="0,0,8,0" />
                                 <Button Content="🔍 Verify Disc"
+                                        AutomationProperties.Name="Verify Disc"
                                         Command="{Binding VerifyDiscAgainstImageCommand}"
                                         Style="{StaticResource AccentButtonStyle}"
                                         VerticalAlignment="Center" />
@@ -545,6 +574,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,0,4" />
                                 <TextBox Text="{Binding CalculatedSha256, Mode=OneWay}"
+                                         AutomationProperties.Name="Expected Image SHA-256"
                                          IsReadOnly="True"
                                          FontFamily="Consolas, Courier New, monospace"
                                          FontSize="12"
@@ -562,6 +592,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,0,4" />
                                 <TextBox Text="{Binding DiscSha256, Mode=OneWay}"
+                                         AutomationProperties.Name="Actual Media Sectors SHA-256"
                                          IsReadOnly="True"
                                          FontFamily="Consolas, Courier New, monospace"
                                          FontSize="12"
@@ -596,6 +627,7 @@
                                        Foreground="{DynamicResource TextPrimaryBrush}"
                                        VerticalAlignment="Center" />
                             <ProgressBar Height="6"
+                                         AutomationProperties.Name="Verification Progress"
                                          Minimum="0"
                                          Maximum="100"
                                          Value="{Binding BurnProgress}"
@@ -647,6 +679,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,10,0" />
                             <ComboBox Grid.Row="0" Grid.Column="1"
+                                      AutomationProperties.Name="Source Drive (Read)"
                                       ItemsSource="{Binding AvailableRecorders}"
                                       SelectedItem="{Binding CopySourceRecorder}"
                                       Padding="8,5">
@@ -669,6 +702,7 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        Margin="0,0,10,0" />
                             <ComboBox Grid.Row="0" Grid.Column="4"
+                                      AutomationProperties.Name="Target Drive (Write)"
                                       ItemsSource="{Binding AvailableRecorders}"
                                       SelectedItem="{Binding CopyTargetRecorder}"
                                       Padding="8,5">
@@ -694,6 +728,7 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            Margin="0,0,8,0" />
                                 <TextBox Width="56"
+                                         AutomationProperties.Name="Copies to Burn"
                                          Text="{Binding CopyCount, UpdateSourceTrigger=PropertyChanged}"
                                          Padding="6,4"
                                          TextAlignment="Center"
@@ -703,16 +738,20 @@
                                          Margin="0,0,20,0" />
 
                                 <CheckBox Content="Verify each burned copy bit-for-bit"
+                                          AutomationProperties.Name="Verify each burned copy bit-for-bit"
                                           IsChecked="{Binding CopyVerifyEachDisc}"
                                           VerticalAlignment="Center"
                                           Margin="0,0,20,0" />
 
                                 <CheckBox Content="Raw 2,352-byte Clone Mode (.bin + .cue)"
+                                          AutomationProperties.Name="Raw 2,352-byte Clone Mode (.bin + .cue)"
                                           IsChecked="{Binding CopyRawCloneMode}"
+                                          ToolTip="Data discs only. Reads raw 2,352-byte sectors into a .bin + .cue staging image (kept when 'Keep temporary staged image' is on). Windows' burning service writes the 2,048-byte data, so the burned copy is the same as a normal copy. Audio CDs are always copied track by track."
                                           VerticalAlignment="Center"
                                           Margin="0,0,20,0" />
 
                                 <CheckBox Content="Keep temporary staged image"
+                                          AutomationProperties.Name="Keep temporary staged image"
                                           IsChecked="{Binding CopyKeepStagedImage}"
                                           VerticalAlignment="Center" />
                             </StackPanel>
@@ -733,6 +772,7 @@
                             CornerRadius="8"
                             Padding="14">
                         <ListBox ItemsSource="{Binding OperationLogEntries}"
+                                 AutomationProperties.Name="Copy Operation Log"
                                  FontFamily="Consolas, Courier New, monospace"
                                  FontSize="11.5"
                                  Background="{DynamicResource ControlBackgroundBrush}"
@@ -759,6 +799,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <ProgressBar Height="6"
+                                             AutomationProperties.Name="Copy Progress"
                                              Minimum="0"
                                              Maximum="100"
                                              Value="{Binding BurnProgress}"
@@ -768,6 +809,7 @@
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="🛑 Cancel"
+                                        AutomationProperties.Name="Cancel Copy"
                                         Command="{Binding CancelCommand}"
                                         Background="#D83B01"
                                         Foreground="White"
@@ -777,7 +819,142 @@
                                         FontSize="14"
                                         Margin="0,0,8,0" />
                                 <Button Content="🔁 Start 1-Click Disc Copy"
+                                        AutomationProperties.Name="Start 1-Click Disc Copy"
                                         Command="{Binding CopyDiscCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Padding="24,10"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- ========================================================================= -->
+            <!-- TAB 5: SEQUENTIAL BURN QUEUE                                              -->
+            <!-- ========================================================================= -->
+            <TabItem Header="📋 Burn Queue" Padding="12,6" FontSize="13">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Top Queue Toolbar -->
+                    <Border Grid.Row="0"
+                            Background="{DynamicResource CardBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="16,12"
+                            Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Sequential Image Burn Queue"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           Margin="0,0,0,4" />
+                                <TextBlock Text="Queue multiple ISO or legacy images to burn sequentially with automated disc swap prompts and after-burn actions."
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           FontSize="12" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="➕ Add Image..."
+                                        AutomationProperties.Name="Add Image to Queue"
+                                        Command="{Binding AddToBurnQueueCommand}"
+                                        Padding="12,6"
+                                        Margin="0,0,8,0" />
+                                <Button Content="➖ Remove"
+                                        AutomationProperties.Name="Remove Selected Queue Item"
+                                        Command="{Binding RemoveFromBurnQueueCommand}"
+                                        Padding="12,6"
+                                        Margin="0,0,8,0" />
+                                <Button Content="🗑️ Clear"
+                                        AutomationProperties.Name="Clear Burn Queue"
+                                        Command="{Binding ClearBurnQueueCommand}"
+                                        Padding="12,6" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- Queue List -->
+                    <Border Grid.Row="1"
+                            Background="{DynamicResource CardBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="16"
+                            Margin="0,0,0,12">
+                        <ListView ItemsSource="{Binding BurnQueueItems}"
+                                  AutomationProperties.Name="Burn Queue Items"
+                                  Background="Transparent"
+                                  BorderThickness="0">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Status" Width="100">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Status}" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Image Path" Width="360" DisplayMemberBinding="{Binding ImagePath}" />
+                                    <GridViewColumn Header="Speed" Width="80" DisplayMemberBinding="{Binding WriteSpeedMultiplier, StringFormat='{}{0:0.##}x', TargetNullValue='Auto'}" />
+                                    <GridViewColumn Header="Verify" Width="70" DisplayMemberBinding="{Binding VerifyAfterBurn}" />
+                                    <GridViewColumn Header="Details / Message" Width="260" DisplayMemberBinding="{Binding ErrorMessage}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Border>
+
+                    <!-- Bottom Action Ribbon -->
+                    <Border Grid.Row="2"
+                            Background="{DynamicResource CardBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="16,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="After Burn Action:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <ComboBox ItemsSource="{Binding AvailablePostBurnActions}"
+                                          DisplayMemberPath="Label"
+                                          SelectedValuePath="Action"
+                                          SelectedValue="{Binding SelectedPostBurnAction}"
+                                          AutomationProperties.Name="After Burn Action"
+                                          Width="230" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🛑 Cancel"
+                                        AutomationProperties.Name="Cancel Burn Queue"
+                                        Command="{Binding CancelCommand}"
+                                        Background="#D83B01"
+                                        Foreground="White"
+                                        FontWeight="Bold"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+                                        Padding="18,10"
+                                        FontSize="14"
+                                        Margin="0,0,8,0" />
+                                <Button Content="▶ Run Burn Queue"
+                                        AutomationProperties.Name="Run Burn Queue"
+                                        Command="{Binding RunBurnQueueCommand}"
                                         Style="{StaticResource AccentButtonStyle}"
                                         Padding="24,10"
                                         FontSize="14"

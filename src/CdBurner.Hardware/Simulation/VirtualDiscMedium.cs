@@ -331,7 +331,14 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
             }
             else
             {
-                if (_memorySectors.TryGetValue(lba, out var stored))
+                if (_memorySectors.TryGetValue(lba, out var stored) &&
+                    sz == OpticalConstants.RawSectorSize && stored.Length == OpticalConstants.DataSectorSize)
+                {
+                    // A raw read of a data sector returns what a real drive returns: sync, header, user data at
+                    // offset 16, EDC/ECC. (Returning the bare user data hid a disc-copy bug that wrote raw bytes as data.)
+                    CdBurner.Core.Images.RawSectorCodec.Convert2048To2352Mode1(stored, lba, destination[..sz]);
+                }
+                else if (stored != null)
                 {
                     int copyLen = Math.Min(sz, stored.Length);
                     stored.AsSpan(0, copyLen).CopyTo(destination);

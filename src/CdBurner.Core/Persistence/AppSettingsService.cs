@@ -83,6 +83,12 @@ public class AppSettings
     public bool VerifyAccurateRipByDefault { get; set; } = true;
 
     /// <summary>
+    /// Whether to automatically check for application updates on startup against GitHub Releases.
+    /// Strictly opt-in (default is false).
+    /// </summary>
+    public bool CheckForUpdatesOnStartup { get; set; } = false;
+
+    /// <summary>
     /// Creates a deep copy clone of the current settings.
     /// </summary>
     public AppSettings Clone()
@@ -101,7 +107,8 @@ public class AppSettings
             AudioReadOffsetSamples = AudioReadOffsetSamples,
             SecureAudioRipByDefault = SecureAudioRipByDefault,
             LookupMusicBrainzByDefault = LookupMusicBrainzByDefault,
-            VerifyAccurateRipByDefault = VerifyAccurateRipByDefault
+            VerifyAccurateRipByDefault = VerifyAccurateRipByDefault,
+            CheckForUpdatesOnStartup = CheckForUpdatesOnStartup
         };
     }
 }

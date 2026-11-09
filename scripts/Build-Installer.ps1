@@ -6,6 +6,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:MSBUILDDISABLENODEREUSE = "1"
+$env:DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER = "1"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $PublishDir = Join-Path $RepoRoot "artifacts\publish\$Runtime"
 $InstallerDir = Join-Path $RepoRoot "artifacts\installer"
@@ -13,16 +15,26 @@ $SetupProjectDir = Join-Path $RepoRoot "tools\CdBurner.Setup"
 $BootstrapperProjectDir = Join-Path $RepoRoot "tools\CdBurner.SetupBootstrapper"
 $PayloadZipPath = Join-Path $BootstrapperProjectDir "payload.zip"
 $PortableZipPath = Join-Path $InstallerDir "IgnisDisc-Portable-$Runtime.zip"
+$SetupExeName = if ($Runtime -eq "win-x64") {
+    "IgnisDisc-Setup.exe"
+} elseif ($Runtime -eq "win-arm64") {
+    "IgnisDisc-Setup-arm64.exe"
+} else {
+    "IgnisDisc-Setup-$Runtime.exe"
+}
+$SetupExe = Join-Path $InstallerDir $SetupExeName
 
 Write-Host "=== Step 1: Publishing Self-Contained IgnisDisc (GUI & CLI, $Runtime) ===" -ForegroundColor Cyan
 if (Test-Path $PublishDir) {
     Remove-Item -Path $PublishDir -Recurse -Force
 }
-if (Test-Path $InstallerDir) {
-    Remove-Item -Path $InstallerDir -Recurse -Force
-}
 New-Item -ItemType Directory -Path $PublishDir -Force | Out-Null
-New-Item -ItemType Directory -Path $InstallerDir -Force | Out-Null
+
+if (-not (Test-Path $InstallerDir)) {
+    New-Item -ItemType Directory -Path $InstallerDir -Force | Out-Null
+}
+if (Test-Path $SetupExe) { Remove-Item -Path $SetupExe -Force }
+if (Test-Path $PortableZipPath) { Remove-Item -Path $PortableZipPath -Force }
 
 dotnet publish (Join-Path $RepoRoot "src\CdBurner.App\CdBurner.App.csproj") `
     -c $Configuration `
@@ -50,7 +62,7 @@ dotnet publish (Join-Path $SetupProjectDir "CdBurner.Setup.csproj") `
     -o $PublishDir
 if ($LASTEXITCODE -ne 0) { throw "Failed to publish the setup wizard" }
 
-# Provide convenience launcher aliases so both IgnisDisc.exe / CdBurner.App.exe and ignisdisc-cli.exe / cdburner-cli.exe work seamlessly
+# Provide convenience launcher aliases so both IgnisDisc.exe / CdBurner.App.exe and ignisdisc-cli.exe / cdburner-cli.exe both work
 $IgnisGuiExe = Join-Path $PublishDir "IgnisDisc.exe"
 $CdBurnerGuiExe = Join-Path $PublishDir "CdBurner.App.exe"
 if (Test-Path $IgnisGuiExe) {
@@ -96,11 +108,11 @@ Compress-Archive -LiteralPath $portableItems.FullName -DestinationPath $Portable
 # Installer payload: everything, including the wizard that installs it.
 Compress-Archive -Path "$PublishDir\*" -DestinationPath $PayloadZipPath -CompressionLevel Optimal -Force
 
-Write-Host "=== Step 3: Building the Setup Launcher (IgnisDisc-Setup.exe, .NET Framework 4.8 built into Windows) ===" -ForegroundColor Cyan
+Write-Host "=== Step 3: Building the Setup Launcher ($SetupExeName, .NET Framework 4.8 built into Windows) ===" -ForegroundColor Cyan
 try {
     dotnet build (Join-Path $BootstrapperProjectDir "CdBurner.SetupBootstrapper.csproj") -c $Configuration
     if ($LASTEXITCODE -ne 0) { throw "Failed to build IgnisDisc-Setup launcher" }
-    Copy-Item -Path (Join-Path $BootstrapperProjectDir "bin\$Configuration\net48\IgnisDisc-Setup.exe") -Destination $InstallerDir -Force
+    Copy-Item -Path (Join-Path $BootstrapperProjectDir "bin\$Configuration\net48\IgnisDisc-Setup.exe") -Destination $SetupExe -Force
 }
 finally {
     if (Test-Path $PayloadZipPath) {
@@ -108,7 +120,6 @@ finally {
     }
 }
 
-$SetupExe = Join-Path $InstallerDir "IgnisDisc-Setup.exe"
 if (-not (Test-Path $SetupExe)) {
     throw "Installer executable was not produced at $SetupExe"
 }
@@ -116,7 +127,7 @@ if (-not (Test-Path $SetupExe)) {
 $SetupInfo = Get-Item $SetupExe
 $ZipInfo = Get-Item $PortableZipPath
 Write-Host ""
-Write-Host "=== IgnisDisc Installer Build Succeeded ===" -ForegroundColor Green
+Write-Host "=== IgnisDisc Installer Build Succeeded ($Runtime) ===" -ForegroundColor Green
 Write-Host ("Standalone Installer : {0} ({1:N1} MB)" -f $SetupInfo.FullName, ($SetupInfo.Length / 1MB))
 Write-Host ("Portable Zip Archive : {0} ({1:N1} MB)" -f $ZipInfo.FullName, ($ZipInfo.Length / 1MB))
 Write-Host ("Self-Contained App   : {0}" -f (Join-Path $PublishDir "IgnisDisc.exe"))

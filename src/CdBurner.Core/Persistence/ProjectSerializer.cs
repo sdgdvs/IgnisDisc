@@ -625,9 +625,10 @@ public static class ProjectSerializer
                 cdTextTracksByNum?.TryGetValue(track.TrackNumber, out cdt);
 
                 Func<Stream>? sliceFactory = null;
+                SingleFileAlbumSource? album = null;
                 if (track.SourceStartFrame.HasValue && !string.IsNullOrWhiteSpace(track.SourceFilePath))
                 {
-                    if (!albumSources.TryGetValue(track.SourceFilePath, out var album))
+                    if (!albumSources.TryGetValue(track.SourceFilePath, out album))
                     {
                         album = new SingleFileAlbumSource(track.SourceFilePath, audioDecoder);
                         albumSources[track.SourceFilePath] = album;
@@ -651,7 +652,8 @@ public static class ProjectSerializer
                     Arranger = track.Arranger ?? cdt?.Arranger,
                     Message = track.Message ?? cdt?.Message,
                     SourceStartFrame = track.SourceStartFrame,
-                    SourceFrameCount = track.SourceFrameCount
+                    SourceFrameCount = track.SourceFrameCount,
+                    AlbumSource = album
                 };
 
                 compilation.AddTrack(trackItem);

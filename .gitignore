@@ -16,7 +16,5 @@ startup_error.log
 # Never commit ffmpeg binaries
 ffmpeg.exe
 
-
 # Firebase CLI local deploy cache
 .firebase/
-

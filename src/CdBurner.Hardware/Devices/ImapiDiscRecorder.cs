@@ -2,13 +2,14 @@ using System.Runtime.InteropServices;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Interop;
+using CdBurner.Hardware.Scsi;
 
 namespace CdBurner.Hardware.Devices;
 
 /// <summary>
 /// Physical optical disc recorder backend wrapping Windows IMAPIv2 <see cref="IDiscRecorder2"/> COM interface.
 /// </summary>
-public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
+public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaManufacturerIdProvider
 {
     private IDiscRecorder2? _recorder;
     private readonly string _uniqueId;
@@ -370,6 +371,18 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
             }
         }
 
+        MmcWriteCapabilityProbe mmcProbe;
+        try
+        {
+            mmcProbe = !string.IsNullOrWhiteSpace(VolumePath)
+                ? PhysicalSectorReader.ProbeWriteCapabilities(VolumePath)
+                : new MmcWriteCapabilityProbe();
+        }
+        catch
+        {
+            mmcProbe = new MmcWriteCapabilityProbe();
+        }
+
         return new DriveCapabilitiesDto
         {
             CanWriteCdR = canWriteCdR,
@@ -381,8 +394,14 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
             CanWriteDvdPlusRDL = canWriteDvdPlusRDL,
             CanWriteDvdMinusRDL = canWriteDvdMinusRDL,
             CanWriteDvdRam = canWriteDvdRam,
-            SupportsTestWrite = true,
+            SupportsTestWrite = mmcProbe.SupportsTestWrite, // false when the probe could not run: unknown is not "supported"
             SupportsBufferUnderrunProtection = true,
+            SupportsBufferUnderrunFree = mmcProbe.SupportsBufferUnderrunFree,
+            SupportsNativeTao = mmcProbe.HasTaoFeature,
+            SupportsNativeSao = mmcProbe.SupportsSao,
+            SupportsNativeRawDao = mmcProbe.SupportsRawDao,
+            SupportsLayerJump = mmcProbe.HasLayerJumpFeature,
+            MmcFeatureSummary = mmcProbe.ToFeatureSummary(),
             InternalBufferSize = 8 * 1024 * 1024,
             SupportedMediaTypes = mediaTypes.OrderBy(m => (int)m).ToList(),
             SupportedWriteSpeeds = writeSpeeds.OrderBy(s => s.BytesPerSecond).ToList()
@@ -392,6 +411,10 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
     /// <summary>
     /// Queries the presence, status, and geometry of media currently in the recorder.
     /// </summary>
+    /// <inheritdoc />
+    public string? ReadMediaManufacturerId(DiscMediaType mediaType) =>
+        PhysicalSectorReader.ProbeMediaManufacturerInfo(VolumePath, mediaType)?.FormattedSummary;
+
     public MediaStatusDto QueryMediaStatus()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -647,9 +670,10 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider
             {
                 bool isCd = readOnlySectors.Value <= 450_000; // ~ 880 MB: larger than any CD
                 long bytes = (long)readOnlySectors.Value * OpticalConstants.DataSectorSize;
+                var readOnlyMediaType = isCd ? DiscMediaType.CdRom : DiscMediaType.DvdRom;
                 return new MediaStatusDto
                 {
-                    MediaType = isCd ? DiscMediaType.CdRom : DiscMediaType.DvdRom,
+                    MediaType = readOnlyMediaType,
                     MediaPresent = true,
                     IsBlank = false,
                     IsRewritable = false,

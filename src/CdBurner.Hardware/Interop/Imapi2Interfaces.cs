@@ -1164,7 +1164,7 @@ public static class ImapiComActivation
         {
             if (Marshal.IsComObject(comObject))
             {
-                remainingCount = Marshal.ReleaseComObject(comObject);
+                remainingCount = Math.Max(0, Marshal.ReleaseComObject(comObject));
             }
         }
         catch

@@ -68,6 +68,7 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            Margin="0,0,8,0" />
                 <TextBox Grid.Column="1"
+                         AutomationProperties.Name="Volume Label"
                          Text="{Binding VolumeLabel, UpdateSourceTrigger=PropertyChanged}"
                          MaxLength="32"
                          VerticalAlignment="Center"
@@ -84,6 +85,7 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            Margin="0,0,8,0" />
                 <ComboBox Grid.Column="4"
+                          AutomationProperties.Name="Filesystem Profile"
                           ItemsSource="{Binding Source={StaticResource FileSystemPresets}}"
                           SelectedItem="{Binding SelectedFileSystemPreset}"
                           VerticalAlignment="Center">
@@ -97,10 +99,12 @@
                 <!-- Options Checkboxes -->
                 <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center">
                     <CheckBox Content="Close / Finalize Disc"
+                              AutomationProperties.Name="Close / Finalize Disc"
                               IsChecked="{Binding CloseDisc}"
                               VerticalAlignment="Center"
                               Margin="0,0,16,0" />
                     <CheckBox Content="Verify After Burn"
+                              AutomationProperties.Name="Verify After Burn"
                               IsChecked="{Binding VerifyAfterBurn}"
                               VerticalAlignment="Center" />
                 </StackPanel>
@@ -111,6 +115,7 @@
         <!-- ROW 1: EL TORITO BOOT CONFIGURATION EXPANDER                              -->
         <!-- ========================================================================= -->
         <Expander Grid.Row="1"
+                  AutomationProperties.Name="El Torito Boot Configuration"
                   IsExpanded="{Binding IsBootableEnabled, Mode=TwoWay}"
                   Background="{DynamicResource CardBackgroundBrush}"
                   BorderBrush="{DynamicResource CardBorderBrush}"
@@ -120,6 +125,7 @@
             <Expander.Header>
                 <StackPanel Orientation="Horizontal">
                     <CheckBox Content="Enable El Torito Bootable Disc (BIOS / UEFI Multi-Boot)"
+                              AutomationProperties.Name="Enable El Torito Bootable Disc (BIOS / UEFI Multi-Boot)"
                               IsChecked="{Binding IsBootableEnabled, Mode=TwoWay}"
                               FontWeight="SemiBold"
                               VerticalAlignment="Center"
@@ -150,6 +156,7 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            Margin="0,4" />
                 <TextBox Grid.Row="0" Grid.Column="1"
+                         AutomationProperties.Name="x86 BIOS Boot Image Path"
                          Text="{Binding BiosBootImagePath, UpdateSourceTrigger=PropertyChanged}"
                          Padding="6,4"
                          Margin="0,4,8,4"
@@ -158,6 +165,7 @@
                          BorderBrush="{DynamicResource ControlBorderBrush}" />
                 <Button Grid.Row="0" Grid.Column="2"
                         Content="📂 Browse..."
+                        AutomationProperties.Name="Browse x86 BIOS Boot Image"
                         Command="{Binding BrowseBiosBootImageCommand}"
                         Margin="0,4" />
 
@@ -168,6 +176,7 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            Margin="0,4" />
                 <TextBox Grid.Row="1" Grid.Column="1"
+                         AutomationProperties.Name="EFI/UEFI Boot Image Path"
                          Text="{Binding UefiBootImagePath, UpdateSourceTrigger=PropertyChanged}"
                          Padding="6,4"
                          Margin="0,4,8,4"
@@ -176,6 +185,7 @@
                          BorderBrush="{DynamicResource ControlBorderBrush}" />
                 <Button Grid.Row="1" Grid.Column="2"
                         Content="📂 Browse..."
+                        AutomationProperties.Name="Browse EFI/UEFI Boot Image"
                         Command="{Binding BrowseUefiBootImageCommand}"
                         Margin="0,4" />
             </Grid>
@@ -200,22 +210,27 @@
                 <!-- Left Action Buttons -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
                     <Button Content="📁+ Add Files"
+                            AutomationProperties.Name="Add Files"
                             Command="{Binding AddFilesCommand}"
                             ToolTip="Add individual files to current virtual folder"
                             Margin="0,0,6,0" />
                     <Button Content="📂+ Add Folder"
+                            AutomationProperties.Name="Add Folder"
                             Command="{Binding AddFolderCommand}"
                             ToolTip="Add local directory and contents to compilation"
                             Margin="0,0,6,0" />
                     <Button Content="➕ New Folder"
+                            AutomationProperties.Name="New Folder"
                             Command="{Binding CreateVirtualFolderCommand}"
                             ToolTip="Create virtual folder inside current directory"
                             Margin="0,0,6,0" />
                     <Button Content="❌ Remove"
+                            AutomationProperties.Name="Remove"
                             Command="{Binding RemoveSelectedItemCommand}"
                             ToolTip="Remove selected item from compilation"
                             Margin="0,0,12,0" />
                     <Button Content="⬆️ Up"
+                            AutomationProperties.Name="Navigate Up"
                             Command="{Binding NavigateUpFolderCommand}"
                             ToolTip="Navigate up to parent folder"
                             Margin="0,0,6,0" />
@@ -235,6 +250,7 @@
                 <!-- Right: Import Previous Session -->
                 <Button Grid.Column="2"
                         Content="📥 Import Session"
+                        AutomationProperties.Name="Import Session"
                         Command="{Binding ImportPreviousSessionCommand}"
                         ToolTip="Import previous session directory tree from optical media" />
             </Grid>
@@ -250,6 +266,7 @@
                 AllowDrop="True"
                 Drop="OnFileDrop">
             <DataGrid ItemsSource="{Binding CurrentItems}"
+                      AutomationProperties.Name="Data Compilation Items"
                       SelectedItem="{Binding SelectedItem}"
                       MouseDoubleClick="OnDataGridDoubleClick"
                       AutoGenerateColumns="False"
@@ -333,6 +350,7 @@
 
                 <!-- Center: Progress Bar when active -->
                 <ProgressBar Grid.Column="1"
+                             AutomationProperties.Name="Burn Progress"
                              Height="6"
                              Minimum="0"
                              Maximum="100"
@@ -349,6 +367,7 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,8,0" />
                     <ComboBox Width="250"
+                              AutomationProperties.Name="Burn To Optical Drive"
                               ItemsSource="{Binding AvailableRecorders}"
                               SelectedItem="{Binding SelectedRecorder}"
                               ToolTip="Select the optical drive to burn this Data Disc to"
@@ -365,10 +384,12 @@
                     </ComboBox>
 
                     <Button Content="💾 Export ISO..."
+                            AutomationProperties.Name="Export ISO"
                             Command="{Binding ExportIsoCommand}"
                             ToolTip="Compile and build ISO disc image to disk"
                             Margin="0,0,10,0" />
                     <Button Content="🛑 Cancel Burn"
+                            AutomationProperties.Name="Cancel Burn"
                             Command="{Binding CancelBurnCommand}"
                             Background="#D83B01"
                             Foreground="White"
@@ -378,6 +399,7 @@
                             Margin="0,0,10,0"
                             MinWidth="110" />
                     <Button Content="🔥 Burn to Disc"
+                            AutomationProperties.Name="Burn to Disc"
                             Command="{Binding StartDataBurnCommand}"
                             Style="{StaticResource AccentButtonStyle}"
                             ToolTip="Burn compilation to selected optical recorder"
