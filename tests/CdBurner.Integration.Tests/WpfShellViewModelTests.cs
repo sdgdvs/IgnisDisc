@@ -260,6 +260,17 @@ public sealed class WpfShellViewModelTests : IDisposable
         Assert.Equal(Visibility.Collapsed, boolConverter.Convert(false, typeof(Visibility), null, null!));
     }
 
+    [Fact]
+    public void MainViewModel_ExposesLegalBannerPropertiesAndAboutCommand()
+    {
+        var vm = new MainViewModel();
+        Assert.Equal(CdBurner.Core.LegalBanner.Line1, vm.LegalBannerLine1);
+        Assert.Equal(CdBurner.Core.LegalBanner.Line2, vm.LegalBannerLine2);
+        Assert.Equal(CdBurner.Core.LegalBanner.VersionNotice, vm.LegalBannerNotice);
+        Assert.NotNull(vm.ShowAboutCommand);
+        Assert.True(vm.ShowAboutCommand.CanExecute(null));
+    }
+
     private class TestObservable : ObservableObject
     {
         private string _textValue = string.Empty;

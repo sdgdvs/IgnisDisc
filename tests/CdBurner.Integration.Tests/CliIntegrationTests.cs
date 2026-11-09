@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using CdBurner.Cli;
+using CdBurner.Core;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Audio;
 using CdBurner.Core.DvdVideo;
@@ -722,12 +723,44 @@ public sealed class CliIntegrationTests : IDisposable
         var (hOut, hErr) = CreateStringWriters();
         int hCode = await CliCommandRunner.RunAsync(new[] { "--help" }, hOut, hErr, _deviceService, _burnEngine);
         Assert.Equal(0, hCode);
-        Assert.Contains("Usage:", hOut.ToString());
+        string hText = hOut.ToString();
+        Assert.Contains("Usage:", hText);
+        Assert.StartsWith(LegalBanner.Line1, hText.TrimStart());
+        Assert.Contains(LegalBanner.Line2, hText);
 
         var (vOut, vErr) = CreateStringWriters();
         int vCode = await CliCommandRunner.RunAsync(new[] { "--version" }, vOut, vErr, _deviceService, _burnEngine);
         Assert.Equal(0, vCode);
-        Assert.Contains("CdBurner CLI", vOut.ToString());
+        string vText = vOut.ToString();
+        Assert.Contains("CdBurner CLI", vText);
+        Assert.StartsWith(LegalBanner.Line1, vText.TrimStart());
+        Assert.Contains(LegalBanner.Line2, vText);
+    }
+
+    [Fact]
+    public async Task Cli_JsonPayloads_IncludeEngineRootProperty()
+    {
+        var (stdout, stderr) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(new[] { "drives", "--json" }, stdout, stderr, _deviceService, _burnEngine);
+        Assert.Equal(0, code);
+
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.TryGetProperty("engine", out var engineProp));
+        Assert.Equal(LegalBanner.JsonEngine, engineProp.GetString());
+    }
+
+    [Fact]
+    public async Task Cli_VersionWithJson_ReturnsNoticeAndEngine()
+    {
+        var (stdout, stderr) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(new[] { "--version", "--json" }, stdout, stderr, _deviceService, _burnEngine);
+        Assert.Equal(0, code);
+
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.TryGetProperty("engine", out var engineProp));
+        Assert.Equal(LegalBanner.JsonEngine, engineProp.GetString());
+        Assert.True(doc.RootElement.TryGetProperty("notice", out var noticeProp));
+        Assert.Equal(LegalBanner.VersionNotice, noticeProp.GetString());
     }
 
     #endregion

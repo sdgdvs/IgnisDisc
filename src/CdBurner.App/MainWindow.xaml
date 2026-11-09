@@ -452,13 +452,34 @@
                                VerticalAlignment="Center" />
                 </Border>
 
-                <!-- Canonical Domain & Open Source Watermark -->
-                <TextBlock Grid.Column="3"
-                           Text="ignisdisc.tetherworks.dev — Free &amp; Open Source (GPLv3)"
-                           FontSize="11"
-                           Foreground="{DynamicResource TextMutedBrush}"
-                           VerticalAlignment="Center"
-                           Margin="14,0,0,0" />
+                <!-- Canonical Domain & Legal Notice Watermark -->
+                <Button Grid.Column="3"
+                        Command="{Binding ShowAboutCommand}"
+                        AutomationProperties.Name="About IgnisDisc Optical Studio and Legal Notice"
+                        ToolTip="{Binding LegalBannerNotice}"
+                        Cursor="Hand"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        Margin="14,0,0,0"
+                        VerticalAlignment="Center"
+                        HorizontalContentAlignment="Left">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <ContentPresenter />
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding LegalBannerLine1}"
+                                   FontSize="10.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding LegalBannerLine2}"
+                                   FontSize="9.5"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Button>
             </Grid>
         </Border>
     </Grid>

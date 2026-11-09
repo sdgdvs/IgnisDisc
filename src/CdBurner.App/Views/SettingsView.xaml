@@ -5,6 +5,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
              xmlns:converters="clr-namespace:CdBurner.App.Converters"
+             xmlns:core="clr-namespace:CdBurner.Core;assembly=CdBurner.Core"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}"
              Background="{DynamicResource SurfaceBackgroundBrush}"
@@ -309,10 +310,28 @@
                                    FontSize="12" />
                     </StackPanel>
 
-                    <TextBlock Text="Official site: https://ignisdisc.tetherworks.dev — Free &amp; Open Source (GNU GPLv3)"
-                               Foreground="{DynamicResource TextMutedBrush}"
-                               FontSize="11.5"
-                               Margin="0,12,0,0" />
+                    <Border Background="{DynamicResource SurfaceBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="12"
+                            Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Text="{x:Static core:LegalBanner.Line1}"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       FontSize="12" />
+                            <TextBlock Text="{x:Static core:LegalBanner.Line2}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0" />
+                            <TextBlock Text="Source Code &amp; Issues: https://github.com/tether-works/IgnisDisc"
+                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       FontSize="10.5"
+                                       Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </Border>
 

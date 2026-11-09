@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using CdBurner.App.Mvvm;
+using CdBurner.Core;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Compilation;
 using CdBurner.Core.Persistence;
@@ -400,6 +401,26 @@ public class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public RelayCommand NavigateCommand { get; }
 
+    /// <summary>
+    /// Displays the About IgnisDisc dialog containing canonical GPLv3 Section 5(d) Appropriate Legal Notices.
+    /// </summary>
+    public RelayCommand ShowAboutCommand { get; }
+
+    /// <summary>
+    /// Gets line 1 of the legal banner (product name, version, copyright attribution, canonical URL).
+    /// </summary>
+    public string LegalBannerLine1 => LegalBanner.Line1;
+
+    /// <summary>
+    /// Gets line 2 of the legal banner (GPLv3+ license pointer, warranty disclaimer).
+    /// </summary>
+    public string LegalBannerLine2 => LegalBanner.Line2;
+
+    /// <summary>
+    /// Gets the complete 2-line Appropriate Legal Notice banner.
+    /// </summary>
+    public string LegalBannerNotice => LegalBanner.VersionNotice;
+
     #endregion
 
     /// <summary>
@@ -526,6 +547,7 @@ public class MainViewModel : ObservableObject, IDisposable
         MountVirtualBlankCdRwCommand = new RelayCommand(MountVirtualBlankCdRw, CanMountVirtual);
         MountVirtualBlankDvdRCommand = new RelayCommand(MountVirtualBlankDvdR, CanMountVirtual);
         NavigateCommand = new RelayCommand(Navigate);
+        ShowAboutCommand = new RelayCommand(_ => ShowAboutDialog());
 
         // Initialize Module Workspaces
         InitializeWorkspaces();
@@ -1069,6 +1091,18 @@ public class MainViewModel : ObservableObject, IDisposable
             CurrentWorkspaceViewModel = workspace;
         }
         UpdateCapacityForActiveWorkspace();
+    }
+
+    private static void ShowAboutDialog()
+    {
+        System.Windows.MessageBox.Show(
+            $"{LegalBanner.VersionNotice}\n\n" +
+            "Official Website: https://ignisdisc.tetherworks.dev\n" +
+            "Source Code: https://github.com/tether-works/IgnisDisc\n\n" +
+            "IgnisDisc Optical Studio is free and open-source software released under the GNU General Public License v3 or later.",
+            "About IgnisDisc Optical Studio",
+            System.Windows.MessageBoxButton.OK,
+            System.Windows.MessageBoxImage.Information);
     }
 
     private void RefreshCommandStates()

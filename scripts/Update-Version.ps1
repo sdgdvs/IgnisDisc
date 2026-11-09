@@ -119,6 +119,18 @@ if ($newProps -ne $PropsContent) {
 }
 
 # ---------------------------------------------------------------------------
+# 2b. Legal Notice Banner (src/CdBurner.Core/LegalBanner.cs)
+# ---------------------------------------------------------------------------
+$LegalBannerPath = Join-Path $RepoRoot "src\CdBurner.Core\LegalBanner.cs"
+if (Test-Path $LegalBannerPath) {
+    $banner = Get-Content $LegalBannerPath -Raw
+    $newBanner = [regex]::Replace($banner, 'IgnisDisc v\d+\.\d+(\.\d+)?', "IgnisDisc v$NewVersion")
+    if ($newBanner -ne $banner) {
+        Set-FileText $LegalBannerPath $newBanner "src/CdBurner.Core/LegalBanner.cs (LegalBanner)"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 3. WPF Main Window (Title attribute)
 # ---------------------------------------------------------------------------
 $MainWindowPath = Join-Path $RepoRoot "src\CdBurner.App\MainWindow.xaml"

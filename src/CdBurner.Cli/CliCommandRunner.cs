@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using CdBurner.Core;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Archival;
 using CdBurner.Core.Audio;
@@ -49,6 +51,29 @@ public static class CliCommandRunner
         "overwrite"
     };
 
+    private static void WriteJsonResult(TextWriter stdout, object payload)
+    {
+        var node = JsonSerializer.SerializeToNode(payload, JsonOptions);
+        if (node is JsonObject obj)
+        {
+            var withEngine = new JsonObject
+            {
+                ["engine"] = LegalBanner.JsonEngine
+            };
+            foreach (var kvp in obj)
+            {
+                if (kvp.Key != "engine")
+                {
+                    withEngine[kvp.Key] = kvp.Value?.DeepClone();
+                }
+            }
+            stdout.WriteLine(JsonSerializer.Serialize(withEngine, JsonOptions));
+            return;
+        }
+
+        stdout.WriteLine(JsonSerializer.Serialize(payload, JsonOptions));
+    }
+
     /// <summary>
     /// Executes a command-line request asynchronously and returns the process exit code (0 = success, non-zero = failure).
     /// </summary>
@@ -74,7 +99,20 @@ public static class CliCommandRunner
                     .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
                     .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
                     .FirstOrDefault()?.InformationalVersion?.Split('+')[0];
-                stdout.WriteLine($"IgnisDisc (CdBurner CLI) v{version ?? "dev"} (.NET {Environment.Version.ToString(2)} Windows) — ignisdisc.tetherworks.dev — Free & Open Source (GPLv3)");
+
+                if (parsed.IsJson)
+                {
+                    WriteJsonResult(stdout, new
+                    {
+                        success = true,
+                        version = version ?? "1.11",
+                        notice = LegalBanner.VersionNotice
+                    });
+                    return 0;
+                }
+
+                stdout.WriteLine(LegalBanner.VersionNotice);
+                stdout.WriteLine($"IgnisDisc (CdBurner CLI) v{version ?? "dev"} (.NET {Environment.Version.ToString(2)} Windows)");
                 return 0;
             }
 
@@ -129,7 +167,7 @@ public static class CliCommandRunner
         if (parsed.IsJson)
         {
             var errObj = new { success = false, error = errorMessage };
-            stdout.WriteLine(JsonSerializer.Serialize(errObj, JsonOptions));
+            WriteJsonResult(stdout, errObj);
         }
         else
         {
@@ -221,7 +259,7 @@ public static class CliCommandRunner
             }).ToList();
 
             var result = new { success = true, drives = driveDtos };
-            stdout.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            WriteJsonResult(stdout, result);
             return 0;
         }
 
@@ -262,7 +300,7 @@ public static class CliCommandRunner
                 driveId = recorder.UniqueId,
                 report = report
             };
-            stdout.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            WriteJsonResult(stdout, result);
             return 0;
         }
 
@@ -321,7 +359,7 @@ public static class CliCommandRunner
                 }).ToList()
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            WriteJsonResult(stdout, result);
             return 0;
         }
 
@@ -413,7 +451,7 @@ public static class CliCommandRunner
                 isBootable = bootConfig != null
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            WriteJsonResult(stdout, result);
             return 0;
         }
 
@@ -488,7 +526,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.Success ? 0 : 1;
         }
 
@@ -607,7 +645,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.Success ? 0 : 1;
         }
 
@@ -829,7 +867,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.Success ? 0 : 1;
         }
 
@@ -1027,7 +1065,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.Success ? 0 : 1;
         }
 
@@ -1088,7 +1126,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.Success ? 0 : 1;
         }
 
@@ -1259,7 +1297,7 @@ public static class CliCommandRunner
                     cueSheet = (string?)null,
                     error = result.ErrorMessage
                 };
-                stdout.WriteLine(JsonSerializer.Serialize(errObj, JsonOptions));
+                WriteJsonResult(stdout, errObj);
                 return 1;
             }
 
@@ -1442,7 +1480,7 @@ public static class CliCommandRunner
                 error = (string?)null
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return 0;
         }
 
@@ -1536,7 +1574,7 @@ public static class CliCommandRunner
 
         if (cmd.IsJson)
         {
-            stdout.WriteLine(JsonSerializer.Serialize(new
+            WriteJsonResult(stdout, new
             {
                 success = best != null,
                 driveId = recorder.UniqueId,
@@ -1546,7 +1584,7 @@ public static class CliCommandRunner
                 candidates = detection.Candidates.Select(c => new { offset = c.OffsetSamples, c.Confidence, c.TrackNumber }),
                 accurateRipPath = ids.AccurateRipDatabasePath,
                 error = best == null ? (detection.ErrorMessage ?? "No offset within +/-3000 samples matched the AccurateRip database.") : null
-            }, JsonOptions));
+            });
             return best != null ? 0 : 1;
         }
 
@@ -1608,7 +1646,7 @@ public static class CliCommandRunner
 
         if (cmd.IsJson)
         {
-            stdout.WriteLine(JsonSerializer.Serialize(new
+            WriteJsonResult(stdout, new
             {
                 success = true,
                 setId = plan.SetId,
@@ -1624,7 +1662,7 @@ public static class CliCommandRunner
                     path = stagedDiscs.Count >= d.DiscNumber ? stagedDiscs[d.DiscNumber - 1] : null
                 }),
                 planOnly
-            }, JsonOptions));
+            });
             return 0;
         }
 
@@ -1668,7 +1706,7 @@ public static class CliCommandRunner
 
         if (cmd.IsJson)
         {
-            stdout.WriteLine(JsonSerializer.Serialize(new
+            WriteJsonResult(stdout, new
             {
                 success = result.IsIntact,
                 setId = result.SetId,
@@ -1678,7 +1716,7 @@ public static class CliCommandRunner
                 missing = result.Missing,
                 corrupt = result.Corrupt,
                 hasRecoveryData = result.HasRecoveryData
-            }, JsonOptions));
+            });
             return result.IsIntact ? 0 : 1;
         }
 
@@ -1752,7 +1790,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.IsMatch ? 0 : 1;
         }
 
@@ -1806,7 +1844,7 @@ public static class CliCommandRunner
                 error = result.ErrorMessage
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return result.Success ? 0 : 1;
         }
 
@@ -1869,7 +1907,7 @@ public static class CliCommandRunner
                 csvPath = fullCsvPath
             };
 
-            stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
+            WriteJsonResult(stdout, jsonResult);
             return report.DamagedBlocks == 0 ? 0 : 1;
         }
 
@@ -2009,7 +2047,8 @@ public static class CliCommandRunner
 
     private static void PrintHelp(TextWriter stdout)
     {
-        stdout.WriteLine("IgnisDisc Optical CLI (ignisdisc-cli.exe / cdburner-cli.exe) — ignisdisc.tetherworks.dev — Free & Open Source (GPLv3)");
+        stdout.WriteLine(LegalBanner.VersionNotice);
+        stdout.WriteLine();
         stdout.WriteLine("Usage: ignisdisc-cli <command> [options]");
         stdout.WriteLine();
         stdout.WriteLine("Supported Commands:");
@@ -2057,6 +2096,8 @@ public static class CliCommandRunner
         if (string.Equals(subcommand, "drive-report", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subcommand, "drivereport", StringComparison.OrdinalIgnoreCase))
         {
+            stdout.WriteLine(LegalBanner.VersionNotice);
+            stdout.WriteLine();
             stdout.WriteLine("  drive-report --drive <id> [--json]");
             stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
             return;
@@ -2064,6 +2105,8 @@ public static class CliCommandRunner
         if (string.Equals(subcommand, "rip-audio", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subcommand, "ripaudio", StringComparison.OrdinalIgnoreCase))
         {
+            stdout.WriteLine(LegalBanner.VersionNotice);
+            stdout.WriteLine();
             stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--secure] [--cover <image>] [--no-replaygain] [--json]");
             stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
             stdout.WriteLine("      FLAC files get ReplayGain 2.0 tags (unless --no-replaygain) and, with --cover, embedded front cover art.");
