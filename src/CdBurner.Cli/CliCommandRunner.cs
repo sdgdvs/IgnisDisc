@@ -74,7 +74,7 @@ public static class CliCommandRunner
                     .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
                     .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
                     .FirstOrDefault()?.InformationalVersion?.Split('+')[0];
-                stdout.WriteLine($"IgnisDisc (CdBurner CLI) v{version ?? "dev"} (.NET {Environment.Version.ToString(2)} Windows)");
+                stdout.WriteLine($"IgnisDisc (CdBurner CLI) v{version ?? "dev"} (.NET {Environment.Version.ToString(2)} Windows) — ignisdisc.tetherworks.dev — Free & Open Source (GPLv3)");
                 return 0;
             }
 
@@ -2009,7 +2009,7 @@ public static class CliCommandRunner
 
     private static void PrintHelp(TextWriter stdout)
     {
-        stdout.WriteLine("IgnisDisc Optical CLI (ignisdisc-cli.exe / cdburner-cli.exe)");
+        stdout.WriteLine("IgnisDisc Optical CLI (ignisdisc-cli.exe / cdburner-cli.exe) — ignisdisc.tetherworks.dev — Free & Open Source (GPLv3)");
         stdout.WriteLine("Usage: ignisdisc-cli <command> [options]");
         stdout.WriteLine();
         stdout.WriteLine("Supported Commands:");

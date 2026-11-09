@@ -7,7 +7,7 @@ Publisher: tetherworks
 PublisherUrl: https://ignisdisc.tetherworks.dev
 PackageName: IgnisDisc Optical Studio
 PackageUrl: https://ignisdisc.tetherworks.dev
-License: MIT
+License: GPL-3.0-or-later
 LicenseUrl: https://github.com/tether-works/IgnisDisc/blob/master/LICENSE
 ShortDescription: Free, open-source CD/DVD burner, audio CD ripper with AccurateRip, and multi-disc archiver for Windows.
 Description: |-
@@ -27,8 +27,3 @@ Tags:
 ReleaseNotesUrl: https://github.com/tether-works/IgnisDisc/releases/tag/v1.11
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
-
-
-
-
-

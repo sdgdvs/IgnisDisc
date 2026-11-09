@@ -1,6 +1,6 @@
 # IgnisDisc Optical Studio
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20x64-lightgrey.svg)]()
 [![.NET](https://img.shields.io/badge/.NET-10-blue.svg)](https://dotnet.microsoft.com/)
 
@@ -169,6 +169,23 @@ pwsh scripts/Build-Installer.ps1 -FfmpegPath C:\tools\ffmpeg\bin\ffmpeg.exe -Ffm
 
 ---
 
+## Code signing policy
+
+Free code signing on Windows is provided by [SignPath.io](https://signpath.io), certificate by the
+[SignPath Foundation](https://signpath.org) (application and CI pipeline configured; current release binaries are
+unsigned until certificate provisioning completes).
+
+- **Committers, reviewers, and approvers:** [tether-works](https://github.com/tether-works) maintainers. External pull
+  requests require maintainer review before merge, and release builds are produced exclusively from tagged commits by
+  `.github/workflows/release.yml` on GitHub-hosted runners.
+- **Privacy policy:** This program will not transfer any information to other networked systems unless specifically
+  requested by the user or the person installing or operating it. See [SECURITY.md](SECURITY.md) for full details on
+  optional MusicBrainz, AccurateRip, and release update checks.
+
+---
+
 ## License
 
-MIT — see [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+`GPL-3.0-or-later` — see [LICENSE](LICENSE), [TRADEMARKS.md](TRADEMARKS.md), and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+The source code in this repository is licensed under the GNU General Public License v3.0 or later. Pursuant to Section 7(e) of the GPLv3, the names **"IgnisDisc"**, **"tetherworks"**, **"Tetherworks"**, and the IgnisDisc application icons/logos are trademarks of tetherworks (Tetherworks LLC). You may not distribute modified or unmodified binaries under the name **"IgnisDisc"** without prior written permission.

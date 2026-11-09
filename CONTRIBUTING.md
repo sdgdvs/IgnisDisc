@@ -40,4 +40,4 @@ A pull request is ready when:
 Anything that writes to real discs in a new way needs real-hardware testing before it ships; say in the PR which
 drives and media you tested.
 
-By contributing you agree that your contributions are licensed under the [MIT License](LICENSE).
+By contributing you agree that your contributions are licensed under the [GNU General Public License v3.0 or later](LICENSE).

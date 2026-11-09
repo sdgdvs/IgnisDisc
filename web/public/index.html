@@ -20,7 +20,7 @@
       <div class="telemetry-meta">
         <div class="telemetry-cell">REV: <span id="navVersion">v1.11</span></div>
         <div class="telemetry-cell">TARGET: <strong>WIN10/11 x64 (.NET 10)</strong></div>
-        <div class="telemetry-cell">LICENSE: <strong>MIT</strong></div>
+        <div class="telemetry-cell">LICENSE: <strong>GPL-3.0</strong></div>
         <div class="telemetry-cell">SRC: <a id="navGithubLink" href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">GITHUB</a></div>
       </div>
     </div>
@@ -324,15 +324,39 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
       </div>
     </section>
 
+    <!-- Code Signing, Privacy & Licensing Policy -->
+    <section class="grid-1px grid-2col" id="signing-policy">
+      <div class="cell">
+        <h2 class="spec-module-title">Code signing policy</h2>
+        <p class="spec-lead">
+          Free code signing on Windows is provided by <a href="https://signpath.io" target="_blank" rel="noopener">SignPath.io</a>, certificate by the <a href="https://signpath.org" target="_blank" rel="noopener">SignPath Foundation</a> (application and CI pipeline configured; until certificate provisioning completes, verify the SHA-256 digests above).
+        </p>
+        <ul class="spec-module-list">
+          <li><strong>Committers, reviewers, and approvers:</strong> <a href="https://github.com/tether-works" target="_blank" rel="noopener">tether-works</a> maintainers.</li>
+          <li><strong>Build provenance:</strong> Official release binaries are built exclusively from tagged commits by <code>.github/workflows/release.yml</code> on GitHub-hosted runners.</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h2 class="spec-module-title">Privacy &amp; open-source license</h2>
+        <p class="spec-lead">
+          This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it (optional MusicBrainz/AccurateRip disc TOC lookups and opt-in GitHub release checks; see <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>).
+        </p>
+        <ul class="spec-module-list">
+          <li><strong>Source license:</strong> GNU General Public License v3.0 or later (<code>GPL-3.0-or-later</code>).</li>
+          <li><strong>Trademarks:</strong> The names <em>IgnisDisc</em> and <em>tetherworks</em> and the IgnisDisc logos are trademarks of tetherworks (<a href="https://github.com/tether-works/IgnisDisc/blob/master/TRADEMARKS.md" target="_blank" rel="noopener">TRADEMARKS.md</a>).</li>
+        </ul>
+      </div>
+    </section>
+
     <!-- Footer Strip -->
     <footer class="datasheet-footer">
       <div>
-        <strong>IgnisDisc v1.11</strong> · Published by <a href="https://tetherworks.dev">tetherworks</a> · MIT License · Zero Telemetry, Zero Cookies, Zero Third-Party Requests
+        <strong>IgnisDisc v1.11</strong> · Published by <a href="https://tetherworks.dev">tetherworks</a> · GPL-3.0 License · Zero Telemetry, Zero Cookies, Zero Third-Party Requests
       </div>
       <div class="footer-links">
         <a href="#download">DOWNLOAD</a>
         <a href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">GITHUB REPO</a>
-        <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">SECURITY.MD</a>
+        <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">CODE SIGNING &amp; PRIVACY POLICY</a>
         <a href="https://tetherworks.dev">TETHERWORKS.DEV</a>
       </div>
     </footer>

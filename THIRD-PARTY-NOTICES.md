@@ -1,6 +1,6 @@
 # Third-party notices
 
-IgnisDisc is MIT-licensed (see `LICENSE`). Release builds include the following third-party components.
+IgnisDisc is licensed under the GNU General Public License v3.0 or later (`GPL-3.0-or-later`; see `LICENSE` and `TRADEMARKS.md`). Release builds include the following third-party components.
 
 | Component | Used for | License |
 | --- | --- | --- |

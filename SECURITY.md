@@ -20,18 +20,21 @@ Every release lists SHA-256 checksums for its files, both on the release page an
 [ignisdisc.tetherworks.dev](https://ignisdisc.tetherworks.dev). Builds are not code-signed yet; compare the checksum
 before running a file you downloaded from anywhere else.
 
-## Code signing
+## Code signing policy
 
-Releases are not code-signed yet, so Windows SmartScreen may warn when you first run them. Signing through the
-[SignPath Foundation](https://signpath.org) programme for open-source projects is planned; until a signed release is
-published, compare the SHA-256 checksum above. Release builds are produced from tagged commits by
-`.github/workflows/release.yml` on GitHub-hosted runners, and changes from outside contributors are merged only after
-maintainer review.
+Free code signing on Windows is provided by [SignPath.io](https://signpath.io), certificate by the
+[SignPath Foundation](https://signpath.org) (application and CI pipeline configured; until a signed release is
+published, compare the SHA-256 checksum above).
 
-## Privacy
+- **Committers, reviewers, and approvers:** [tether-works](https://github.com/tether-works) maintainers.
+- Release builds are produced exclusively from tagged commits by `.github/workflows/release.yml` on GitHub-hosted
+  runners, and changes from outside contributors are merged only after maintainer review.
 
-IgnisDisc collects no telemetry, analytics, crash reports or usage data. It makes network requests only in these
-cases:
+## Privacy policy
+
+IgnisDisc collects no telemetry, analytics, crash reports, or usage data. This program will not transfer any
+information to other networked systems unless specifically requested by the user or the person installing or operating
+it:
 
 - **MusicBrainz lookup** (audio CD ripping; *on by default* in the app's rip options, off unless you pass `--lookup`
   on the command line): the disc's table of contents (track start positions) is sent to `musicbrainz.org` to fetch
