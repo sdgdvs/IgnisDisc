@@ -23,7 +23,7 @@
                 <RowDefinition Height="Auto" />
                 <!-- Row 2: Appearance & System Card -->
                 <RowDefinition Height="Auto" />
-                <!-- Row 3: Updates & Network Card -->
+                <!-- Row 3: Online Services & Updates Card -->
                 <RowDefinition Height="Auto" />
                 <!-- Row 4: Action Buttons Footer -->
                 <RowDefinition Height="Auto" />
@@ -116,7 +116,7 @@
             </Border>
 
             <!-- ========================================================================= -->
-            <!-- ROW 1: DIRECTORIES & EXTERNAL TOOLS                                       -->
+            <!-- ROW 1: DIRECTORIES & EXTERNAL TOOLS (1-CLICK INSTALL)                    -->
             <!-- ========================================================================= -->
             <Border Grid.Row="1"
                     Background="{DynamicResource CardBackgroundBrush}"
@@ -126,7 +126,7 @@
                     Padding="16"
                     Margin="0,0,0,12">
                 <StackPanel>
-                    <TextBlock Text="📁 Staging Directories &amp; Transcoders"
+                    <TextBlock Text="📁 Staging Directories &amp; Optional External Tools"
                                FontSize="15"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimaryBrush}"
@@ -144,16 +144,60 @@
                              BorderBrush="{DynamicResource ControlBorderBrush}"
                              Margin="0,0,0,12" />
 
-                    <!-- FFmpeg Path -->
+                    <!-- FFmpeg Path + 1-Click Install -->
                     <TextBlock Text="FFmpeg Transcoder Executable Path (DVD-Video):"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,0,0,4" />
-                    <TextBox AutomationProperties.Name="FFmpeg Transcoder Executable Path"
-                             Text="{Binding FfmpegExecutablePath, UpdateSourceTrigger=PropertyChanged}"
-                             Padding="8,5"
-                             Background="{DynamicResource ControlBackgroundBrush}"
-                             Foreground="{DynamicResource TextPrimaryBrush}"
-                             BorderBrush="{DynamicResource ControlBorderBrush}" />
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0"
+                                 AutomationProperties.Name="FFmpeg Transcoder Executable Path"
+                                 Text="{Binding FfmpegExecutablePath, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="8,5"
+                                 VerticalAlignment="Center"
+                                 Background="{DynamicResource ControlBackgroundBrush}"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource ControlBorderBrush}" />
+                        <Button Grid.Column="1"
+                                Content="⬇ Install FFmpeg (1-Click LGPL)"
+                                AutomationProperties.Name="Install FFmpeg (1-Click LGPL)"
+                                Command="{Binding InstallFfmpegCommand}"
+                                ToolTip="Downloads the official LGPL Windows build of FFmpeg and its license into %LOCALAPPDATA%\Programs\ffmpeg"
+                                Padding="12,5"
+                                Margin="8,0,0,0" />
+                    </Grid>
+                    <TextBlock Text="{Binding FfmpegStatusText}"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               FontSize="11.5"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,12" />
+
+                    <!-- par2cmdline + 1-Click Install -->
+                    <TextBlock Text="PAR2 Archive Recovery Tool (par2cmdline):"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,0,4" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding Par2StatusText}"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap" />
+                        <Button Grid.Column="1"
+                                Content="⬇ Install par2 (1-Click)"
+                                AutomationProperties.Name="Install par2 (1-Click)"
+                                Command="{Binding InstallPar2Command}"
+                                ToolTip="Downloads par2cmdline (par2.exe) into %LOCALAPPDATA%\Programs\par2cmdline for multi-disc archive parity recovery"
+                                Padding="12,5"
+                                Margin="8,0,0,0" />
+                    </Grid>
                 </StackPanel>
             </Border>
 
@@ -218,7 +262,7 @@
             </Border>
 
             <!-- ========================================================================= -->
-            <!-- ROW 3: UPDATES & NETWORK (OPT-IN)                                        -->
+            <!-- ROW 3: ONLINE SERVICES & UPDATES                                         -->
             <!-- ========================================================================= -->
             <Border Grid.Row="3"
                     Background="{DynamicResource CardBackgroundBrush}"
@@ -228,11 +272,23 @@
                     Padding="16"
                     Margin="0,0,0,16">
                 <StackPanel>
-                    <TextBlock Text="🌐 GitHub Releases &amp; Updates"
+                    <TextBlock Text="🌐 Online Services &amp; Updates"
                                FontSize="15"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                Margin="0,0,0,12" />
+
+                    <CheckBox Content="Look up Audio CD album &amp; track names from MusicBrainz by default"
+                              AutomationProperties.Name="Look up Audio CD album and track names from MusicBrainz by default"
+                              IsChecked="{Binding LookupMusicBrainzByDefault}"
+                              ToolTip="Sends only the disc's table-of-contents DiscID to musicbrainz.org; never sends audio or personal data."
+                              Margin="0,0,0,8" />
+
+                    <CheckBox Content="Verify ripped Audio CD tracks against AccurateRip by default"
+                              AutomationProperties.Name="Verify ripped Audio CD tracks against AccurateRip by default"
+                              IsChecked="{Binding VerifyAccurateRipByDefault}"
+                              ToolTip="Checks extracted track CRCs against the AccurateRip pressing database."
+                              Margin="0,0,0,12" />
 
                     <!-- Opt-in Checkbox -->
                     <CheckBox Content="Check for newer versions automatically on startup (strictly opt-in)"

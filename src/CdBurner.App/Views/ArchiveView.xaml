@@ -126,12 +126,23 @@
                                    MinWidth="60" />
                     </Grid>
 
-                    <!-- Par2 Status Text -->
-                    <TextBlock Text="{Binding Par2StatusText}"
-                               Foreground="{DynamicResource TextMutedBrush}"
-                               FontSize="12"
-                               Margin="130,0,0,10"
-                               TextWrapping="Wrap" />
+                    <!-- Par2 Status Text & 1-Click Install -->
+                    <StackPanel Orientation="Horizontal" Margin="130,0,0,10" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Par2StatusText}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                        <Button Content="⬇ Install par2 (1-Click)"
+                                AutomationProperties.Name="Install par2 (1-Click)"
+                                Command="{Binding InstallPar2Command}"
+                                Visibility="{Binding IsPar2Missing, Converter={StaticResource BoolToVis}}"
+                                ToolTip="Downloads par2cmdline (par2.exe) into %LOCALAPPDATA%\Programs\par2cmdline and enables PAR2 recovery data"
+                                Padding="10,3"
+                                FontSize="11.5"
+                                Margin="10,0,0,0"
+                                VerticalAlignment="Center" />
+                    </StackPanel>
 
                     <!-- Staging Folder -->
                     <Grid Margin="0,0,0,12">
@@ -447,7 +458,7 @@
                                  AutomationProperties.Name="Archive Progress"
                                  Minimum="0"
                                  Maximum="100"
-                                 Value="{Binding Progress}"
+                                 Value="{Binding Progress, Mode=OneWay}"
                                  Height="6"
                                  VerticalAlignment="Center"
                                  Margin="0,0,16,0"

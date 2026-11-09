@@ -75,13 +75,29 @@ $updatedReadme = [regex]::Replace($readmeContent, $readmeMarkerPattern, [System.
 # ---------------------------------------------------------------------------
 # 2. Generate HTML <tbody> Block for web/public/index.html
 # ---------------------------------------------------------------------------
+function Format-HtmlStatusBadge([string]$status, [string]$notes) {
+    switch ($status) {
+        "✅" { return '<span class="badge-pass">[ PASS ]</span>' }
+        "⚠️" { return '<span class="badge-warn">[ PARTIAL ]</span>' }
+        "❌" {
+            if ($notes -match 'IMAPIv2') {
+                return '<span class="badge-na">[ N/A - IMAPIv2 ]</span>'
+            }
+            return '<span class="badge-na">[ N/A ]</span>'
+        }
+        default { return '<span class="badge-na">[ N/A ]</span>' }
+    }
+}
+
 $htmlContent = Get-Content -Path $HtmlPath -Raw -Encoding UTF8
 $htmlNl = Get-Newline $htmlContent
 
 $htmlLines = [System.Collections.Generic.List[string]]::new()
 $htmlLines.Add("              <tbody>")
 foreach ($row in $matrix) {
-    $htmlLines.Add("                <tr><td>$($row.featureHtml)</td><td>$($row.physical)</td><td>$($row.notesHtml)</td></tr>")
+    $physBadge = Format-HtmlStatusBadge $row.physical $row.notesHtml
+    $virtBadge = Format-HtmlStatusBadge $row.virtual $row.notesHtml
+    $htmlLines.Add("                <tr><td>$($row.featureHtml)</td><td>$physBadge</td><td>$virtBadge</td><td>$($row.notesHtml)</td></tr>")
 }
 $htmlLines.Add("              </tbody>")
 $newHtmlBlock = ($htmlLines -join $htmlNl)

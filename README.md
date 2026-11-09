@@ -44,8 +44,6 @@ pipeline can be tested without hardware or blank media.
 
 ✅ supported · ⚠️ works but needs more real-hardware testing · ❌ not available on physical drives yet
 
-Planned work, including direct drive writing to unlock the ❌ rows, is tracked in [docs/ROADMAP.md](docs/ROADMAP.md).
-
 Reading from physical drives uses SCSI pass-through when Windows allows it and falls back to standard volume reads
 (data) or `IOCTL_CDROM_RAW_READ` (audio) otherwise, so no administrator rights are needed.
 
@@ -158,6 +156,15 @@ pwsh scripts/Build-Installer.ps1 -FfmpegPath C:\tools\ffmpeg\bin\ffmpeg.exe -Ffm
 | `src/CdBurner.App` | WPF desktop app (`IgnisDisc.exe`) |
 | `tools/CdBurner.Setup` | Per-user installer / uninstaller |
 | `tests/*` | xUnit tests (virtual drive, image validation with an independent reader, CLI and view-model tests) |
+
+---
+
+## Roadmap
+
+- Opt-in native SCSI MMC write engine (`SEND CUE SHEET` / `WRITE(10)`) for physical lead-in CD-Text, `INDEX 00` pre-gaps, and DVD±R DL layer-break control
+- CUETools Database (CTDB) verification and audio repair alongside AccurateRip
+- Blu-ray (`BD-R` / `BD-RE`) media recognition and UDF 2.50 mastering
+- Mixed-mode and Enhanced CD compilation and disc copy support
 
 ---
 

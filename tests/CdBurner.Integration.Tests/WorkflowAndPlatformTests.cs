@@ -1,11 +1,18 @@
 using System.IO;
+using System.IO.Compression;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using CdBurner.App.ViewModels;
 using CdBurner.Cli;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Archival;
 using CdBurner.Core.Burning;
+using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Persistence;
 using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Simulation;
 using Xunit;
@@ -193,19 +200,27 @@ public sealed class WorkflowAndPlatformTests : IDisposable
 
         // Default should be false (opt-in)
         Assert.False(vm.CheckForUpdatesOnStartup);
+        Assert.True(vm.LookupMusicBrainzByDefault);
+        Assert.True(vm.VerifyAccurateRipByDefault);
 
         // Change and save
         vm.CheckForUpdatesOnStartup = true;
+        vm.LookupMusicBrainzByDefault = false;
+        vm.VerifyAccurateRipByDefault = false;
         vm.SaveSettingsCommand.Execute(null);
 
         // Reload
         var reloadedService = new AppSettingsService(settingsPath);
         reloadedService.Load();
         Assert.True(reloadedService.CurrentSettings.CheckForUpdatesOnStartup);
+        Assert.False(reloadedService.CurrentSettings.LookupMusicBrainzByDefault);
+        Assert.False(reloadedService.CurrentSettings.VerifyAccurateRipByDefault);
 
         // Reset
         vm.ResetSettingsCommand.Execute(null);
         Assert.False(vm.CheckForUpdatesOnStartup);
+        Assert.True(vm.LookupMusicBrainzByDefault);
+        Assert.True(vm.VerifyAccurateRipByDefault);
     }
 
     [Fact]
@@ -218,7 +233,7 @@ public sealed class WorkflowAndPlatformTests : IDisposable
         // Execute update check against fake endpoint or test handler
         string fakeJson = """{ "tag_name": "v1.10", "html_url": "https://github.com/tether-works/IgnisDisc/releases/tag/v1.10" }""";
         var handler = new FakeHttpHandler(fakeJson);
-        using var client = new System.Net.Http.HttpClient(handler);
+        using var client = new HttpClient(handler);
 
         var result = await vm.CheckForUpdatesAsync(client);
 
@@ -227,7 +242,7 @@ public sealed class WorkflowAndPlatformTests : IDisposable
         Assert.Contains("IgnisDisc is up to date", vm.UpdateStatusMessage);
     }
 
-    private sealed class FakeHttpHandler : System.Net.Http.HttpMessageHandler
+    private sealed class FakeHttpHandler : HttpMessageHandler
     {
         private readonly string _responseJson;
 
@@ -236,15 +251,160 @@ public sealed class WorkflowAndPlatformTests : IDisposable
             _responseJson = responseJson;
         }
 
-        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(
-            System.Net.Http.HttpRequestMessage request,
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new System.Net.Http.StringContent(_responseJson, System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent(_responseJson, Encoding.UTF8, "application/json")
             });
         }
+    }
+
+    private sealed class FakeBinaryHttpHandler : HttpMessageHandler
+    {
+        private readonly byte[] _zipBytes;
+
+        public FakeBinaryHttpHandler(byte[] zipBytes)
+        {
+            _zipBytes = zipBytes;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var resp = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(_zipBytes)
+            };
+            resp.Content.Headers.ContentLength = _zipBytes.Length;
+            return Task.FromResult(resp);
+        }
+    }
+
+    private static byte[] CreateSyntheticToolZip(string entryPath, string licenseEntryPath, string licenseContent)
+    {
+        using var ms = new MemoryStream();
+        using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var exeEntry = archive.CreateEntry(entryPath);
+            using (var s = exeEntry.Open())
+            {
+                byte[] stub = "MZ-SYNTHETIC-BINARY"u8.ToArray();
+                s.Write(stub, 0, stub.Length);
+            }
+
+            var licEntry = archive.CreateEntry(licenseEntryPath);
+            using (var ls = new StreamWriter(licEntry.Open(), Encoding.UTF8))
+            {
+                ls.Write(licenseContent);
+            }
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public async Task DvdVideoViewModel_InstallFfmpegAsync_ExtractsLgplBinaryAndLicenseAndActivatesLocator()
+    {
+        byte[] zipBytes = CreateSyntheticToolZip(
+            "ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe",
+            "ffmpeg-master-latest-win64-lgpl/LICENSE.txt",
+            "GNU LESSER GENERAL PUBLIC LICENSE Version 2.1");
+
+        using var client = new HttpClient(new FakeBinaryHttpHandler(zipBytes));
+        string targetDir = Path.Combine(_tempDir, "ffmpeg_install");
+
+        var vm = new DvdVideoViewModel(_deviceService, _burnEngine);
+        var result = await vm.InstallFfmpegAsync(targetDir, client, "https://example.test/ffmpeg-lgpl.zip");
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.ExecutablePath);
+        Assert.True(File.Exists(result.ExecutablePath));
+        Assert.NotNull(result.LicensePath);
+        Assert.True(File.Exists(result.LicensePath));
+        Assert.Equal("ffmpeg-LICENSE.txt", Path.GetFileName(result.LicensePath));
+        Assert.True(vm.IsFfmpegAvailable);
+        Assert.False(vm.IsFfmpegMissing);
+        Assert.Equal(result.ExecutablePath, FfmpegLocator.FindFfmpegExecutable(vm.CustomFfmpegPath));
+    }
+
+    [Fact]
+    public async Task ArchiveViewModel_InstallPar2Async_ExtractsPar2AndUnlocksRedundancySlider()
+    {
+        byte[] zipBytes = CreateSyntheticToolZip(
+            "par2.exe",
+            "COPYING",
+            "GNU GENERAL PUBLIC LICENSE Version 2");
+
+        using var client = new HttpClient(new FakeBinaryHttpHandler(zipBytes));
+        string targetDir = Path.Combine(_tempDir, "par2_install");
+
+        var vm = new ArchiveViewModel(_deviceService, _burnEngine);
+        var result = await vm.InstallPar2Async(targetDir, client, "https://example.test/par2.zip");
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.ExecutablePath);
+        Assert.True(File.Exists(result.ExecutablePath));
+        Assert.True(vm.Par2Available);
+        Assert.False(vm.IsPar2Missing);
+        Assert.True(vm.RedundancyPercent > 0);
+        Assert.Contains("par2 found:", vm.Par2StatusText);
+        Assert.Equal(result.ExecutablePath, Par2Runner.FindPar2Executable(result.ExecutablePath));
+    }
+
+    [Fact]
+    public async Task AudioBurnViewModel_LookupDiscMetadataAsync_PopulatesAlbumAndTrackMetadataFromMusicBrainz()
+    {
+        var medium = VirtualDiscMedium.CreateBlankCdR700();
+        medium.Raw2352Mode = true;
+        medium.IsBlank = false;
+        medium.UsedSectors = 27000;
+        var session = new VirtualSession
+        {
+            SessionNumber = 1,
+            StartLba = 0,
+            SectorCount = 27000
+        };
+        session.Tracks.Add(new VirtualTrack { TrackNumber = 1, StartLba = 0, SectorCount = 15000, IsAudio = true });
+        session.Tracks.Add(new VirtualTrack { TrackNumber = 2, StartLba = 15000, SectorCount = 12000, IsAudio = true });
+        medium.Sessions.Add(session);
+        _recorder.InsertMedia(medium);
+
+        string mbJson = """
+        {
+            "releases": [
+                {
+                    "id": "rel-1",
+                    "title": "Test Symphony",
+                    "artist-credit": [ { "name": "Test Orchestra" } ],
+                    "media": [
+                        {
+                            "format": "CD",
+                            "discs": [ { "id": "any" } ],
+                            "tracks": [
+                                { "number": "1", "title": "Movement I", "artist-credit": [ { "name": "Test Orchestra" } ] },
+                                { "number": "2", "title": "Movement II", "artist-credit": [ { "name": "Test Orchestra" } ] }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+        """;
+
+        using var client = new HttpClient(new FakeHttpHandler(mbJson));
+        var vm = new AudioBurnViewModel(_deviceService, _burnEngine);
+
+        var meta = await vm.LookupDiscMetadataAsync(client);
+
+        Assert.NotNull(meta);
+        Assert.Equal("Test Symphony", vm.AlbumTitle);
+        Assert.Equal("Test Orchestra", vm.AlbumPerformer);
+        Assert.Contains("Test Symphony", vm.RipReport);
+        Assert.Contains("Movement I", vm.RipReport);
+        Assert.Contains("Movement II", vm.RipReport);
     }
 
     #endregion
@@ -261,15 +421,15 @@ public sealed class WorkflowAndPlatformTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(srcDir, "alpha.txt"), "Alpha archival payload");
         await File.WriteAllTextAsync(Path.Combine(srcDir, "beta.txt"), "Beta archival payload");
 
-        var plan = CdBurner.Core.Archival.ArchiveSpanPlanner.Plan(srcDir, DiscMediaType.CdR, redundancyPercent: 0, setId: "archset01");
-        var stagedDiscs = await CdBurner.Core.Archival.ArchiveStager.StageAsync(plan, stageDir, par2Path: null);
+        var plan = ArchiveSpanPlanner.Plan(srcDir, DiscMediaType.CdR, redundancyPercent: 0, setId: "archset01");
+        var stagedDiscs = await ArchiveStager.StageAsync(plan, stageDir, par2Path: null);
 
         Assert.Single(stagedDiscs);
         string disc1 = stagedDiscs[0];
 
-        string ps1Path = Path.Combine(disc1, CdBurner.Core.Archival.ArchiveManifest.VerifyPowerShellFileName);
-        string batPath = Path.Combine(disc1, CdBurner.Core.Archival.ArchiveManifest.VerifyBatchFileName);
-        string readmePath = Path.Combine(disc1, CdBurner.Core.Archival.ArchiveManifest.RecoveryReadmeFileName);
+        string ps1Path = Path.Combine(disc1, ArchiveManifest.VerifyPowerShellFileName);
+        string batPath = Path.Combine(disc1, ArchiveManifest.VerifyBatchFileName);
+        string readmePath = Path.Combine(disc1, ArchiveManifest.RecoveryReadmeFileName);
 
         Assert.True(File.Exists(ps1Path));
         Assert.True(File.Exists(batPath));

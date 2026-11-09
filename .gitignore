@@ -18,3 +18,6 @@ ffmpeg.exe
 
 # Firebase CLI local deploy cache
 .firebase/
+
+# Local planning notes
+docs/ROADMAP.md

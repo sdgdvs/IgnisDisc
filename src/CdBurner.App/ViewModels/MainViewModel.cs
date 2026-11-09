@@ -568,6 +568,7 @@ public class MainViewModel : ObservableObject, IDisposable
         if (_archive != null)
         {
             _archive.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
+            _archive.RefreshPar2Status();
         }
 
         _audioBurn?.ApplyRipSettings(_settings.SettingsService.CurrentSettings);
@@ -577,6 +578,7 @@ public class MainViewModel : ObservableObject, IDisposable
             _dvdVideo.CustomFfmpegPath = _settings.FfmpegExecutablePath;
             _dvdVideo.VerifyAfterBurn = _settings.VerifyAfterBurnByDefault;
             _dvdVideo.EjectAfterBurn = _settings.EjectAfterBurnByDefault;
+            _dvdVideo.RefreshFfmpegStatus();
         }
     }
 

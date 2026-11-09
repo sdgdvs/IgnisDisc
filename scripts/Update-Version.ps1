@@ -178,8 +178,8 @@ if (Test-Path $PublicHtmlPath) {
     $newHtml = [regex]::Replace($newHtml, '/download/v[^/]+/IgnisDisc-Setup\.exe', "/download/v$NewVersion/IgnisDisc-Setup.exe")
     $newHtml = [regex]::Replace($newHtml, '/download/v[^/]+/IgnisDisc-Portable-win-x64\.zip', "/download/v$NewVersion/IgnisDisc-Portable-win-x64.zip")
     # Download sub-labels: "v1.08 • 149.2 MB • ..." under the Setup and Portable buttons (anchored on the button ids).
-    $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">)v[^\s•]+', "`${1}v$NewVersion")
-    $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">)v[^\s•]+', "`${1}v$NewVersion")
+    $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">)v[^\s•·]+', "`${1}v$NewVersion")
+    $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">)v[^\s•·]+', "`${1}v$NewVersion")
     $newHtml = [regex]::Replace($newHtml, '<strong>IgnisDisc( Optical Studio)? v[^<]+</strong>', "<strong>IgnisDisc v$NewVersion</strong>")
     if ($newHtml -ne $html) {
         Set-FileText $PublicHtmlPath $newHtml "web/public/index.html (version badges & URLs)"
@@ -193,6 +193,7 @@ $TetherHtmlPath = Join-Path $RepoRoot "web\tetherworks\index.html"
 if (Test-Path $TetherHtmlPath) {
     $thtml = Get-Content $TetherHtmlPath -Raw
     $newThtml = [regex]::Replace($thtml, 'IgnisDisc Optical Studio \(v[^)]+\)', "IgnisDisc Optical Studio (v$NewVersion)")
+    $newThtml = [regex]::Replace($newThtml, '(id="ignisRev">)v[^<]+(</code>)', "`${1}v$NewVersion`${2}")
     if ($newThtml -ne $thtml) {
         Set-FileText $TetherHtmlPath $newThtml "web/tetherworks/index.html"
     }
@@ -311,8 +312,8 @@ if ($RebuildArtifacts -and -not $DryRun) {
         # Each hash appears twice: in <code id="hash..."> and in the Copy button's data-copy on the next line.
         $html = [regex]::Replace($html, '(<code id="hashSetup">)[A-Fa-f0-9]{64}(</code>\s*<button[^>]*data-copy=")[A-Fa-f0-9]{64}', "`${1}$setupHash`${2}$setupHash")
         $html = [regex]::Replace($html, '(<code id="hashPortable">)[A-Fa-f0-9]{64}(</code>\s*<button[^>]*data-copy=")[A-Fa-f0-9]{64}', "`${1}$portableHash`${2}$portableHash")
-        $html = [regex]::Replace($html, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">v[^\s•]+ • )\d+(\.\d+)? MB', "`${1}$setupMb MB")
-        $html = [regex]::Replace($html, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">v[^\s•]+ • )\d+(\.\d+)? MB', "`${1}$portableMb MB")
+        $html = [regex]::Replace($html, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">v[^\s•·]+ [•·] )\d+(\.\d+)? MB', "`${1}$setupMb MB")
+        $html = [regex]::Replace($html, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">v[^\s•·]+ [•·] )\d+(\.\d+)? MB', "`${1}$portableMb MB")
         Set-FileText $PublicHtmlPath $html "web/public/index.html (Stamped SHA-256 and MB sizes)"
 
         # Update WinGet installer manifest with hash

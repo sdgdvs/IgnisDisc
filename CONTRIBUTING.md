@@ -18,7 +18,7 @@ Reports of things that **worked** are useful too.
 ## Bugs and feature requests
 
 - Bugs: use the [bug report](https://github.com/tether-works/IgnisDisc/issues/new?template=bug_report.yml) form.
-- Ideas: check the [roadmap](docs/ROADMAP.md) first, then open a discussion or issue.
+- Ideas: check the [roadmap section in README.md](README.md#roadmap) first, then open a discussion or issue.
 - Security problems: see [SECURITY.md](SECURITY.md) — please don't file them as public issues.
 
 ## Code changes

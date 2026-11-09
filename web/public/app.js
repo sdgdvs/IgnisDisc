@@ -1,5 +1,5 @@
 /**
- * IgnisDisc site behaviour: release links, checksum drawer, copy buttons, theme toggle.
+ * IgnisDisc Hardware Datasheet behaviour: release links, copy buttons, and GUI/CLI pane switcher.
  * Edit SITE_CONFIG below (or run scripts/Publish-ReleaseAndSite.ps1) to update links.
  */
 const SITE_CONFIG = {
@@ -24,41 +24,35 @@ document.addEventListener("DOMContentLoaded", () => {
   const verEl = document.getElementById("navVersion");
   if (verEl && SITE_CONFIG.version) verEl.textContent = `v${SITE_CONFIG.version}`;
 
-  const checksumToggle = document.getElementById("checksumToggle");
-  const checksumDrawer = document.getElementById("checksumDrawer");
-  if (checksumToggle && checksumDrawer) {
-    checksumToggle.addEventListener("click", () => {
-      const isHidden = checksumDrawer.hasAttribute("hidden");
-      if (isHidden) {
-        checksumDrawer.removeAttribute("hidden");
-        checksumToggle.setAttribute("aria-expanded", "true");
-      } else {
-        checksumDrawer.setAttribute("hidden", "");
-        checksumToggle.setAttribute("aria-expanded", "false");
-      }
-    });
-  }
-
   document.querySelectorAll(".btn-copy").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const text = btn.getAttribute("data-copy") || "";
       try {
         await navigator.clipboard.writeText(text);
         const orig = btn.textContent;
-        btn.textContent = "Copied!";
+        btn.textContent = "[ COPIED ]";
         setTimeout(() => { btn.textContent = orig; }, 1400);
       } catch { }
     });
   });
 
-  const themeBtn = document.getElementById("themeToggleBtn");
-  const themeIcon = document.getElementById("themeIcon");
-  if (themeBtn) {
-    themeBtn.addEventListener("click", () => {
-      const root = document.documentElement;
-      const next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
-      root.setAttribute("data-theme", next);
-      if (themeIcon) themeIcon.textContent = next === "light" ? "🌙" : "☀️";
+  const tabs = document.querySelectorAll(".instrument-tab");
+  const panes = document.querySelectorAll(".instrument-pane");
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const targetId = tab.getAttribute("data-pane");
+      tabs.forEach((t) => {
+        const isActive = t === tab;
+        t.classList.toggle("active", isActive);
+        t.setAttribute("aria-selected", isActive ? "true" : "false");
+      });
+      panes.forEach((p) => {
+        if (p.id === targetId) {
+          p.removeAttribute("hidden");
+        } else {
+          p.setAttribute("hidden", "");
+        }
+      });
     });
-  }
+  });
 });

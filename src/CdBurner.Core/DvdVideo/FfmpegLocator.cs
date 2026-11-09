@@ -118,7 +118,7 @@ public static class FfmpegLocator
             }
         }
 
-        // 4. Common known installation paths and WinGet
+        // 4. Common known installation paths and WinGet / per-user Programs directory
         foreach (var path in CommonPaths)
         {
             try
@@ -139,6 +139,12 @@ public static class FfmpegLocator
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (!string.IsNullOrEmpty(localAppData))
             {
+                string localProgramsPath = Path.Combine(localAppData, "Programs", "ffmpeg", "ffmpeg.exe");
+                if (File.Exists(localProgramsPath))
+                {
+                    return Path.GetFullPath(localProgramsPath);
+                }
+
                 string wingetPath = Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "ffmpeg.exe");
                 if (File.Exists(wingetPath))
                 {

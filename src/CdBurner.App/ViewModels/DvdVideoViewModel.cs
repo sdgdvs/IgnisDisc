@@ -7,7 +7,9 @@ using CdBurner.Core.Burning;
 using CdBurner.Core.Compilation;
 using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Iso;
+using System.Net.Http;
 using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Simulation;
 
@@ -46,6 +48,8 @@ public class DvdVideoViewModel : ObservableObject
     private string? _tempAuthoredDirectory;
     private WriteSpeedDescriptor? _selectedWriteSpeed;
     private string? _customFfmpegPath;
+    private bool _isFfmpegAvailable;
+    private string _ffmpegStatusText = string.Empty;
     private bool _verifyAfterBurn;
     private bool _ejectAfterBurn;
     private CancellationTokenSource? _activeCts;
@@ -190,7 +194,42 @@ public class DvdVideoViewModel : ObservableObject
     public string? CustomFfmpegPath
     {
         get => _customFfmpegPath;
-        set => SetProperty(ref _customFfmpegPath, value);
+        set
+        {
+            if (SetProperty(ref _customFfmpegPath, value))
+            {
+                RefreshFfmpegStatus();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether an FFmpeg executable was found on the host system.
+    /// </summary>
+    public bool IsFfmpegAvailable
+    {
+        get => _isFfmpegAvailable;
+        private set
+        {
+            if (SetProperty(ref _isFfmpegAvailable, value))
+            {
+                OnPropertyChanged(nameof(IsFfmpegMissing));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when <c>ffmpeg.exe</c> is not installed on the system.
+    /// </summary>
+    public bool IsFfmpegMissing => !_isFfmpegAvailable;
+
+    /// <summary>
+    /// Informational status line describing FFmpeg availability.
+    /// </summary>
+    public string FfmpegStatusText
+    {
+        get => _ffmpegStatusText;
+        private set => SetProperty(ref _ffmpegStatusText, value);
     }
 
     /// <summary>
@@ -367,6 +406,7 @@ public class DvdVideoViewModel : ObservableObject
                 CancelCommand?.RaiseCanExecuteChanged();
                 BuildDvdIsoCommand?.RaiseCanExecuteChanged();
                 StartDvdBurnCommand?.RaiseCanExecuteChanged();
+                InstallFfmpegCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -408,6 +448,7 @@ public class DvdVideoViewModel : ObservableObject
     public RelayCommand ValidateAndPlanLayoutCommand { get; }
     public AsyncRelayCommand BuildDvdIsoCommand { get; }
     public AsyncRelayCommand StartDvdBurnCommand { get; }
+    public AsyncRelayCommand InstallFfmpegCommand { get; }
     public RelayCommand CancelCommand { get; }
 
     #endregion
@@ -444,6 +485,9 @@ public class DvdVideoViewModel : ObservableObject
             await BuildDvdIsoAsync(path);
         }, _ => IsStructureValid);
         StartDvdBurnCommand = new AsyncRelayCommand(async param => await StartDvdBurnAsync(param), _ => IsStructureValid);
+        InstallFfmpegCommand = new AsyncRelayCommand(async _ => await InstallFfmpegAsync(), _ => !IsBusy);
+
+        RefreshFfmpegStatus();
 
         RefreshDrives();
     }
@@ -451,9 +495,65 @@ public class DvdVideoViewModel : ObservableObject
     #region Operations
 
     /// <summary>
-    /// Adds one or more movie file paths to the authoring list, updates the path text,
-    /// and triggers layout planning.
+    /// Re-evaluates whether <c>ffmpeg.exe</c> is available on the host machine and updates UI status.
     /// </summary>
+    public void RefreshFfmpegStatus()
+    {
+        string? exe = FfmpegLocator.FindFfmpegExecutable(
+            string.IsNullOrWhiteSpace(_customFfmpegPath) ? null : _customFfmpegPath);
+        IsFfmpegAvailable = !string.IsNullOrEmpty(exe);
+        FfmpegStatusText = IsFfmpegAvailable
+            ? $"FFmpeg: {Path.GetFileName(exe)}"
+            : "FFmpeg not installed";
+    }
+
+    /// <summary>
+    /// Downloads and extracts the LGPL Windows build of FFmpeg into per-user storage and enables video transcoding.
+    /// </summary>
+    public async Task<ToolInstallResult> InstallFfmpegAsync(
+        string? targetDirectory = null,
+        HttpClient? httpClient = null,
+        string? downloadUrlOverride = null,
+        CancellationToken cancellationToken = default)
+    {
+        IsBusy = true;
+        BurnProgress = 0;
+        StatusMessage = "Downloading FFmpeg (LGPL)...";
+
+        try
+        {
+            var progressHandler = new Progress<string>(msg =>
+            {
+                StatusMessage = msg;
+            });
+
+            var result = await ExternalToolInstallerService.InstallFfmpegAsync(
+                targetDirectory,
+                httpClient,
+                downloadUrlOverride,
+                progressHandler,
+                cancellationToken).ConfigureAwait(true);
+
+            if (result.Success && !string.IsNullOrEmpty(result.ExecutablePath))
+            {
+                CustomFfmpegPath = result.ExecutablePath;
+                RefreshFfmpegStatus();
+                BurnProgress = 100.0;
+                StatusMessage = $"FFmpeg (LGPL) installed: {result.ExecutablePath}";
+            }
+            else
+            {
+                StatusMessage = $"FFmpeg install failed: {result.ErrorMessage}";
+            }
+
+            return result;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     public void AddMovieFiles(IEnumerable<string> filePaths)
     {
         if (filePaths == null) return;

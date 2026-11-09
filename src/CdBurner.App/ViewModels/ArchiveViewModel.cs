@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Net.Http;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Archival;
@@ -7,6 +8,7 @@ using CdBurner.Core.Burning;
 using CdBurner.Core.Compilation;
 using CdBurner.Core.Iso;
 using CdBurner.Core.Primitives;
+using CdBurner.Core.Utilities;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.Simulation;
 using Microsoft.Win32;
@@ -101,6 +103,9 @@ public class ArchiveViewModel : ObservableObject
     private int _redundancyPercent;
     private ArchivePlan? _currentPlan;
     private string _planSummary = string.Empty;
+    private bool _par2Available;
+    private string _par2StatusText = string.Empty;
+    private string? _customPar2Path;
 
     private IDiscRecorderBackend? _selectedRecorder;
     private bool _verifyAfterBurn = true;
@@ -193,12 +198,33 @@ public class ArchiveViewModel : ObservableObject
     /// <summary>
     /// Indicates whether the par2cmdline executable was found on the host machine.
     /// </summary>
-    public bool Par2Available { get; }
+    public bool Par2Available
+    {
+        get => _par2Available;
+        private set
+        {
+            if (SetProperty(ref _par2Available, value))
+            {
+                OnPropertyChanged(nameof(IsPar2Missing));
+                UpdateCanRepair();
+                InstallPar2Command?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when <c>par2.exe</c> is not installed on the system.
+    /// </summary>
+    public bool IsPar2Missing => !_par2Available;
 
     /// <summary>
     /// Informational text describing PAR2 installation status.
     /// </summary>
-    public string Par2StatusText { get; }
+    public string Par2StatusText
+    {
+        get => _par2StatusText;
+        private set => SetProperty(ref _par2StatusText, value);
+    }
 
     #endregion
 
@@ -322,6 +348,7 @@ public class ArchiveViewModel : ObservableObject
                 VerifyCommand?.RaiseCanExecuteChanged();
                 VerifyDriveCommand?.RaiseCanExecuteChanged();
                 RepairCommand?.RaiseCanExecuteChanged();
+                InstallPar2Command?.RaiseCanExecuteChanged();
                 CancelCommand?.RaiseCanExecuteChanged();
             }
         }
@@ -395,6 +422,11 @@ public class ArchiveViewModel : ObservableObject
     public AsyncRelayCommand RepairCommand { get; }
 
     /// <summary>
+    /// Command to download and install <c>par2cmdline</c> (<c>par2.exe</c>) with 1 click.
+    /// </summary>
+    public AsyncRelayCommand InstallPar2Command { get; }
+
+    /// <summary>
     /// Command to cancel the active operation.
     /// </summary>
     public RelayCommand CancelCommand { get; }
@@ -419,12 +451,7 @@ public class ArchiveViewModel : ObservableObject
         };
         _selectedMedia = MediaOptions[1]; // default DVD
 
-        string? par2Path = Par2Runner.FindPar2Executable();
-        Par2Available = par2Path != null;
-        Par2StatusText = Par2Available
-            ? $"par2 found: {par2Path}"
-            : "par2 not installed - recovery data disabled (redundancy forced to 0)";
-
+        RefreshPar2Status();
         _redundancyPercent = Par2Available ? 10 : 0;
         _stagingFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -459,12 +486,83 @@ public class ArchiveViewModel : ObservableObject
             _ => !IsBusy && SelectedRecorder != null && !string.IsNullOrWhiteSpace(SelectedRecorder.VolumePath));
 
         RepairCommand = new AsyncRelayCommand(async _ => await RepairAsync(), _ => !IsBusy && CanRepair);
+        InstallPar2Command = new AsyncRelayCommand(async _ => await InstallPar2Async(), _ => !IsBusy);
         CancelCommand = new RelayCommand(CancelActiveOperation, () => IsBusy);
 
         RefreshRecorders();
     }
 
     #region Public Async Entry Points
+
+    /// <summary>
+    /// Re-checks whether <c>par2.exe</c> is installed on the host machine and updates UI status.
+    /// </summary>
+    public void RefreshPar2Status(string? customPar2Path = null)
+    {
+        if (!string.IsNullOrWhiteSpace(customPar2Path))
+        {
+            _customPar2Path = customPar2Path;
+        }
+
+        string? par2Path = Par2Runner.FindPar2Executable(_customPar2Path);
+        bool wasAvailable = _par2Available;
+        Par2Available = par2Path != null;
+        Par2StatusText = Par2Available
+            ? $"par2 found: {par2Path}"
+            : "par2 not installed — recovery data disabled (click 'Install par2 (1-Click)' to enable)";
+
+        if (Par2Available && !wasAvailable && _redundancyPercent == 0)
+        {
+            RedundancyPercent = 10;
+        }
+    }
+
+    /// <summary>
+    /// Downloads and installs <c>par2cmdline</c> (<c>par2.exe</c>) into per-user storage and enables PAR2 recovery data.
+    /// </summary>
+    public async Task<ToolInstallResult> InstallPar2Async(
+        string? targetDirectory = null,
+        HttpClient? httpClient = null,
+        string? downloadUrlOverride = null,
+        CancellationToken ct = default)
+    {
+        IsBusy = true;
+        Progress = 0;
+        StatusMessage = "Downloading par2cmdline (par2.exe)...";
+
+        try
+        {
+            var progressHandler = new Progress<string>(msg =>
+            {
+                StatusMessage = msg;
+                Par2StatusText = msg;
+            });
+
+            var result = await ExternalToolInstallerService.InstallPar2Async(
+                targetDirectory,
+                httpClient,
+                downloadUrlOverride,
+                progressHandler,
+                ct).ConfigureAwait(true);
+
+            if (result.Success && !string.IsNullOrEmpty(result.ExecutablePath))
+            {
+                RefreshPar2Status(result.ExecutablePath);
+                Progress = 100.0;
+                StatusMessage = $"par2cmdline installed ({result.ExecutablePath}). PAR2 recovery enabled.";
+            }
+            else
+            {
+                StatusMessage = $"par2 install failed: {result.ErrorMessage}";
+            }
+
+            return result;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
 
     /// <summary>
     /// Calculates multi-disc spanning layout for the current source folder and media selection.
@@ -570,7 +668,7 @@ public class ArchiveViewModel : ObservableObject
 
         try
         {
-            string? par2Path = Par2Runner.FindPar2Executable();
+            string? par2Path = Par2Runner.FindPar2Executable(_customPar2Path);
             if (plan.RedundancyPercent > 0 && par2Path == null)
             {
                 StatusMessage = "PAR2 recovery data requires par2cmdline (par2.exe). Install it or set redundancy to 0.";
@@ -899,7 +997,7 @@ public class ArchiveViewModel : ObservableObject
             return false;
         }
 
-        string? par2Path = Par2Runner.FindPar2Executable();
+        string? par2Path = Par2Runner.FindPar2Executable(_customPar2Path);
         if (string.IsNullOrEmpty(par2Path))
         {
             StatusMessage = "par2 executable not found.";

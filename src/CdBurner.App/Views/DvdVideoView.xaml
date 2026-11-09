@@ -160,7 +160,22 @@
                     <TextBlock Text="{Binding MediaRequirementText}"
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
-                               Foreground="{DynamicResource AccentBrush}" />
+                               Foreground="{DynamicResource AccentBrush}"
+                               Margin="0,0,14,0" />
+
+                    <TextBlock Text="{Binding FfmpegStatusText}"
+                               VerticalAlignment="Center"
+                               FontSize="11.5"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Margin="0,0,8,0" />
+                    <Button Content="⬇ Install FFmpeg (1-Click)"
+                            AutomationProperties.Name="Install FFmpeg (1-Click)"
+                            Command="{Binding InstallFfmpegCommand}"
+                            Visibility="{Binding IsFfmpegMissing, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Downloads the official LGPL Windows build of FFmpeg into %LOCALAPPDATA%\Programs\ffmpeg for automatic video transcoding"
+                            Padding="10,3"
+                            FontSize="11.5"
+                            VerticalAlignment="Center" />
                 </WrapPanel>
             </Grid>
         </Border>

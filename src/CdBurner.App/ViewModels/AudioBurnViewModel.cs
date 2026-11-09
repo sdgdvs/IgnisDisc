@@ -556,6 +556,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     public AsyncRelayCommand DetectReadOffsetCommand { get; }
 
     /// <summary>
+    /// Queries MusicBrainz with 1 click for the inserted Audio CD's table-of-contents DiscID.
+    /// </summary>
+    public AsyncRelayCommand LookupDiscMetadataCommand { get; }
+
+    /// <summary>
     /// Browses for an output directory to store ripped audio files.
     /// </summary>
     public RelayCommand BrowseRipOutputFolderCommand { get; }
@@ -641,6 +646,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         CancelBurnCommand = new RelayCommand(_ => CancelActiveBurn(), _ => IsBusy);
         RipAudioCdCommand = new AsyncRelayCommand(async p => await RipAudioCdAsync(p as string), _ => !IsBusy);
         DetectReadOffsetCommand = new AsyncRelayCommand(DetectReadOffsetAsync, () => !IsBusy);
+        LookupDiscMetadataCommand = new AsyncRelayCommand(async _ => await LookupDiscMetadataAsync(), _ => !IsBusy);
         BrowseRipOutputFolderCommand = new RelayCommand(BrowseRipOutputFolder);
         PreviewSelectedTrackCommand = new RelayCommand(p => PreviewTrack(p as AudioTrackRowViewModel), _ => SelectedTrack != null || Tracks.Count > 0);
         StopPreviewCommand = new RelayCommand(_ => StopPreview(), _ => IsPreviewPlaying);
@@ -1789,6 +1795,103 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Measures the optical drive's audio read offset using an inserted CD matched against AccurateRip.
     /// </summary>
+    /// <summary>
+    /// Queries MusicBrainz for the inserted Audio CD's table-of-contents DiscID and displays the release metadata.
+    /// </summary>
+    public async Task<CdTextAlbumMetadata?> LookupDiscMetadataAsync(HttpClient? httpClient = null, CancellationToken ct = default)
+    {
+        var recorder = ResolveRecorder();
+        if (recorder == null)
+        {
+            StatusMessage = "No optical recorder selected or available.";
+            RipReport = "MusicBrainz lookup failed: No optical recorder selected or available.";
+            return null;
+        }
+
+        IsBusy = true;
+        StatusMessage = $"Looking up Audio CD in {recorder.UniqueId} on MusicBrainz...";
+        RipReport = string.Empty;
+
+        try
+        {
+            var ids = DiscIdCalculator.CalculateForRecorder(recorder);
+            if (ids == null)
+            {
+                StatusMessage = "No audio tracks found on inserted disc.";
+                RipReport = "MusicBrainz lookup failed: No audio tracks found on the inserted disc.";
+                return null;
+            }
+
+            bool ownsClient = httpClient == null;
+            var client = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            try
+            {
+                var mbClient = new MusicBrainzClient(client, MusicBrainzClient.DefaultUserAgent);
+                var releases = await mbClient.LookupDiscIdAsync(ids.MusicBrainzId, ct).ConfigureAwait(true);
+                if (releases == null || releases.Count == 0)
+                {
+                    StatusMessage = $"No MusicBrainz match for DiscID {ids.MusicBrainzId}.";
+                    RipReport = $"MusicBrainz lookup completed: No matching release found for DiscID {ids.MusicBrainzId} (freedb {ids.FreeDbIdHex}).";
+                    return null;
+                }
+
+                var meta = MusicBrainzClient.ToAlbumMetadata(releases[0], ids.MusicBrainzId);
+                if (meta != null)
+                {
+                    if (string.IsNullOrWhiteSpace(AlbumTitle) || AlbumTitle == "Untitled Album")
+                    {
+                        AlbumTitle = meta.AlbumTitle;
+                    }
+                    if (string.IsNullOrWhiteSpace(AlbumPerformer) || AlbumPerformer == "Various Artists")
+                    {
+                        AlbumPerformer = meta.AlbumPerformer;
+                    }
+                    for (int i = 0; i < Tracks.Count && i < (meta.Tracks?.Count ?? 0); i++)
+                    {
+                        if (!string.IsNullOrWhiteSpace(meta.Tracks![i].Title))
+                        {
+                            Tracks[i].Title = meta.Tracks![i].Title!;
+                        }
+                        if (!string.IsNullOrWhiteSpace(meta.Tracks![i].Performer))
+                        {
+                            Tracks[i].Performer = meta.Tracks![i].Performer!;
+                        }
+                    }
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"MusicBrainz release found (DiscID {ids.MusicBrainzId}):");
+                    sb.AppendLine($"  Album:   {meta.AlbumTitle}");
+                    sb.AppendLine($"  Artist:  {meta.AlbumPerformer}");
+                    sb.AppendLine($"  Tracks:  {meta.Tracks?.Count ?? 0}");
+                    foreach (var t in meta.Tracks ?? Array.Empty<CdTextTrackMetadata>())
+                    {
+                        sb.AppendLine($"    Track {t.TrackNumber:D2}: {t.Performer} - {t.Title}");
+                    }
+                    RipReport = sb.ToString().TrimEnd();
+                    StatusMessage = $"MusicBrainz: {meta.AlbumPerformer} — {meta.AlbumTitle} ({meta.Tracks?.Count ?? 0} tracks)";
+                }
+                return meta;
+            }
+            finally
+            {
+                if (ownsClient)
+                {
+                    client.Dispose();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"MusicBrainz lookup error: {ex.Message}";
+            RipReport = $"MusicBrainz lookup failed: {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     public async Task DetectReadOffsetAsync()
     {
         var recorder = ResolveRecorder();

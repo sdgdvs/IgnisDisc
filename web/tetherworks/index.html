@@ -1,142 +1,177 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>tetherworks — Independent Software &amp; Retro Computing Workbench</title>
-  <meta name="description" content="tetherworks: independent open-source software. IgnisDisc, a CD/DVD burner and audio CD ripper for Windows, and KiloOS, a 1999-style desktop in the browser." />
-  <link rel="stylesheet" href="/styles.css" />
+  <title>tetherworks — Independent Software Workbench</title>
+  <meta name="description" content="tetherworks: independent open-source software workbench. IgnisDisc Optical Studio (Windows 10/11 CD/DVD burner and audio CD ripper) and KiloOS (1999-style browser desktop environment)." />
+  <link rel="icon" type="image/x-icon" href="/assets/IgnisDisc.ico" />
+  <link rel="stylesheet" href="/styles.css?v=1.10.4" />
 </head>
 <body>
-  <header class="site-header">
-    <div class="container header-inner">
-      <a href="#top" class="brand">
-        <span class="brand-prompt">&gt;_</span>
-        <span class="brand-name">tetherworks<span class="brand-ext">.dev</span></span>
-      </a>
-
-      <nav class="main-nav" aria-label="Navigation">
-        <a href="#projects">/projects</a>
-        <a href="https://github.com/tether-works" target="_blank" rel="noopener">github ↗</a>
-      </nav>
-
-      <div class="nav-actions">
-        <button id="themeToggleBtn" class="btn-icon" type="button" title="Toggle Dark/Light Theme" aria-label="Toggle Theme">
-          <span id="themeIcon">☀️</span>
-        </button>
+  <!-- Top Bar -->
+  <header class="telemetry-bar">
+    <div class="telemetry-inner">
+      <div class="telemetry-brand">
+        <span>tetherworks.dev</span>
+      </div>
+      <div class="telemetry-meta">
+        <div class="telemetry-cell">DEPLOYMENTS: <strong>02 ACTIVE</strong></div>
+        <div class="telemetry-cell">TELEMETRY: <strong>NONE</strong></div>
+        <div class="telemetry-cell">LICENSE: <strong>MIT</strong></div>
+        <div class="telemetry-cell">SRC: <a href="https://github.com/tether-works" target="_blank" rel="noopener">GITHUB</a></div>
       </div>
     </div>
   </header>
 
-  <main id="top" class="container">
-    <!-- FACTUAL, UNDERSTATED INTRO -->
-    <section class="intro">
-      <h1>Fast, self-contained software and experiments built without bloat.</h1>
-
-      <p class="intro-body">
-        <strong>tetherworks</strong> is an independent workbench for open-source desktop utilities and retro computing projects. Everything published here runs without ads, telemetry or tracking scripts.
-      </p>
-    </section>
-
-    <!-- LIVE PROJECTS -->
-    <section class="section" id="projects">
-      <div class="section-bar">
-        <h2>Shipped Projects</h2>
-        <span class="section-meta">2 live deployments</span>
+  <main class="datasheet-shell">
+    <!-- Split Header -->
+    <section class="grid-1px grid-header-split" id="overview">
+      <div class="cell">
+        <h1 class="spec-title">tetherworks</h1>
+        <p class="spec-lead">
+          Independent workbench for free, open-source Windows apps and retro computing projects. Everything published here runs on your computer or in your browser with no ads, no tracking, and no bundled software.
+        </p>
+        <div class="action-bar">
+          <a href="https://ignisdisc.tetherworks.dev" class="btn-hardware">IGNISDISC OPTICAL STUDIO ↗</a>
+          <a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener" class="btn-hardware btn-hardware-secondary">KILOOS (1999 DESKTOP) ↗</a>
+          <a href="https://github.com/tether-works" target="_blank" rel="noopener" class="btn-hardware btn-hardware-secondary">GITHUB.COM/TETHER-WORKS ↗</a>
+        </div>
       </div>
 
-      <div class="project-list">
-        <!-- Project 1: IgnisDisc -->
-        <article class="project-card">
-          <div class="project-head">
-            <div class="project-title-group">
-              <img src="/assets/IgnisDisc.png" alt="" class="project-icon" />
-              <div>
-                <div class="project-kicker">WINDOWS 10/11 DESKTOP + CLI • MIT OPEN SOURCE</div>
-                <h3><a href="https://ignisdisc.tetherworks.dev">IgnisDisc Optical Studio (v1.10)</a></h3>
-              </div>
-            </div>
-            <div class="project-links">
-              <a href="https://ignisdisc.tetherworks.dev" class="btn btn-primary">ignisdisc.tetherworks.dev ↗</a>
-              <a href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener" class="btn btn-secondary">Source &amp; Release</a>
-            </div>
-          </div>
-
-          <p class="project-desc">
-            A free, open-source CD and DVD burner and audio CD ripper for Windows 10 and 11. It burns data discs, ISO images and audio CDs, rips audio CDs with AccurateRip verification, and archives large folders across several discs, from a desktop app or a command-line tool.
-          </p>
-
-          <div class="project-specs">
-            <div class="spec-col">
-              <strong>Key capabilities</strong>
-              <ul>
-                <li>Data disc, ISO and audio CD burning, with verify after burn</li>
-                <li>Secure audio CD ripping to FLAC/WAV with AccurateRip and MusicBrainz lookup</li>
-                <li>Multi-disc archives with SHA-256 manifests and optional PAR2 recovery data</li>
-              </ul>
-            </div>
-            <div class="spec-col">
-              <strong>How it's built and tested</strong>
-              <ul>
-                <li>.NET 10; burns through Windows' built-in burning service (IMAPIv2) and reads discs directly from the drive</li>
-                <li>Automated tests run against a built-in virtual drive</li>
-                <li>Tested on real CD-R, CD-RW, DVD-R and DVD+RW media</li>
-              </ul>
-            </div>
-          </div>
-
-          <div class="project-install">
-            <span class="install-hint">Download the installer or portable ZIP from the project page or GitHub Releases.</span>
-          </div>
-        </article>
-
-        <!-- Project 2: KiloOS -->
-        <article class="project-card">
-          <div class="project-head">
-            <div class="project-title-group">
-              <div class="project-glyph">K//99</div>
-              <div>
-                <div class="project-kicker">BROWSER DESKTOP ENVIRONMENT • 104 APPS &amp; GAMES</div>
-                <h3><a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener">KiloOS: A Return to 1999 (v0.4.38)</a></h3>
-              </div>
-            </div>
-            <div class="project-links">
-              <a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener" class="btn btn-primary">kilo.tetherworks.dev ↗</a>
-            </div>
-          </div>
-
-          <p class="project-desc">
-            An exploration of 1999-era software minimalism. KiloOS is a retro desktop environment that runs in the browser, with <strong>104 small applications, system utilities and games</strong>.
-          </p>
-
-          <div class="project-specs">
-            <div class="spec-col">
-              <strong>Inside (104 apps)</strong>
-              <ul>
-                <li><strong>Games:</strong> <code>KChrono</code> (tri-epoch time-travel puzzler), <code>KStarForge</code>, <code>KRogue</code>, <code>KCosmic</code>, <code>KFortress</code>, <code>KCyber</code>, <code>KMech</code></li>
-                <li><strong>System &amp; Productivity:</strong> <code>KTerm</code>, <code>KSys</code>, <code>KTask</code>, <code>KScript</code>, <code>KAudio</code>, <code>KFont</code>, <code>KDB</code></li>
-                <li><strong>Virtual 1999 Web:</strong> <code>KNet</code> browser &amp; <code>KBBS</code> bulletin board system</li>
-              </ul>
-            </div>
-          </div>
-        </article>
+      <div class="cell">
+        <div class="table-scroll">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>PROJECT</th>
+                <th>RUNTIME TARGET</th>
+                <th>REV</th>
+                <th>STATUS</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><a href="https://ignisdisc.tetherworks.dev"><strong>IgnisDisc</strong></a></td>
+                <td>Windows 10/11 x64 (.NET 10 / IMAPIv2 / SCSI)</td>
+                <td><code id="ignisRev">v1.10</code></td>
+                <td><span class="badge-pass">[ PASS ]</span></td>
+              </tr>
+              <tr>
+                <td><a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener"><strong>KiloOS</strong></a></td>
+                <td>Browser Virtual Desktop (104 Apps)</td>
+                <td><code>v0.4.38</code></td>
+                <td><span class="badge-pass">[ PASS ]</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
-  </main>
 
-  <footer class="site-footer">
-    <div class="container footer-inner">
+    <!-- Projects -->
+    <section class="grid-1px grid-2col" id="projects">
+      <!-- Project 1: IgnisDisc -->
+      <article class="cell">
+        <h2 class="project-title">
+          <a href="https://ignisdisc.tetherworks.dev">IgnisDisc Optical Studio (v1.10)</a>
+        </h2>
+        <p class="spec-lead">
+          Free, open-source CD and DVD burner, audio CD ripper, and multi-disc backup tool for Windows 10 and 11. Burn files, folders, and disc images, make music CDs, rip audio CDs to lossless WAV or FLAC with automatic track names, or split large folders across several discs — from the desktop app or the command line.
+        </p>
+
+        <div class="table-scroll">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>SUBSYSTEM</th>
+                <th>TECHNICAL SPECIFICATION</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Data &amp; Boot Mastering</strong></td>
+                <td>ISO 9660 + Joliet UCS-2BE + UDF 1.02 bridge, hybrid BIOS/UEFI El Torito boot catalogs, multi-session append, and streaming <code>.nrg</code> / <code>.mdf</code> / <code>.ccd</code> conversion.</td>
+              </tr>
+              <tr>
+                <td><strong>Audio CD Rip &amp; Burn</strong></td>
+                <td>Secure SCSI extraction with 294-byte C2 error pointers, AccurateRip verification, drive offset detection, MusicBrainz lookup, and Red Book DAO/TAO burning (WAV, FLAC, MP3/M4A, CUE).</td>
+              </tr>
+              <tr>
+                <td><strong>Multi-Disc Cold Archive</strong></td>
+                <td>Automated folder spanning across optical volumes with per-disc SHA-256 manifests and optional PAR2 recovery files.</td>
+              </tr>
+              <tr>
+                <td><strong>Hardware Verification</strong></td>
+                <td>Tested on physical CD-R, CD-RW, DVD-R, and DVD+RW media plus 600+ automated unit/integration tests.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="action-bar">
+          <a href="https://ignisdisc.tetherworks.dev" class="btn-hardware">DOWNLOADS &amp; SPECS ↗</a>
+          <a href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener" class="btn-hardware btn-hardware-secondary">SOURCE &amp; RELEASES ↗</a>
+        </div>
+      </article>
+
+      <!-- Project 2: KiloOS -->
+      <article class="cell">
+        <h2 class="project-title">
+          <a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener">KiloOS: A Return to 1999 (v0.4.38)</a>
+        </h2>
+        <p class="spec-lead">
+          Self-contained 1999-era desktop operating environment executing entirely in the browser with 104 interactive applications, system tools, synth audio workstations, and retro games.
+        </p>
+
+        <div class="table-scroll">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>MODULE CLASS</th>
+                <th>INCLUDED APPLICATIONS (104 TOTAL)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Games &amp; Simulation</strong></td>
+                <td><code>KChrono</code> (tri-epoch time-travel puzzle), <code>KStarForge</code>, <code>KRogue</code>, <code>KCosmic</code>, <code>KFortress</code>, <code>KCyber</code>, <code>KMech</code></td>
+              </tr>
+              <tr>
+                <td><strong>System &amp; Workstation</strong></td>
+                <td><code>KTerm</code>, <code>KSys</code>, <code>KTask</code>, <code>KScript</code>, <code>KAudio</code>, <code>KFont</code>, <code>KDB</code></td>
+              </tr>
+              <tr>
+                <td><strong>Virtual 1999 Network</strong></td>
+                <td><code>KNet</code> hypertext browser and <code>KBBS</code> multi-board bulletin board system</td>
+              </tr>
+              <tr>
+                <td><strong>Runtime Footprint</strong></td>
+                <td>Zero external dependencies, instant boot, local state persistence</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="action-bar">
+          <a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener" class="btn-hardware">LAUNCH KILOOS.TETHERWORKS.DEV ↗</a>
+        </div>
+      </article>
+    </section>
+
+    <!-- Footer Strip -->
+    <footer class="datasheet-footer">
       <div>
-        <strong>tetherworks</strong> — independent software workbench • no cookies, no trackers, no ads
+        <strong>tetherworks</strong> · independent software workbench · zero cookies, zero trackers, zero ads
       </div>
       <div class="footer-links">
-        <a href="https://ignisdisc.tetherworks.dev">IgnisDisc</a>
-        <a href="https://kilo.tetherworks.dev">KiloOS</a>
-        <a href="https://github.com/tether-works" target="_blank" rel="noopener">github.com/tether-works</a>
+        <a href="https://ignisdisc.tetherworks.dev">IGNISDISC.TETHERWORKS.DEV</a>
+        <a href="https://kilo.tetherworks.dev" target="_blank" rel="noopener">KILO.TETHERWORKS.DEV</a>
+        <a href="https://github.com/tether-works" target="_blank" rel="noopener">GITHUB.COM/TETHER-WORKS</a>
       </div>
-    </div>
-  </footer>
+    </footer>
+  </main>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=1.10.4"></script>
 </body>
 </html>
