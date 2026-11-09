@@ -86,11 +86,12 @@ so every phase is tested without hardware before it touches a real disc.
       `drives --json`. Writes nothing. The media ID is read only where it is shown (Drive Utilities, `media-info`,
       `drive-report`), not on every disc-status check. CD-R/RW names come from the Orange Book manufacturer list; the
       DVD-R ID is read from pre-pit fields 3 and 4. Not yet checked against real discs. 2026-11-08
-- [ ] **Phase 2 — Test write.** Native Session-at-Once pipeline for audio CDs with the laser off (`MODE SELECT`
+- [x] **Phase 2 — Test write.** Native Session-at-Once pipeline for audio CDs with the laser off (`MODE SELECT`
       write parameters with the Test Write bit read back before writing, `SEND CUE SHEET`, CD-Text lead-in,
-      `WRITE(10)`, `SYNCHRONIZE CACHE`). Done: `NativeSaoAudioWriter` and `VirtualMmcDrive` (with fault injection),
+      `WRITE(10)`, `SYNCHRONIZE CACHE`): `NativeSaoAudioWriter`, `VirtualMmcDrive` (with fault injection),
       `ignisdisc-cli burn-audio --native --test-write`, a command log per run. Real writes are refused in code.
-      Remaining: a test write on the GP60NB50 with a blank CD-R or CD-RW. *(med)* **[owner: insert a blank disc]**
+      Test write passed on the GP60NB50 with a blank CD-R; the disc stayed blank. Not yet tried on CD-RW or other
+      drives. 2026-11-08
 - [ ] **Phase 3 — Audio CD Session-at-Once with CD-Text.** `SEND CUE SHEET` + lead-in CD-Text packs. Test on CD-RW
       first, then CD-R. *(high)* **[owner: hardware test]**
 - [ ] **Phase 4 — Audio extras.** Audio inside pre-gaps (INDEX 00) and hidden track one audio, pre-emphasis flag,

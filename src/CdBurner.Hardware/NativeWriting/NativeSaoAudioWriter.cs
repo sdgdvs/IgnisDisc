@@ -217,10 +217,10 @@ public sealed class NativeSaoAudioWriter
         Flush("after the drive became ready");
 
         bool? stillBlank = null;
+        string extra = string.Empty;
         if (request.TestWrite)
         {
-            var after = ReadDiscInformation();
-            stillBlank = after?.Status == 0;
+            stillBlank = CheckUnwrittenAfterTestWrite(out extra);
             if (stillBlank == false)
             {
                 _note("WARNING: the disc is no longer blank after a test write.");
@@ -242,7 +242,7 @@ public sealed class NativeSaoAudioWriter
         return new NativeSaoWriteResult
         {
             Success = true,
-            Message = request.TestWrite ? "Test write finished; the disc was not written." : "Write finished.",
+            Message = request.TestWrite ? "Test write finished; the disc was not written." + extra : "Write finished.",
             LeadInSectorsWritten = state.LeadInSectors,
             AudioSectorsWritten = state.AudioSectors,
             Elapsed = clock.Elapsed,
@@ -443,6 +443,45 @@ public sealed class NativeSaoAudioWriter
         }
 
         return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[17], buffer[18], buffer[19]), new Msf(buffer[21], buffer[22], buffer[23]));
+    }
+
+    /// <summary>
+    /// Decides whether a test write left the disc unwritten. A blank status settles it. Some drives (the LG GP60NB50,
+    /// for one) report the simulated session as an open, incomplete session until the disc is reloaded; then the
+    /// first audio sector is read back: a real write would return audio there, an unwritten disc cannot be read.
+    /// A closed disc ("complete") is what a real Session-at-Once write leaves, so it counts as written.
+    /// </summary>
+    private bool CheckUnwrittenAfterTestWrite(out string extra)
+    {
+        extra = string.Empty;
+        var after = ReadDiscInformation();
+        if (after is null)
+        {
+            _note("WARNING: no disc information after the test write.");
+            return false;
+        }
+        if (after.Value.Status == 0)
+        {
+            return true;
+        }
+        if (after.Value.Status != 1)
+        {
+            _note($"Disc status {after.Value.Status} after the test write.");
+            return false;
+        }
+
+        byte[] sector = new byte[2352];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadCdCdb(0, 1, expectedSectorType: 1, mainChannelSelectionBits: 0x10),
+            sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (r.IsSuccess && r.DataTransferLength > 0)
+        {
+            _note("WARNING: audio could be read back at LBA 0 after the test write.");
+            return false;
+        }
+
+        _note($"The drive reports the simulated session until the disc is reloaded; LBA 0 is unreadable ({Describe(r)}), so nothing was written.");
+        extra = " The drive still shows the simulated session: eject and reload the disc before writing to it.";
+        return true;
     }
 
     private void WaitUntilReady(TimeSpan limit, CancellationToken ct, string when)

@@ -35,7 +35,9 @@ public class NativeSaoWriterTests
 
         Assert.True(result.Success, result.Message);
         Assert.True(result.DiscStillBlankAfterTestWrite);
-        Assert.Equal(0, drive.DiscStatus);
+        Assert.False(drive.Recorded);
+        Assert.Equal(1, drive.DiscStatus); // simulated session shown until reload, as on the LG GP60NB50
+        Assert.Contains("reload", result.Message);
         Assert.True(drive.SessionClosed);
 
         // Lead-in: from 97:34:23 (LBA -11077) to LBA -151, 96 bytes each, carrying the packs in order.
@@ -105,16 +107,45 @@ public class NativeSaoWriterTests
         Assert.DoesNotContain(OpWrite, drive.CommandsReceived);
     }
 
-    [Fact]
-    public void DriveThatRecordsDuringATestWrite_IsReported()
+    [Theory]
+    [InlineData(true)]   // disc closed afterwards: caught by its status
+    [InlineData(false)]  // left as an open session, like a simulated one: caught by reading LBA 0 back
+    public void DriveThatRecordsDuringATestWrite_IsReported(bool closesDisc)
     {
-        var drive = new VirtualMmcDrive { RecordsDuringTestWrite = true };
+        var drive = new VirtualMmcDrive { RecordsDuringTestWrite = true, ClosesDiscAfterWrite = closesDisc };
 
         var result = Run(drive, Request());
 
+        Assert.True(drive.Recorded);
         Assert.False(result.Success);
         Assert.False(result.DiscStillBlankAfterTestWrite);
         Assert.Contains("did not honour the test-write setting", result.Message);
+    }
+
+    [Fact]
+    public void DriveThatShowsBlankStraightAfterATestWrite_Passes()
+    {
+        var drive = new VirtualMmcDrive { ShowsSimulatedSessionAfterTestWrite = false };
+
+        var result = Run(drive, Request());
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(0, drive.DiscStatus);
+        Assert.DoesNotContain((byte)0xBE, drive.CommandsReceived); // no read-back needed
+    }
+
+    [Fact]
+    public void SecondTestWrite_NeedsTheDiscReloadedFirst()
+    {
+        var drive = new VirtualMmcDrive();
+        Assert.True(Run(drive, Request()).Success);
+
+        var again = Run(drive, Request());
+        Assert.True(again.StoppedBeforeWriting);
+        Assert.Contains("not blank", again.Message);
+
+        drive.Reload();
+        Assert.True(Run(drive, Request()).Success);
     }
 
     [Theory]

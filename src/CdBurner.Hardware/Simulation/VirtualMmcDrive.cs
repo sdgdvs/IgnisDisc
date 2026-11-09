@@ -59,6 +59,15 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>Every Nth WRITE first answers 2/04/08 (long write in progress) once.</summary>
     public int BufferFullEveryNWrites { get; set; }
 
+    /// <summary>
+    /// After a test write, READ DISC INFORMATION shows the simulated session as open (status 1) until
+    /// <see cref="Reload"/>, as the LG GP60NB50 does. Off: the disc reads as blank straight away.
+    /// </summary>
+    public bool ShowsSimulatedSessionAfterTestWrite { get; set; } = true;
+
+    /// <summary>A recorded Session-at-Once disc is closed (status 2). Off: it reads as an open session (status 1).</summary>
+    public bool ClosesDiscAfterWrite { get; set; } = true;
+
     /// <summary>Keep the bytes sent with WRITE so tests can inspect them.</summary>
     public bool CaptureWrites { get; set; } = true;
 
@@ -71,6 +80,19 @@ public sealed class VirtualMmcDrive : IScsiTransport
     public int WriteCommandCount { get; private set; }
     public bool SessionClosed { get; private set; }
     public ReadOnlySpan<byte> CurrentModePage05 => _modePage05;
+
+    /// <summary>True once audio has really been recorded (not just test-written).</summary>
+    public bool Recorded { get; private set; }
+
+    /// <summary>Ejecting and reloading the disc: the drive forgets a simulated session.</summary>
+    public void Reload()
+    {
+        if (!Recorded)
+        {
+            DiscStatus = 0;
+        }
+        _cue = null;
+    }
 
     public ScsiExecutionResult ExecuteCommand(ReadOnlySpan<byte> cdb, Span<byte> dataBuffer, byte dataDirection, TimeSpan timeout)
     {
@@ -98,6 +120,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             NativeWriteCommands.OpCodeWrite10 => Write(cdb, dataBuffer),
             NativeWriteCommands.OpCodeReadBufferCapacity => ReadBufferCapacity(dataBuffer),
             0x35 => SynchronizeCache(),
+            0xBE => ReadCd(cdb, dataBuffer),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
     }
@@ -316,6 +339,30 @@ public sealed class VirtualMmcDrive : IScsiTransport
         return Good((uint)data.Length);
     }
 
+    /// <summary>READ CD of CD-DA user data. Unrecorded sectors cannot be read (5/21/00 here; real drives vary).</summary>
+    private ScsiExecutionResult ReadCd(ReadOnlySpan<byte> cdb, Span<byte> data)
+    {
+        int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
+        int count = (cdb[6] << 16) | (cdb[7] << 8) | cdb[8];
+        if (!Recorded || lba < 0 || count == 0 || data.Length < count * 2352)
+        {
+            return Sense(0x05, 0x21, 0x00);
+        }
+
+        long offset = (long)(lba + 150) * 2352;
+        byte[] program = ProgramAreaWritten.ToArray();
+        int n = count * 2352;
+        if (offset + n <= program.Length)
+        {
+            program.AsSpan((int)offset, n).CopyTo(data);
+        }
+        else
+        {
+            data.Slice(0, n).Clear();
+        }
+        return Good((uint)n);
+    }
+
     private ScsiExecutionResult ReadBufferCapacity(Span<byte> data)
     {
         byte[] r = new byte[12];
@@ -332,7 +379,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
             bool recorded = !TestWriteActive || RecordsDuringTestWrite;
             if (recorded)
             {
-                DiscStatus = 2;
+                Recorded = true;
+                DiscStatus = ClosesDiscAfterWrite ? 2 : 1;
+            }
+            else if (ShowsSimulatedSessionAfterTestWrite)
+            {
+                DiscStatus = 1;
             }
             SessionClosed = true;
             _cue = null;
@@ -342,6 +394,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             // Stopped part way. A real write would leave a ruined CD-R; a test write leaves it blank.
             if (!TestWriteActive || RecordsDuringTestWrite)
             {
+                Recorded = true;
                 DiscStatus = 2;
             }
             _cue = null;

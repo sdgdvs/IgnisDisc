@@ -104,6 +104,7 @@ public sealed class LoggingScsiTransport : IScsiTransport
         0x51 => "READ DISC INFORMATION",
         0x52 => "READ TRACK INFORMATION",
         0x5A => "MODE SENSE(10)",
+        0xBE => "READ CD",
         NativeWriteCommands.OpCodeWrite10 => "WRITE(10)",
         NativeWriteCommands.OpCodeModeSelect10 => "MODE SELECT(10)",
         NativeWriteCommands.OpCodeReadBufferCapacity => "READ BUFFER CAPACITY",

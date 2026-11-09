@@ -88,7 +88,8 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
     private BurnOperationResult Run(IDiscRecorderBackend recorder, NativeSaoWriteRequest request, IProgress<BurnProgressSnapshot>? progress, CancellationToken ct)
     {
         IScsiTransport device;
-        IDisposable? exclusive = null;
+        Win32ScsiTransport? win32 = null;
+        string devicePath = DevicePathFor(recorder);
         try
         {
             if (recorder is VirtualDiscRecorder virtualRecorder)
@@ -101,17 +102,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
                 {
                     return BurnOperationResult.Failed("Native writing needs Windows.");
                 }
-                var win32 = Win32ScsiTransport.Open(recorder.VolumePath);
-                device = win32;
-                try
-                {
-                    exclusive = CdromExclusiveAccess.Acquire(win32.Handle, "IgnisDisc");
-                }
-                catch (System.ComponentModel.Win32Exception ex)
-                {
-                    win32.Dispose();
-                    return BurnOperationResult.Failed($"{ex.Message} Nothing was written to the disc.", ex);
-                }
+                device = win32 = Win32ScsiTransport.Open(devicePath);
             }
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
@@ -120,11 +111,28 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         }
 
         using var log = new LoggingScsiTransport(device, ownsInner: true);
+        log.Note($"IgnisDisc native Session-at-Once writer, test write. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
+        log.Note($"Tracks: {request.Tracks.Count}, CD-Text: {(request.CdTextPacks != null ? $"{request.CdTextPacks.Length / 18} packs" : "none")}.");
+
+        IDisposable? exclusive = null;
+        if (win32 != null)
+        {
+            try
+            {
+                exclusive = CdromExclusiveAccess.Acquire(win32.Handle, "IgnisDisc");
+                log.Note("Exclusive access taken.");
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                log.Note($"Exclusive access refused: {ex.Message}");
+                SaveLog(log);
+                return BurnOperationResult.Failed($"{ex.Message} Nothing was written to the disc. Command log: {LastLogPath}", ex);
+            }
+        }
+
         NativeSaoWriteResult result;
         try
         {
-            log.Note($"IgnisDisc native Session-at-Once writer, test write. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
-            log.Note($"Tracks: {request.Tracks.Count}, CD-Text: {(request.CdTextPacks != null ? $"{request.CdTextPacks.Length / 18} packs" : "none")}.");
             result = new NativeSaoAudioWriter(log, log.Note).Write(request, progress, ct);
             log.Note($"Result: {(result.Success ? "success" : "failed")}: {result.Message}");
         }
@@ -147,6 +155,14 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         }
         return result.Cancelled ? BurnOperationResult.CancelledResult(message) : BurnOperationResult.Failed(message);
     }
+
+    /// <summary>
+    /// The drive's device interface path (<c>\\?\…{53f56308-…}</c>) when known. The cdrom driver grants exclusive
+    /// access only to a handle opened on the drive itself; a handle opened by drive letter goes through the mounted
+    /// file system and the lock fails with ERROR_INVALID_HANDLE.
+    /// </summary>
+    internal static string DevicePathFor(IDiscRecorderBackend recorder) =>
+        recorder.UniqueId.StartsWith(@"\\?\", StringComparison.Ordinal) ? recorder.UniqueId : recorder.VolumePath;
 
     private void SaveLog(LoggingScsiTransport log)
     {

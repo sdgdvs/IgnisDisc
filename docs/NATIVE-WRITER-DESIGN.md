@@ -5,8 +5,11 @@
 - the read-only capability probe (`MmcWriteCapabilityProbe`, `MmcMediaIdInspector`);
 - the audio CD Session-at-Once test write (Phase 2) in `src/CdBurner.Hardware/NativeWriting/`, reached only through
   `ignisdisc-cli burn-audio --native --test-write`. `NativeSaoAudioWriter` refuses a request without the test-write
-  flag, so this version cannot burn a disc natively. It has run against the virtual drive (`VirtualMmcDrive`), not
-  yet on a real drive.
+  flag, so this version cannot burn a disc natively. Tested against the virtual drive (`VirtualMmcDrive`) and on
+  one real drive (see Test hardware).
+- Exclusive access opens the drive by its device interface path (`\\?\…{53f56308-…}`): the cdrom driver refuses
+  the lock (ERROR_INVALID_HANDLE) on a handle opened by drive letter, because that handle belongs to the mounted
+  file system.
 
 Phases 3–6 below are still plans.
 
@@ -75,8 +78,11 @@ without its start time.
 **Safety checks before the first WRITE** (any failure stops with nothing written): disc profile is CD-R or CD-RW;
 the CD Mastering feature is current and offers SAO, test write and (for CD-Text) R-W; the disc is blank; the audio
 ends before the disc's last possible lead-out; the drive accepts the write parameters and, read back with MODE
-SENSE, reports Session-at-Once and the requested test-write setting; the drive accepts a cue sheet. After a test
-write the disc must still read as blank, or the drive is reported as not honouring test writes.
+SENSE, reports Session-at-Once and the requested test-write setting; the drive accepts a cue sheet.
+
+**After a test write** the disc must be unwritten. A blank disc status settles it. Some drives (the GP60NB50) report
+the simulated session as an open, incomplete session until the disc is reloaded; then `READ CD` of LBA 0 must fail.
+A closed disc, or audio readable at LBA 0, means the drive recorded: the run fails and says so.
 
 **DVD±R:** `RESERVE TRACK` (DVD-R DAO) or sequential writing (DVD+R) → `WRITE(10)` → `SYNCHRONIZE CACHE` →
 `CLOSE TRACK/SESSION`. Dual layer adds `SEND DISC STRUCTURE` with the layer-break address before writing.
@@ -107,6 +113,12 @@ BURN-Free / buffer-underrun protection (BUFE bit in page 0x05) when the drive su
 | Drive | Firmware | Connection | Probe result (`drives --json`, 2026-11-08) |
 |---|---|---|---|
 | HL-DT-ST DVDRAM GP60NB50 | RF02 | USB, slim tray | TAO, SAO, raw DAO, CD-Text (R-W), test write, BURN-Free, layer jump |
+
+Results:
+
+| Date | Drive | Disc | Run | Result |
+|---|---|---|---|---|
+| 2026-11-08 | GP60NB50 | CD-R, FORNET (ATIP 97:26:07) | Test write, 2 tracks, CD-Text | Write parameters, cue sheet and all 64 WRITEs accepted. Drive showed the simulated session until reload; after reload the disc read as blank with all 359,844 sectors free. |
 
 Media on hand: CD-RW, CD-R, DVD±R / DVD±RW, DVD±R DL.
 
