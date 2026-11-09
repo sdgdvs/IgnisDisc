@@ -16,6 +16,7 @@ using CdBurner.Core.Utilities;
 using CdBurner.Hardware.Audio;
 using CdBurner.Hardware.Burning;
 using CdBurner.Hardware.Devices;
+using CdBurner.Hardware.NativeWriting;
 using CdBurner.Hardware.Simulation;
 
 namespace CdBurner.Cli;
@@ -694,8 +695,18 @@ public static class CliCommandRunner
         string? artist = cmd.GetOption("artist");
         string? speedStr = cmd.GetOption("speed");
         bool dao = cmd.HasFlag("dao");
+        bool native = cmd.HasFlag("native");
+        bool testWrite = cmd.HasFlag("test-write");
+        if (native && !testWrite)
+        {
+            throw new CommandLineException("--native needs --test-write: this version only does native test writes (laser off).");
+        }
 
         var recorder = FindRecorder(deviceService, driveId);
+        if (recorder is VirtualDiscRecorder vRec && !vRec.QueryMediaStatus().MediaPresent)
+        {
+            vRec.InsertMedia(VirtualDiscMedium.CreateBlankCdR700());
+        }
         var mediaStatus = recorder.QueryMediaStatus();
         var speedDesc = ParseSpeed(speedStr, mediaStatus.MediaType, isAudio: true);
 
@@ -714,7 +725,8 @@ public static class CliCommandRunner
         }
 
         using var mfDecoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
-        var audioBurnService = new AudioCdBurnService(burnEngine, mfDecoder);
+        var nativeEngine = native ? new NativeAudioBurnEngine() : null;
+        var audioBurnService = new AudioCdBurnService(nativeEngine ?? burnEngine, mfDecoder);
 
         var compilation = new AudioCdCompilation
         {
@@ -795,13 +807,17 @@ public static class CliCommandRunner
         var result = await audioBurnService.BurnAsync(
             recorder,
             compilation,
-            new AudioBurnOptions { Speed = speedDesc, UseDiscAtOnce = dao, WriteCdText = compilation.IncludeCdText }).ConfigureAwait(false);
+            new AudioBurnOptions { Speed = speedDesc, UseDiscAtOnce = dao, WriteCdText = compilation.IncludeCdText, Simulate = testWrite }).ConfigureAwait(false);
 
         if (cmd.IsJson)
         {
             var jsonResult = new
             {
                 success = result.Success,
+                testWrite,
+                native,
+                commandLog = nativeEngine?.LastLogPath,
+                discStillBlank = nativeEngine?.LastResult?.DiscStillBlankAfterTestWrite,
                 driveId = recorder.UniqueId,
                 title = compilation.AlbumTitle,
                 artist = compilation.AlbumPerformer,
@@ -815,6 +831,21 @@ public static class CliCommandRunner
 
             stdout.WriteLine(JsonSerializer.Serialize(jsonResult, JsonOptions));
             return result.Success ? 0 : 1;
+        }
+
+        if (result.Success && testWrite)
+        {
+            stdout.WriteLine("Audio CD test write completed (laser off; the disc was not written):");
+            stdout.WriteLine($"  Drive:          {recorder.UniqueId}");
+            stdout.WriteLine($"  Tracks:         {compilation.TrackCount}");
+            stdout.WriteLine($"  CD-Text:        {(compilation.IncludeCdText ? "yes" : "no")}");
+            stdout.WriteLine($"  Sectors sent:   {result.SectorsWritten:N0}");
+            stdout.WriteLine($"  Duration:       {result.TotalTime}");
+            if (nativeEngine?.LastLogPath != null)
+            {
+                stdout.WriteLine($"  Command log:    {nativeEngine.LastLogPath}");
+            }
+            return 0;
         }
 
         if (result.Success)
@@ -1994,7 +2025,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
-        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X>] [--dao] [--json]");
+        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X>] [--dao] [--native --test-write] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
         stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");

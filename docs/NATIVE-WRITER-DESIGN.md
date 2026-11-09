@@ -1,8 +1,14 @@
 # Native drive-command writer: design proposal
 
-**Status:** proposal, not implemented. The only part that exists is the read-only capability probe
-(`MmcWriteCapabilityProbe`, `MmcMediaIdInspector`): it sends `GET CONFIGURATION`, `MODE SENSE`, `READ TOC/PMA/ATIP`
-and `READ DISC STRUCTURE`, and writes nothing. Everything below is the plan for roadmap item P1, phases 2–6.
+**Status:** partly built. What exists:
+
+- the read-only capability probe (`MmcWriteCapabilityProbe`, `MmcMediaIdInspector`);
+- the audio CD Session-at-Once test write (Phase 2) in `src/CdBurner.Hardware/NativeWriting/`, reached only through
+  `ignisdisc-cli burn-audio --native --test-write`. `NativeSaoAudioWriter` refuses a request without the test-write
+  flag, so this version cannot burn a disc natively. It has run against the virtual drive (`VirtualMmcDrive`), not
+  yet on a real drive.
+
+Phases 3–6 below are still plans.
 
 **First feature (decided 2026-11-08):** audio CD Session-at-Once with CD-Text. Phase 2 (test write) is built on that
 path, so the first laser-off test write is an audio CD with CD-Text, not a data CD.
@@ -53,16 +59,24 @@ write as chosen) → `READ TRACK INFORMATION` (next writable address) → `WRITE
    then the lead-out (track 0xAA). The CTL nibble carries pre-emphasis and copy-permit; ADR 2 / 3 entries carry MCN
    and ISRC. With CD-Text, the lead-in entry's data form says the host sends R-W subcode for the lead-in.
 3. With CD-Text, write the lead-in: CD-Text packs are 18 bytes (4 header, 12 text, 2 CRC); four packs fill one
-   sector's 96 bytes of raw R-W subcode, 6 bits per byte. The pack set repeats from the lead-in start address read
-   from the ATIP (`READ TOC/PMA/ATIP` format 4, already read by Phase 1, currently kept only as display text) up to
-   LBA −150. Start MSF 9x:ss:ff converts to LBA as `(m × 60 + s) × 75 + f − 450,150`, which is negative.
+   sector's 96 bytes of raw R-W subcode, 6 bits per byte. The pack set repeats from the lead-in start address in
+   `READ DISC INFORMATION` (bytes 17–19, as cdrdao reads it) up to LBA −151. Start MSF 9x:ss:ff converts to LBA as
+   `(m × 60 + s) × 75 + f − 450,150`, which is negative. Mode page 0x05 asks for data block type 3 (raw with raw
+   P-W) while a CD-Text lead-in is written; if the drive refuses that, block type 0 is tried.
 4. `WRITE(10)` of 2,352-byte audio sectors from LBA −150 (the 2-second pre-gap of track 1) to the end of the last
    track.
 5. `SYNCHRONIZE CACHE`. The drive writes the lead-out and closes the session itself.
 
-The cue sheet data form values and the lead-in pack layout are to be checked against MMC-5 and an existing writer
-(cdrdao's generic MMC driver) before any code is written; the virtual drive must reject a malformed cue sheet the way
-a real drive does.
+The cue sheet data form values (0x00 audio, 0x01 drive-generated lead-in/lead-out, 0x41 lead-in with host R-W),
+the pack-to-subcode packing and the lead-in addressing were checked against cdrdao's generic MMC driver. Drives that
+reject the standard cue sheet get cdrdao's fallbacks: ISRC entries without control bits, and a CD-Text lead-in entry
+without its start time.
+
+**Safety checks before the first WRITE** (any failure stops with nothing written): disc profile is CD-R or CD-RW;
+the CD Mastering feature is current and offers SAO, test write and (for CD-Text) R-W; the disc is blank; the audio
+ends before the disc's last possible lead-out; the drive accepts the write parameters and, read back with MODE
+SENSE, reports Session-at-Once and the requested test-write setting; the drive accepts a cue sheet. After a test
+write the disc must still read as blank, or the drive is reported as not honouring test writes.
 
 **DVD±R:** `RESERVE TRACK` (DVD-R DAO) or sequential writing (DVD+R) → `WRITE(10)` → `SYNCHRONIZE CACHE` →
 `CLOSE TRACK/SESSION`. Dual layer adds `SEND DISC STRUCTURE` with the layer-break address before writing.

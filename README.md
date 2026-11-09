@@ -74,7 +74,7 @@ ignisdisc-cli <command> [options]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
-             [--speed <X>] [--dao]
+             [--speed <X>] [--dao] [--native --test-write]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
@@ -97,6 +97,11 @@ ISO 9660 plus the file systems you name.
 `--overwrite`: a used DVD+RW or DVD-RAM is rewritten from the start, so a burn replaces every file on it. Burns refuse
 to do that unless you pass `--overwrite`. Sequential rewritable discs (CD-RW, sequential DVD-RW) cannot be overwritten
 in place once finalized—run `ignisdisc-cli erase --drive <id>` before burning them again.
+
+`--native --test-write` (experimental): a test write of the audio CD using IgnisDisc's own drive commands instead of
+Windows' burning service — Session-at-Once, with CD-Text in the lead-in, and the laser off, so the disc is not
+written. It needs a blank CD-R or CD-RW and a drive that offers Session-at-Once test writes, and saves a log of every
+drive command under `%LOCALAPPDATA%\IgnisDisc\logs`. Real native burns are not enabled yet.
 
 Examples:
 
