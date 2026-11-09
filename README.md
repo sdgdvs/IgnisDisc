@@ -188,4 +188,4 @@ unsigned until certificate provisioning completes).
 
 `GPL-3.0-or-later` — see [LICENSE](LICENSE), [TRADEMARKS.md](TRADEMARKS.md), and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-The source code in this repository is licensed under the GNU General Public License v3.0 or later. Pursuant to Section 7(e) of the GPLv3, the names **"IgnisDisc"**, **"tetherworks"**, **"Tetherworks"**, and the IgnisDisc application icons/logos are trademarks of tetherworks (Tetherworks LLC). You may not distribute modified or unmodified binaries under the name **"IgnisDisc"** without prior written permission.
+The source code in this repository is licensed under the GNU General Public License v3.0 or later. Pursuant to Section 7(e) of the GPLv3, the names **"IgnisDisc"**, **"tetherworks"**, **"Tetherworks"**, and the IgnisDisc application icons/logos are trademarks of Tetherworks. You may not distribute modified or unmodified binaries under the name **"IgnisDisc"** without prior written permission.
