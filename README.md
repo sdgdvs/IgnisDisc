@@ -76,14 +76,15 @@ ignisdisc-cli <command> [options]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
-             [--read-offset <samples>] [--verify-accuraterip] [--secure] [--continue-on-error]
+             [--read-offset <samples>] [--verify-accuraterip] [--secure] [--continue-on-error] [--cover <image>]
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl]
              [--redundancy <0-100>]
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest
   verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img>
   erase      --drive <id> [--full]
-  scan       --drive <id> [--block-size <sectors>]
+  scan       --drive <id> [--block-size <sectors>] [--csv <file.csv>]
+  drive-report --drive <id>                    Build a drive compatibility report (capabilities and media ID)
 
 Every command accepts --json for machine-readable output. --drive takes a drive letter (e.g. D:) or the ID
 shown by `drives`.

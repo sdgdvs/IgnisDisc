@@ -6,7 +6,7 @@
         xmlns:vm="clr-namespace:CdBurner.App.ViewModels"
         xmlns:converters="clr-namespace:CdBurner.App.Converters"
         mc:Ignorable="d"
-        Title="IgnisDisc Optical Studio v1.10"
+        Title="IgnisDisc Optical Studio v1.11"
         Icon="Assets/IgnisDisc.png"
         Height="760"
         Width="1280"

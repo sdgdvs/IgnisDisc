@@ -181,6 +181,7 @@ if (Test-Path $PublicHtmlPath) {
     $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">)v[^\s•·]+', "`${1}v$NewVersion")
     $newHtml = [regex]::Replace($newHtml, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">)v[^\s•·]+', "`${1}v$NewVersion")
     $newHtml = [regex]::Replace($newHtml, '<strong>IgnisDisc( Optical Studio)? v[^<]+</strong>', "<strong>IgnisDisc v$NewVersion</strong>")
+    $newHtml = [regex]::Replace($newHtml, 'IgnisDisc Optical Studio \(v[^)]+\)', "IgnisDisc Optical Studio (v$NewVersion)")
     if ($newHtml -ne $html) {
         Set-FileText $PublicHtmlPath $newHtml "web/public/index.html (version badges & URLs)"
     }
@@ -314,6 +315,7 @@ if ($RebuildArtifacts -and -not $DryRun) {
         $html = [regex]::Replace($html, '(<code id="hashPortable">)[A-Fa-f0-9]{64}(</code>\s*<button[^>]*data-copy=")[A-Fa-f0-9]{64}', "`${1}$portableHash`${2}$portableHash")
         $html = [regex]::Replace($html, '(id="btnDownloadSetup"[\s\S]*?<span class="dl-sub">v[^\s•·]+ [•·] )\d+(\.\d+)? MB', "`${1}$setupMb MB")
         $html = [regex]::Replace($html, '(id="btnDownloadPortable"[\s\S]*?<span class="dl-sub">v[^\s•·]+ [•·] )\d+(\.\d+)? MB', "`${1}$portableMb MB")
+        $html = [regex]::Replace($html, '(Two-stage )\d+(\.\d+)? MB( installer)', "`${1}$setupMb MB`${3}")
         Set-FileText $PublicHtmlPath $html "web/public/index.html (Stamped SHA-256 and MB sizes)"
 
         # Update WinGet installer manifest with hash

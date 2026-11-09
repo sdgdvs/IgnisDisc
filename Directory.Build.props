@@ -5,10 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>1.10</Version>
-    <InformationalVersion>1.10</InformationalVersion>
-    <AssemblyVersion>1.0.10.0</AssemblyVersion>
-    <FileVersion>1.0.10.0</FileVersion>
+    <Version>1.11</Version>
+    <InformationalVersion>1.11</InformationalVersion>
+    <AssemblyVersion>1.0.11.0</AssemblyVersion>
+    <FileVersion>1.0.11.0</FileVersion>
     <Company>tetherworks</Company>
     <Copyright>Copyright (c) 2026 tetherworks</Copyright>
     <RepositoryUrl>https://github.com/tether-works/IgnisDisc</RepositoryUrl>

@@ -17,7 +17,7 @@
         -SocialUrl "https://linkedin.com/in/yourprofile"
 #>
 param(
-    [string]$Version = "1.10",
+    [string]$Version = "1.11",
     [string]$GitHubRepo = "",
     [string]$FirebaseProjectId = "ignisdisc-studio",
     [string]$EngineerInitials = "TW",
