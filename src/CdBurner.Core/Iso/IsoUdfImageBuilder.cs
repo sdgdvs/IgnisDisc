@@ -455,7 +455,8 @@ public static class IsoUdfImageBuilder
 
                 ctx.AvdpLba = sessionStartLba + 256;
                 ctx.UdfVdsLba = ctx.AvdpLba + 1;
-                ctx.UdfPartitionStartLba = ctx.UdfVdsLba + UdfVdsSectorCount;
+                // Main sequence (with the integrity sequence after it), then the reserve copy: 16 sectors each.
+                ctx.UdfPartitionStartLba = ctx.UdfVdsLba + 2 * UdfVdsSectorCount;
 
                 if (currentLba + isoMetadataSectors > ctx.AvdpLba)
                 {
@@ -1523,9 +1524,10 @@ public static class IsoUdfImageBuilder
         BinaryPrimitives.WriteUInt32LittleEndian(sector.AsSpan(16, 4), 32768); // 16 sectors
         BinaryPrimitives.WriteUInt32LittleEndian(sector.AsSpan(20, 4), mainVdsLocation);
 
-        // Offset 24..31: Reserve Volume Descriptor Sequence Extent
+        // Offset 24..31: Reserve Volume Descriptor Sequence Extent, a separate copy right after the main one
+        // (ECMA-167 3/8.4.2), so a damaged main sequence can be recovered.
         BinaryPrimitives.WriteUInt32LittleEndian(sector.AsSpan(24, 4), 32768);
-        BinaryPrimitives.WriteUInt32LittleEndian(sector.AsSpan(28, 4), mainVdsLocation);
+        BinaryPrimitives.WriteUInt32LittleEndian(sector.AsSpan(28, 4), mainVdsLocation + UdfVdsSectorCount);
 
         // Compute Descriptor CRC over bytes 16..511 (496 bytes)
         ushort crc = CalculateEcma167Crc(sector.AsSpan(16, 496));
@@ -1711,7 +1713,7 @@ public static class IsoUdfImageBuilder
 
         // Volume Descriptor Sequence (absolute tag locations)
         int v = ctx.UdfVdsLba;
-        byte[] vds = new byte[UdfVdsSectorCount * SectorSize];
+        byte[] vds = new byte[2 * UdfVdsSectorCount * SectorSize];
         Span<byte> S(int index) => vds.AsSpan(index * SectorSize, SectorSize);
 
         // [0] Primary Volume Descriptor
@@ -1839,6 +1841,16 @@ public static class IsoUdfImageBuilder
             BinaryPrimitives.WriteUInt16LittleEndian(d[(iu + 44)..], revision); // max write revision
             Tag(d, 0x0009, (uint)(v + 6), iu + 46 - 16);
             Tag(S(7), 0x0008, (uint)(v + 7), 496);
+        }
+
+        // Reserve Volume Descriptor Sequence: the main sequence's descriptors [0..5] copied 16 sectors later. Only the
+        // tag location (and so the tag checksum) differs.
+        for (int i = 0; i <= 5; i++)
+        {
+            var copy = S(UdfVdsSectorCount + i);
+            S(i).CopyTo(copy);
+            Tag(copy, BinaryPrimitives.ReadUInt16LittleEndian(copy), (uint)(v + UdfVdsSectorCount + i),
+                BinaryPrimitives.ReadUInt16LittleEndian(copy[10..]));
         }
 
         metadata.Add((v, vds));

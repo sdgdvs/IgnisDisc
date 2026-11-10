@@ -70,13 +70,17 @@ jobs:
           for img in images/*.iso; do
             rev=$(basename "$img" .iso); rev=${rev#udf-}
             echo "::group::$img"
-            udfinfo "$img" | tee info.txt
+            udfinfo "$img" 2> warnings.txt | tee info.txt
+            cat warnings.txt
+            if [ -s warnings.txt ]; then echo "udfinfo printed warnings or errors"; fail=1; fi
             grep -q "^udfrev=$rev$" info.txt || { echo "udfinfo reports a different revision (expected $rev)"; fail=1; }
             sudo dmesg -C
             sudo mount -t udf -o ro,loop "$img" /mnt/udf
             if diff -r tree /mnt/udf; then echo "files match"; else echo "files differ"; fail=1; fi
             sudo umount /mnt/udf
-            if sudo dmesg | grep -i "udf" | grep -iE "error|warn|fail|corrupt|bad"; then
+            # The driver first probes 512- and 1024-byte blocks and logs that those fail; that is normal.
+            if sudo dmesg | grep -i "udf" | grep -viE "Scanning with blocksize (512|1024) failed|udf_load_vrs: No anchor found" \
+                | grep -iE "error|warn|fail|corrupt|bad"; then
               echo "kernel UDF driver complained"; fail=1
             fi
             echo "::endgroup::"

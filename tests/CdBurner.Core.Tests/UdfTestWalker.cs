@@ -82,7 +82,7 @@ internal sealed class UdfTestWalker
         TagVersion = NsrIdentifier == "NSR03" ? (ushort)3 : (ushort)2;
 
         // Anchors at 256 and at the last sector, both pointing at the same sequence.
-        uint vds = 0;
+        uint vds = 0, reserve = 0;
         foreach (long anchor in new[] { 256L, sectors - 1 })
         {
             var a = Sector(anchor);
@@ -90,6 +90,20 @@ internal sealed class UdfTestWalker
             uint location = BinaryPrimitives.ReadUInt32LittleEndian(a[20..]);
             Assert.True(vds == 0 || vds == location, "anchors disagree");
             vds = location;
+            reserve = BinaryPrimitives.ReadUInt32LittleEndian(a[28..]);
+            Assert.True(BinaryPrimitives.ReadUInt32LittleEndian(a[16..]) >= 16 * B, "main sequence extent under 16 sectors");
+            Assert.True(BinaryPrimitives.ReadUInt32LittleEndian(a[24..]) >= 16 * B, "reserve sequence extent under 16 sectors");
+        }
+        // ECMA-167 3/8.4.2: the reserve sequence is a separate extent with the same descriptors.
+        Assert.True(reserve >= vds + 16 || reserve + 16 <= vds, "reserve sequence overlaps the main sequence");
+        for (uint i = 0; ; i++)
+        {
+            var main = Sector(vds + i);
+            var copy = Sector(reserve + i);
+            ushort id = CheckTag(copy, reserve + i, $"reserve VDS@{reserve + i}");
+            Assert.Equal(BinaryPrimitives.ReadUInt16LittleEndian(main), id);
+            Assert.True(main[16..].SequenceEqual(copy[16..]), $"reserve descriptor {i} differs from the main one");
+            if (id == 8) break;
         }
 
         uint partitionLength = 0, integrityLocation = 0, fsdLbn = 0;
