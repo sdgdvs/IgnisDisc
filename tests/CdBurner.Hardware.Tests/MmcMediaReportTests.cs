@@ -188,6 +188,40 @@ public class MmcMediaReportTests
         Assert.Empty(report.WriteSpeeds);
     }
 
+    [Fact]
+    public void CapturedCdRwSpeed_BecomesA10xPickerEntryInWindowsUnits()
+    {
+        var report = new DriveMediaReport(null, MmcMediaReport.ParseWriteSpeeds(Gp60CdRwWriteSpeeds));
+
+        var entry = Assert.Single(report.ToWriteSpeedDescriptors(DiscMediaType.CdRw));
+
+        Assert.Equal(10.0, entry.Multiplier, 1);
+        Assert.Equal(DiscMediaType.CdRw, entry.MediaType);
+        // Windows' writer takes 2048-byte sectors a second; CD 1x = 75 of them.
+        Assert.Equal(750, entry.BytesPerSecond / OpticalConstants.DataSectorSize);
+    }
+
+    [Fact]
+    public void DvdSpeeds_BecomePickerEntriesSlowestFirst()
+    {
+        var report = new DriveMediaReport(null, MmcMediaReport.ParseWriteSpeeds(
+            Speeds(Speed(22_160, false), Speed(5_540, false), Speed(11_080, false))));
+
+        var entries = report.ToWriteSpeedDescriptors(DiscMediaType.DvdPlusR);
+
+        Assert.Equal(new[] { 4.0, 8.0, 16.0 }, entries.Select(e => Math.Round(e.Multiplier, 1)));
+        Assert.Equal(22_160_000, entries[^1].BytesPerSecond);
+    }
+
+    [Fact]
+    public void NoDiscOrNoSpeeds_GiveNoPickerEntries()
+    {
+        var report = new DriveMediaReport(null, MmcMediaReport.ParseWriteSpeeds(Gp60CdRwWriteSpeeds));
+        Assert.Empty(report.ToWriteSpeedDescriptors(DiscMediaType.NoMedia));
+        Assert.Empty(report.ToWriteSpeedDescriptors(DiscMediaType.Unknown));
+        Assert.Empty(DriveMediaReport.Empty.ToWriteSpeedDescriptors(DiscMediaType.CdR));
+    }
+
     [Theory]
     [InlineData(DiscMediaType.DvdPlusRw, true)]
     [InlineData(DiscMediaType.DvdMinusRw, true)]

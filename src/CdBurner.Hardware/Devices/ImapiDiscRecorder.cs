@@ -251,6 +251,7 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
         var writeSpeeds = new List<WriteSpeedDescriptor>();
 
         IDiscFormat2Data? formatData = null;
+        var insertedMediaType = DiscMediaType.Unknown;
         try
         {
             if (_recorder != null && OperatingSystem.IsWindows())
@@ -289,6 +290,14 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
                                     }
                                 }
                             }
+                        }
+                        catch
+                        {
+                        }
+
+                        try
+                        {
+                            insertedMediaType = MapPhysicalTypeToDiscMediaType(formatData.CurrentPhysicalMediaType);
                         }
                         catch
                         {
@@ -360,9 +369,16 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
         if (mediaTypes.Contains(DiscMediaType.DvdMinusRDualLayer)) canWriteDvdMinusRDL = true;
         if (mediaTypes.Contains(DiscMediaType.DvdRam)) canWriteDvdRam = true;
 
+        // Windows gives no speeds for a disc it can't write as it is (a finalized CD-RW, for one). Ask the drive
+        // which speeds it offers for the inserted disc before falling back to generic figures.
+        if (writeSpeeds.Count == 0 && insertedMediaType is not (DiscMediaType.Unknown or DiscMediaType.NoMedia))
+        {
+            writeSpeeds.AddRange(PhysicalSectorReader.ProbeDriveMediaReport(VolumePath).ToWriteSpeedDescriptors(insertedMediaType));
+        }
+
         if (writeSpeeds.Count == 0)
         {
-            if (canWriteDvdR || canWriteDvdPlusR)
+            if (!insertedMediaType.IsCd() && (canWriteDvdR || canWriteDvdPlusR))
             {
                 writeSpeeds.Add(WriteSpeedDescriptor.FromMultiplier(4.0, DiscMediaType.DvdMinusR));
                 writeSpeeds.Add(WriteSpeedDescriptor.FromMultiplier(8.0, DiscMediaType.DvdMinusR));

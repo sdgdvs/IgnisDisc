@@ -57,6 +57,27 @@ public sealed record DriveWriteSpeed(int KilobytesPerSecond, int EndLba, int Rea
 public sealed record DriveMediaReport(FormattedCapacityInfo? FormattedCapacity, IReadOnlyList<DriveWriteSpeed> WriteSpeeds)
 {
     public static DriveMediaReport Empty { get; } = new(null, Array.Empty<DriveWriteSpeed>());
+
+    /// <summary>
+    /// The drive's write speeds as entries for the speed picker, slowest first. Converted through the "×" figure, so
+    /// a CD speed lands in the units Windows' writer expects (1× = 75 data sectors a second) even though the drive
+    /// counts CD speed in audio units (1× = 176.4 kB/s).
+    /// </summary>
+    public IReadOnlyList<WriteSpeedDescriptor> ToWriteSpeedDescriptors(DiscMediaType mediaType)
+    {
+        if (mediaType is DiscMediaType.Unknown or DiscMediaType.NoMedia)
+        {
+            return Array.Empty<WriteSpeedDescriptor>();
+        }
+
+        return WriteSpeeds
+            .Select(s => s.Multiplier(mediaType))
+            .Where(m => m > 0)
+            .Distinct()
+            .OrderBy(m => m)
+            .Select(m => WriteSpeedDescriptor.FromMultiplier(m, mediaType))
+            .ToList();
+    }
 }
 
 /// <summary>Recorders that can ask the drive directly (read-only) for <see cref="DriveMediaReport"/>.</summary>
