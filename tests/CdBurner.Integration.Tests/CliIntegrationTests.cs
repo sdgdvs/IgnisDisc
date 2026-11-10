@@ -277,6 +277,49 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(root.GetProperty("isBootable").GetBoolean());
     }
 
+    [Fact]
+    public async Task BuildIso_FixedTime_SameFolderTouchedLater_GivesByteIdenticalImages()
+    {
+        string inputFolder = CreateSampleDataFolder("ReproSource");
+        string first = Path.Combine(_tempDir, "repro1.iso");
+        string second = Path.Combine(_tempDir, "repro2.iso");
+        string[] Args(string output) => new[] { "build-iso", "--input", inputFolder, "--output", output, "--fixed-time", "1767225600" };
+
+        var (stdout, stderr) = CreateStringWriters();
+        Assert.Equal(0, await CliCommandRunner.RunAsync(Args(first), stdout, stderr, _deviceService, _burnEngine));
+
+        // Touch every file and folder as a fresh checkout would; all times stay later than the fixed time.
+        foreach (string path in Directory.EnumerateFileSystemEntries(inputFolder, "*", SearchOption.AllDirectories).Append(inputFolder))
+        {
+            if (File.Exists(path)) File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(1));
+            else Directory.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(1));
+        }
+
+        Assert.Equal(0, await CliCommandRunner.RunAsync(Args(second), stdout, stderr, _deviceService, _burnEngine));
+        Assert.Equal(
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(first))),
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(second))));
+    }
+
+    [Theory]
+    [InlineData("1767225600", 2026, 1, 1)]
+    [InlineData("2026-01-01T00:00:00Z", 2026, 1, 1)]
+    [InlineData("2026-01-01", 2026, 1, 1)]
+    [InlineData("2025-12-31T19:00:00-05:00", 2026, 1, 1)]
+    public void ParseFixedTimestamp_AcceptsUnixSecondsAndIso8601AsUtc(string value, int year, int month, int day)
+    {
+        Assert.Equal(new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Utc), CliCommandRunner.ParseFixedTimestamp(value));
+    }
+
+    [Theory]
+    [InlineData("yesterday")]
+    [InlineData("0")]            // 1970: before what the builder records
+    [InlineData("99999999999999")]
+    public void ParseFixedTimestamp_RejectsUnusableValues(string value)
+    {
+        Assert.Throws<ArgumentException>(() => CliCommandRunner.ParseFixedTimestamp(value));
+    }
+
     #endregion
 
     #region 4. burn-iso command tests

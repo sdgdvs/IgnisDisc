@@ -166,6 +166,64 @@ public static class IsoUdfImageBuilder
             RootDir = rootDir;
             Options = options;
             SessionStartLba = sessionStartLba;
+            BuildTimeUtc = options.FixedTimestampUtc is { } fixedTime
+                ? DateTime.SpecifyKind(fixedTime.ToUniversalTime(), DateTimeKind.Utc)
+                : DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// The one time used for every volume, descriptor and integrity timestamp in this image: the fixed time when
+        /// <see cref="IsoBuildOptions.FixedTimestampUtc"/> is set, otherwise the moment the build started.
+        /// </summary>
+        public DateTime BuildTimeUtc { get; }
+
+        /// <summary>
+        /// A file or directory time as written into the image. With a fixed time, times later than it (or unset) are
+        /// clamped to it, so the same tree always gives the same bytes; without one, the time is used unchanged.
+        /// </summary>
+        public DateTime Stamp(DateTime sourceTimeUtc)
+        {
+            if (Options.FixedTimestampUtc is null)
+            {
+                return sourceTimeUtc;
+            }
+            return sourceTimeUtc == default || sourceTimeUtc.ToUniversalTime() > BuildTimeUtc ? BuildTimeUtc : sourceTimeUtc;
+        }
+
+        /// <summary>
+        /// The 16 hex characters that start the UDF Volume Set Identifier (UDF 2.2.2.5 asks for a unique value).
+        /// Normally the build time; with a fixed time, a hash of the tree so different trees still differ.
+        /// </summary>
+        public string VolumeSetUniqueHex()
+        {
+            if (Options.FixedTimestampUtc is null)
+            {
+                return $"{BuildTimeUtc.Ticks:X16}";
+            }
+
+            using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            void Add(string text) => sha.AppendData(Encoding.UTF8.GetBytes(text + "\n"));
+            Add(Options.VolumeLabel ?? string.Empty);
+            Add(BuildTimeUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            foreach (var dir in BfsDirectories)
+            {
+                Add($"D|{dir.DirNumber}|{dir.ParentDirNumber}|{dir.SourceDir.Name}|{Stamp(dir.SourceDir.LastWriteTimeUtc).Ticks}");
+                foreach (var file in dir.Files)
+                {
+                    Add($"F|{file.SourceFile.Name}|{file.SourceFile.SizeBytes}|{Stamp(file.SourceFile.LastWriteTimeUtc).Ticks}");
+                }
+            }
+            return Convert.ToHexString(sha.GetHashAndReset(), 0, 8);
+        }
+
+        /// <summary>
+        /// Case-insensitive name order with an exact (ordinal) tie-break. List.Sort is not stable, so without the
+        /// tie-break two names that differ only in case could land in either order from one build to the next.
+        /// </summary>
+        private static int CompareNames(string a, string b)
+        {
+            int byName = string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+            return byName != 0 ? byName : string.CompareOrdinal(a, b);
         }
 
         public static LayoutContext Create(CompilationDirectory root, IsoBuildOptions options, int sessionStartLba = 0)
@@ -188,7 +246,7 @@ public static class IsoUdfImageBuilder
                 ctx.BfsDirectories.Add(dirNode);
 
                 // Sort child directories deterministically by name
-                dirNode.SubDirectories.Sort((a, b) => string.Compare(a.SourceDir.Name, b.SourceDir.Name, StringComparison.OrdinalIgnoreCase));
+                dirNode.SubDirectories.Sort((a, b) => CompareNames(a.SourceDir.Name, b.SourceDir.Name));
                 foreach (var sub in dirNode.SubDirectories)
                 {
                     queue.Enqueue(sub);
@@ -197,11 +255,15 @@ public static class IsoUdfImageBuilder
                 // Sort files: use canonical DVD-Video ordering for VIDEO_TS directories, alphabetical otherwise
                 if (string.Equals(dirNode.SourceDir.Name, "VIDEO_TS", StringComparison.OrdinalIgnoreCase))
                 {
-                    dirNode.Files.Sort((a, b) => GetDvdVideoSortKey(a.SourceFile.Name).CompareTo(GetDvdVideoSortKey(b.SourceFile.Name)));
+                    dirNode.Files.Sort((a, b) =>
+                    {
+                        int byKey = GetDvdVideoSortKey(a.SourceFile.Name).CompareTo(GetDvdVideoSortKey(b.SourceFile.Name));
+                        return byKey != 0 ? byKey : CompareNames(a.SourceFile.Name, b.SourceFile.Name);
+                    });
                 }
                 else
                 {
-                    dirNode.Files.Sort((a, b) => string.Compare(a.SourceFile.Name, b.SourceFile.Name, StringComparison.OrdinalIgnoreCase));
+                    dirNode.Files.Sort((a, b) => CompareNames(a.SourceFile.Name, b.SourceFile.Name));
                 }
 
                 var usedIsoNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -781,10 +843,10 @@ public static class IsoUdfImageBuilder
 
         foreach (var dir in ctx.BfsDirectories)
         {
-            metadata.Add((dir.IsoLba, BuildDirectoryExtent(dir, isJoliet: false)));
+            metadata.Add((dir.IsoLba, BuildDirectoryExtent(ctx, dir, isJoliet: false)));
             if (ctx.Options.IncludeJoliet)
             {
-                metadata.Add((dir.JolietLba, BuildDirectoryExtent(dir, isJoliet: true)));
+                metadata.Add((dir.JolietLba, BuildDirectoryExtent(ctx, dir, isJoliet: true)));
             }
         }
 
@@ -1038,7 +1100,7 @@ public static class IsoUdfImageBuilder
             pvd.AsSpan(156, 34),
             (uint)rootDir.IsoLba,
             rootDir.IsoExtentSizeBytes,
-            rootDir.SourceDir.LastWriteTimeUtc,
+            ctx.Stamp(rootDir.SourceDir.LastWriteTimeUtc),
             fileFlags: 0x02,
             identifierBytes: new byte[] { 0x00 });
 
@@ -1060,7 +1122,7 @@ public static class IsoUdfImageBuilder
         WriteAsciiStringPadded(pvd.AsSpan(776, 37), string.Empty, 37);
 
         // Date/Time timestamps
-        DateTime nowUtc = DateTime.UtcNow;
+        DateTime nowUtc = ctx.BuildTimeUtc;
         WriteIsoDateTime(pvd.AsSpan(813, 17), nowUtc); // Creation
         WriteIsoDateTime(pvd.AsSpan(830, 17), nowUtc); // Modification
         Encoding.ASCII.GetBytes("0000000000000000", pvd.AsSpan(847, 16)); // Expiration
@@ -1123,7 +1185,7 @@ public static class IsoUdfImageBuilder
             svd.AsSpan(156, 34),
             (uint)rootDir.JolietLba,
             rootDir.JolietExtentSizeBytes,
-            rootDir.SourceDir.LastWriteTimeUtc,
+            ctx.Stamp(rootDir.SourceDir.LastWriteTimeUtc),
             fileFlags: 0x02,
             identifierBytes: new byte[] { 0x00 });
 
@@ -1145,7 +1207,7 @@ public static class IsoUdfImageBuilder
         WriteAsciiStringPadded(svd.AsSpan(776, 37), string.Empty, 37);
 
         // Date/Time timestamps
-        DateTime nowUtc = DateTime.UtcNow;
+        DateTime nowUtc = ctx.BuildTimeUtc;
         WriteIsoDateTime(svd.AsSpan(813, 17), nowUtc);
         WriteIsoDateTime(svd.AsSpan(830, 17), nowUtc);
         Encoding.ASCII.GetBytes("0000000000000000", svd.AsSpan(847, 16));
@@ -1323,7 +1385,7 @@ public static class IsoUdfImageBuilder
     {
         int partitionStart = ctx.UdfPartitionStartLba;
         int partitionLength = ctx.UdfClosingAvdpLba - partitionStart;
-        DateTime now = DateTime.UtcNow;
+        DateTime now = ctx.BuildTimeUtc;
         string label = ctx.Options.VolumeLabel ?? string.Empty;
 
         // Unique IDs: root = 0, 1..15 reserved by UDF, the rest assigned sequentially.
@@ -1362,7 +1424,7 @@ public static class IsoUdfImageBuilder
             BinaryPrimitives.WriteUInt32LittleEndian(d[64..], 1);  // character set list (CS0)
             BinaryPrimitives.WriteUInt32LittleEndian(d[68..], 1);
             // UDF 2.2.2.5: first 16 characters of the Volume Set Identifier should be a unique hex value
-            WriteUdfDString(d.Slice(72, 128), $"{now.Ticks:X16}{label}");
+            WriteUdfDString(d.Slice(72, 128), $"{ctx.VolumeSetUniqueHex()}{label}");
             WriteUdfCharspec(d.Slice(200, 64));
             WriteUdfCharspec(d.Slice(264, 64));
             WriteUdfTimestamp(d.Slice(376, 12), now);
@@ -1512,7 +1574,8 @@ public static class IsoUdfImageBuilder
                 informationLength: (ulong)dir.UdfFidBytes,
                 dataLba: Lbn(dir.UdfFidLba),
                 uniqueId: uniqueIds[dir],
-                modifiedUtc: dir.SourceDir.LastWriteTimeUtc)));
+                modifiedUtc: ctx.Stamp(dir.SourceDir.LastWriteTimeUtc),
+                buildTimeUtc: now)));
         }
 
         // Files: File Entry pointing at the shared ISO/UDF data extent
@@ -1526,7 +1589,8 @@ public static class IsoUdfImageBuilder
                 informationLength: (ulong)Math.Max(0, file.SourceFile.SizeBytes),
                 dataLba: Lbn(file.StartLba),
                 uniqueId: uniqueIds[file],
-                modifiedUtc: file.SourceFile.LastWriteTimeUtc)));
+                modifiedUtc: ctx.Stamp(file.SourceFile.LastWriteTimeUtc),
+                buildTimeUtc: now)));
         }
     }
 
@@ -1538,7 +1602,8 @@ public static class IsoUdfImageBuilder
         ulong informationLength,
         uint dataLba,
         ulong uniqueId,
-        DateTime modifiedUtc)
+        DateTime modifiedUtc,
+        DateTime buildTimeUtc)
     {
         byte[] fe = new byte[SectorSize];
         var d = fe.AsSpan();
@@ -1579,7 +1644,7 @@ public static class IsoUdfImageBuilder
         BinaryPrimitives.WriteUInt64LittleEndian(d[56..], informationLength);
         BinaryPrimitives.WriteUInt64LittleEndian(d[64..], blocksRecorded);
 
-        DateTime ts = modifiedUtc == default || modifiedUtc.Year < 1980 ? DateTime.UtcNow : modifiedUtc;
+        DateTime ts = modifiedUtc == default || modifiedUtc.Year < 1980 ? buildTimeUtc : modifiedUtc;
         WriteUdfTimestamp(d.Slice(72, 12), ts);  // access
         WriteUdfTimestamp(d.Slice(84, 12), ts);  // modification
         WriteUdfTimestamp(d.Slice(96, 12), ts);  // attribute
@@ -1705,7 +1770,7 @@ public static class IsoUdfImageBuilder
 
     #region Directory and Path Table Writers
 
-    private static byte[] BuildDirectoryExtent(DirectoryLayoutNode dir, bool isJoliet)
+    private static byte[] BuildDirectoryExtent(LayoutContext ctx, DirectoryLayoutNode dir, bool isJoliet)
     {
         uint extentBytes = isJoliet ? dir.JolietExtentSizeBytes : dir.IsoExtentSizeBytes;
         byte[] extent = new byte[extentBytes];
@@ -1719,7 +1784,7 @@ public static class IsoUdfImageBuilder
             extent.AsSpan(0, 34),
             thisLba,
             extentBytes,
-            dir.SourceDir.LastWriteTimeUtc,
+            ctx.Stamp(dir.SourceDir.LastWriteTimeUtc),
             fileFlags: 0x02,
             identifierBytes: new byte[] { 0x00 });
         offsetInSector += 34;
@@ -1732,7 +1797,7 @@ public static class IsoUdfImageBuilder
             extent.AsSpan(34, 34),
             parentLba,
             parentBytes,
-            parent.SourceDir.LastWriteTimeUtc,
+            ctx.Stamp(parent.SourceDir.LastWriteTimeUtc),
             fileFlags: 0x02,
             identifierBytes: new byte[] { 0x01 });
         offsetInSector += 34;
@@ -1767,7 +1832,7 @@ public static class IsoUdfImageBuilder
                 extent.AsSpan(destOffset, recordLen),
                 subLba,
                 subBytes,
-                sub.SourceDir.LastWriteTimeUtc,
+                ctx.Stamp(sub.SourceDir.LastWriteTimeUtc),
                 flags,
                 ident);
 
@@ -1805,7 +1870,7 @@ public static class IsoUdfImageBuilder
                 extent.AsSpan(destOffset, recordLen),
                 (uint)file.StartLba,
                 (uint)Math.Min(file.SourceFile.SizeBytes, 0xFFFFF800L), // >4 GiB files are fully described only in UDF
-                file.SourceFile.LastWriteTimeUtc,
+                ctx.Stamp(file.SourceFile.LastWriteTimeUtc),
                 flags,
                 ident);
 

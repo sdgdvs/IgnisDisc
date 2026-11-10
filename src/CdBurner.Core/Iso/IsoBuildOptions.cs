@@ -11,6 +11,10 @@ namespace CdBurner.Core.Iso;
 /// <param name="PublisherId">Publisher identifier string.</param>
 /// <param name="ApplicationId">Application identifier string.</param>
 /// <param name="BootConfiguration">Optional El Torito bootable configuration (BIOS / UEFI / Multi-boot).</param>
+/// <param name="FixedTimestampUtc">Optional fixed build time for reproducible images (like <c>SOURCE_DATE_EPOCH</c>).
+/// When set, every volume, descriptor and integrity timestamp uses it, file and directory times later than it are
+/// clamped to it, and the UDF volume-set ID is derived from the tree, so the same tree always gives the same bytes.
+/// When null (the default), images carry the build time as before.</param>
 public record IsoBuildOptions(
     string VolumeLabel = "CDBURNER_DISC",
     bool IncludeIso9660 = true,
@@ -19,5 +23,6 @@ public record IsoBuildOptions(
     ushort UdfRevision = 0x0102,
     string PublisherId = "IGNISDISC",
     string ApplicationId = "IGNISDISC OPTICAL STUDIO",
-    ElToritoBootConfiguration? BootConfiguration = null);
+    ElToritoBootConfiguration? BootConfiguration = null,
+    DateTime? FixedTimestampUtc = null);
 

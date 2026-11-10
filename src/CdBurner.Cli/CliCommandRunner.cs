@@ -394,6 +394,54 @@ public static class CliCommandRunner
         return 0;
     }
 
+    /// <summary>
+    /// Reads <c>--fixed-time</c> (Unix seconds or an ISO 8601 date/time; a time without an offset is taken as UTC),
+    /// falling back to the <c>SOURCE_DATE_EPOCH</c> environment variable used by reproducible-build tooling.
+    /// Returns null when neither is given, which keeps the normal build-time stamps.
+    /// </summary>
+    internal static DateTime? ResolveFixedTimestamp(CommandLineArgs cmd)
+    {
+        string? flagValue = cmd.GetOption("fixed-time");
+        string? value = flagValue ?? Environment.GetEnvironmentVariable("SOURCE_DATE_EPOCH");
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+        return ParseFixedTimestamp(value.Trim(), flagValue != null ? "--fixed-time" : "SOURCE_DATE_EPOCH");
+    }
+
+    /// <summary>Parses Unix seconds or an ISO 8601 date/time into a UTC build time an image can record.</summary>
+    public static DateTime ParseFixedTimestamp(string value, string source = "--fixed-time")
+    {
+        var earliest = new DateTime(1980, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var latest = new DateTime(2155, 12, 31, 23, 59, 59, DateTimeKind.Utc);
+        DateTime result;
+        if (long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long seconds))
+        {
+            if (seconds > 253402300799L)
+            {
+                throw new ArgumentException($"{source}: {value} is not a valid Unix time in seconds.");
+            }
+            result = DateTime.UnixEpoch.AddSeconds(seconds);
+        }
+        else if (DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                     System.Globalization.DateTimeStyles.AssumeUniversal, out var parsed))
+        {
+            result = parsed.UtcDateTime;
+        }
+        else
+        {
+            throw new ArgumentException($"{source}: '{value}' is not Unix seconds or an ISO 8601 date/time (e.g. 2026-01-01T00:00:00Z).");
+        }
+
+        // ISO 9660 dates cover 1900-2155; 1980 is the floor the builder already uses for file times.
+        if (result < earliest || result > latest)
+        {
+            throw new ArgumentException($"{source}: {result:yyyy-MM-dd} is outside the range a disc image can record (1980-2155).");
+        }
+        return DateTime.SpecifyKind(result, DateTimeKind.Utc);
+    }
+
     private static async Task<int> HandleBuildIsoAsync(CommandLineArgs cmd, TextWriter stdout)
     {
         string inputFolder = cmd.GetRequiredOption("input", "--input <folder>");
@@ -426,7 +474,8 @@ public static class CliCommandRunner
             IncludeIso9660: true,
             IncludeJoliet: includeJoliet,
             IncludeUdf: includeUdf,
-            BootConfiguration: bootConfig);
+            BootConfiguration: bootConfig,
+            FixedTimestampUtc: ResolveFixedTimestamp(cmd));
 
         var root = CompilationDirectory.CreateRoot();
         PopulateDirectoryFromDisk(root, inputFolder);
@@ -621,7 +670,8 @@ public static class CliCommandRunner
             IncludeIso9660: true,
             IncludeJoliet: includeJoliet,
             IncludeUdf: includeUdf,
-            BootConfiguration: bootConfig);
+            BootConfiguration: bootConfig,
+            FixedTimestampUtc: ResolveFixedTimestamp(cmd));
 
         var phases = new PhaseTimingProgress(cmd.IsJson ? null : stdout);
         var burnService = new DataBurnService(burnEngine);
@@ -2084,11 +2134,11 @@ public static class CliCommandRunner
         stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
         stdout.WriteLine("  media-info --drive <id> [--json]");
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
-        stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--json]");
+        stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
         stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite] [--json]");
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
-        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--json]");
+        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
         stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
