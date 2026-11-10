@@ -46,6 +46,8 @@ public static class CdTextPackParser
             packs.Add(new CdTextPack(packSpan));
         }
 
+        packs = RequireCompleteSequence(packs);
+
         // Find SizeInfo packs
         int firstTrack = 1;
         int lastTrack = 0;
@@ -143,6 +145,69 @@ public static class CdTextPackParser
             DiscId: albumDiscId,
             UpcEan: albumUpcEan,
             Tracks: tracksList);
+    }
+
+    /// <summary>
+    /// Every pack passed its own CRC, but a CRC cannot show that a whole pack is absent. Packs are numbered
+    /// consecutively inside each block (language), so a hole in the numbers means a pack was lost and the
+    /// strings built from the remaining packs would be shortened or run together. An exact repeat of a pack
+    /// (a drive re-reading the lead-in) is dropped; two different packs with one number are an error.
+    /// </summary>
+    private static List<CdTextPack> RequireCompleteSequence(List<CdTextPack> packs)
+    {
+        var complete = new List<CdTextPack>(packs.Count);
+
+        foreach (var block in packs.GroupBy(p => p.BlockNumber))
+        {
+            var bySequence = new Dictionary<byte, CdTextPack>();
+            int kept = 0;
+            int sizeInfoPacks = 0;
+
+            foreach (var pack in block)
+            {
+                if (bySequence.TryGetValue(pack.SequenceNumber, out var earlier))
+                {
+                    if (earlier.PackType != pack.PackType ||
+                        earlier.TrackNumberIndicator != pack.TrackNumberIndicator ||
+                        earlier.BlockCharacterIndicator != pack.BlockCharacterIndicator ||
+                        !earlier.TextData.AsSpan().SequenceEqual(pack.TextData))
+                    {
+                        throw new InvalidDataException(
+                            $"CD-Text block {block.Key} holds two different packs with sequence number {pack.SequenceNumber}.");
+                    }
+
+                    continue;
+                }
+
+                bySequence.Add(pack.SequenceNumber, pack);
+                complete.Add(pack);
+                kept++;
+                if (pack.PackType == CdTextPackType.SizeInfo)
+                {
+                    sizeInfoPacks++;
+                }
+            }
+
+            // The first block starts at 0. Later blocks are only required to be gap-free.
+            int first = block.Key == 0 ? 0 : bySequence.Keys.Min();
+            for (int sequence = first; sequence < first + kept; sequence++)
+            {
+                if (sequence > byte.MaxValue || !bySequence.ContainsKey((byte)sequence))
+                {
+                    throw new InvalidDataException(
+                        $"CD-Text pack sequence is incomplete: block {block.Key} has no pack number {sequence}.");
+                }
+            }
+
+            // Size information is always three packs; fewer means the end of the block was cut off.
+            if (sizeInfoPacks is not (0 or 3))
+            {
+                throw new InvalidDataException(
+                    $"CD-Text block {block.Key} has {sizeInfoPacks} of 3 size-information packs.");
+            }
+        }
+
+        return complete;
     }
 
     private static List<CdTextPack> OrderPacksForType(IEnumerable<CdTextPack> group)

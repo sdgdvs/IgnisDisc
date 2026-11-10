@@ -229,20 +229,180 @@ public static class Par2Runner
     }
 
     /// <summary>
+    /// Suffix given to a recovery volume while a repair attempt runs without it. par2 only loads "*.par2".
+    /// </summary>
+    private const string HeldVolumeSuffix = ".held";
+
+    /// <summary>
     /// Repairs a disc copy in place: runs "par2 repair -q -B. RECOVERY\recovery.par2" with WorkingDirectory = folderRoot.
-    /// Returns par2's exit code (0 = repaired or nothing to do). Throws FileNotFoundException if RECOVERY\recovery.par2 is missing.
+    /// <para>
+    /// par2 solves for the damaged blocks with the lowest-numbered recovery blocks it has. When a recovery volume
+    /// is missing those numbers have gaps, and for some combinations of damaged blocks the equations cannot be
+    /// solved ("RS computation error") even though spare recovery blocks exist. In that case the repair is tried
+    /// again with one recovery volume set aside at a time, which gives par2 a different set of equations.
+    /// </para>
+    /// <para>
+    /// A failed attempt can leave a damaged original renamed to "name.1" with nothing under its own name; such
+    /// files are renamed back, so a failed repair never changes which files exist.
+    /// </para>
     /// </summary>
     /// <param name="par2Path">Path to par2 executable.</param>
     /// <param name="folderRoot">Root folder containing the disc copy to repair.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>par2's exit code (0 = repaired or nothing to do).</returns>
+    /// <returns>The exit code (0 = repaired or nothing to do) and the backup files par2 left behind.</returns>
     /// <exception cref="ArgumentException">Thrown if parameters are null or whitespace.</exception>
     /// <exception cref="FileNotFoundException">Thrown if par2 or RECOVERY\recovery.par2 is missing.</exception>
     /// <exception cref="DirectoryNotFoundException">Thrown if folderRoot directory does not exist.</exception>
-    public static async Task<int> RepairAsync(
+    public static async Task<Par2RepairResult> RepairAsync(
         string par2Path,
         string folderRoot,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(par2Path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(folderRoot);
+
+        if (!Directory.Exists(folderRoot))
+        {
+            throw new DirectoryNotFoundException($"Folder root directory not found: '{folderRoot}'.");
+        }
+
+        string recoveryFolder = Path.Combine(folderRoot, ArchiveManifest.RecoveryFolderName);
+        ReleaseHeldVolumes(recoveryFolder);
+
+        var filesBefore = new HashSet<string>(
+            Directory.EnumerateFiles(folderRoot, "*", SearchOption.AllDirectories), StringComparer.OrdinalIgnoreCase);
+
+        int exitCode;
+        string errorOutput;
+        int attempts = 1;
+        try
+        {
+            (exitCode, errorOutput) = await RunRepairOnceAsync(par2Path, folderRoot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            RestoreDisplacedOriginals(folderRoot, filesBefore);
+            throw;
+        }
+
+        if (exitCode != 0)
+        {
+            RestoreDisplacedOriginals(folderRoot, filesBefore);
+
+            if (errorOutput.Contains("RS computation error", StringComparison.OrdinalIgnoreCase))
+            {
+                var volumes = Directory.EnumerateFiles(recoveryFolder, "*.vol*.par2")
+                    .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                foreach (string volume in volumes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    string held = volume + HeldVolumeSuffix;
+                    File.Move(volume, held);
+                    int retryExitCode;
+                    try
+                    {
+                        (retryExitCode, _) = await RunRepairOnceAsync(par2Path, folderRoot, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        RestoreDisplacedOriginals(folderRoot, filesBefore);
+                        throw;
+                    }
+                    finally
+                    {
+                        File.Move(held, volume);
+                    }
+
+                    attempts++;
+                    if (retryExitCode == 0)
+                    {
+                        exitCode = 0;
+                        errorOutput = string.Empty;
+                        break;
+                    }
+
+                    RestoreDisplacedOriginals(folderRoot, filesBefore);
+                }
+            }
+        }
+
+        return new Par2RepairResult(exitCode, errorOutput, FindRepairBackups(folderRoot, filesBefore), attempts);
+    }
+
+    /// <summary>
+    /// Puts back recovery volumes that an interrupted earlier repair left set aside.
+    /// </summary>
+    private static void ReleaseHeldVolumes(string recoveryFolder)
+    {
+        if (!Directory.Exists(recoveryFolder))
+        {
+            return;
+        }
+
+        foreach (string held in Directory.EnumerateFiles(recoveryFolder, "*.par2" + HeldVolumeSuffix).ToList())
+        {
+            string volume = held[..^HeldVolumeSuffix.Length];
+            if (!File.Exists(volume))
+            {
+                File.Move(held, volume);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Files created since <paramref name="filesBefore"/> whose name is an earlier file's name plus ".&lt;number&gt;":
+    /// the copies par2 makes of each original before it writes the repaired file.
+    /// </summary>
+    private static List<(string Backup, string Original)> FindNewBackups(string folderRoot, HashSet<string> filesBefore)
+    {
+        var backups = new List<(string, string)>();
+        foreach (string file in Directory.EnumerateFiles(folderRoot, "*", SearchOption.AllDirectories))
+        {
+            if (filesBefore.Contains(file))
+            {
+                continue;
+            }
+
+            int dot = file.LastIndexOf('.');
+            if (dot <= 0 || dot == file.Length - 1 || file.AsSpan(dot + 1).ContainsAnyExceptInRange('0', '9'))
+            {
+                continue;
+            }
+
+            string original = file[..dot];
+            if (filesBefore.Contains(original))
+            {
+                backups.Add((file, original));
+            }
+        }
+
+        return backups;
+    }
+
+    private static void RestoreDisplacedOriginals(string folderRoot, HashSet<string> filesBefore)
+    {
+        foreach (var (backup, original) in FindNewBackups(folderRoot, filesBefore))
+        {
+            if (!File.Exists(original))
+            {
+                File.Move(backup, original);
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> FindRepairBackups(string folderRoot, HashSet<string> filesBefore) =>
+        FindNewBackups(folderRoot, filesBefore)
+            .Where(b => File.Exists(b.Original))
+            .Select(b => b.Backup)
+            .ToList();
+
+    private static async Task<(int ExitCode, string ErrorOutput)> RunRepairOnceAsync(
+        string par2Path,
+        string folderRoot,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(par2Path);
         ArgumentException.ThrowIfNullOrWhiteSpace(folderRoot);
@@ -321,6 +481,16 @@ public static class Par2Runner
             throw;
         }
 
-        return proc.ExitCode;
+        return (proc.ExitCode, errTask.IsCompletedSuccessfully ? errTask.Result : string.Empty);
     }
 }
+
+/// <summary>
+/// Outcome of <see cref="Par2Runner.RepairAsync"/>.
+/// </summary>
+/// <param name="ExitCode">par2's exit code for the attempt that counted (0 = repaired or nothing to do).</param>
+/// <param name="ErrorOutput">What par2 wrote to its error stream when the repair failed; empty on success.</param>
+/// <param name="BackupFiles">Full paths of the "name.N" copies of damaged originals that par2 created during this
+/// repair and whose original exists again. Files that were already there before the repair are never listed.</param>
+/// <param name="Attempts">Number of par2 runs made.</param>
+public sealed record Par2RepairResult(int ExitCode, string ErrorOutput, IReadOnlyList<string> BackupFiles, int Attempts);

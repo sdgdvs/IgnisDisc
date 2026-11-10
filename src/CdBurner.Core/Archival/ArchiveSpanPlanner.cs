@@ -114,8 +114,11 @@ public static class ArchiveSpanPlanner
             int fileSectors = CompilationCapacityCalculator.CalculateFileSectors(file.SizeBytes);
             if (fileSectors > usableSectors)
             {
+                // Report the true count: fileSectors is capped at int.MaxValue for sizes of 4 TiB and more.
+                long requiredSectors = file.SizeBytes / OpticalConstants.DataSectorSize +
+                                       (file.SizeBytes % OpticalConstants.DataSectorSize != 0 ? 1 : 0);
                 throw new InvalidOperationException(
-                    $"File '{file.RelativePath}' requires {fileSectors} sectors, which is larger than one disc usable capacity ({usableSectors} sectors).");
+                    $"File '{file.RelativePath}' requires {requiredSectors} sectors, which is larger than one disc usable capacity ({usableSectors} sectors).");
             }
 
             if (currentDiscFiles.Count > 0 && (currentDiscSectors + fileSectors > usableSectors))

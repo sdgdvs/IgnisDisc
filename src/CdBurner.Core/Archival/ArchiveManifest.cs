@@ -53,7 +53,8 @@ public static class ArchiveManifest
     internal static string? ResolveInsideRoot(string root, string relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath) ||
-            relativePath.StartsWith('\\') || relativePath.StartsWith('/') || relativePath.Contains(':'))
+            relativePath.StartsWith('\\') || relativePath.StartsWith('/') || relativePath.Contains(':') ||
+            relativePath.AsSpan().IndexOfAny(Path.GetInvalidPathChars()) >= 0)
         {
             return null;
         }
@@ -64,8 +65,52 @@ public static class ArchiveManifest
             fullRoot += Path.DirectorySeparatorChar;
         }
 
-        string full = Path.GetFullPath(Path.Combine(fullRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        string full;
+        try
+        {
+            full = Path.GetFullPath(Path.Combine(fullRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
         return full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) ? full : null;
+    }
+
+    /// <summary>
+    /// Parses one manifest line in sha256sum format: 64 hex digits, a space, then either a second space (text
+    /// mode) or '*' (binary mode), then the path. The path is taken verbatim, so a name that starts with a
+    /// space survives. Returns false for anything else, including lines damaged on the disc.
+    /// </summary>
+    public static bool TryParseManifestLine(string line, out string sha256Hex, out string relativePath)
+    {
+        sha256Hex = string.Empty;
+        relativePath = string.Empty;
+
+        const int HashLength = 64;
+        if (line is null || line.Length < HashLength + 2 || line[HashLength] != ' ')
+        {
+            return false;
+        }
+
+        for (int i = 0; i < HashLength; i++)
+        {
+            if (!char.IsAsciiHexDigit(line[i]))
+            {
+                return false;
+            }
+        }
+
+        int pathStart = HashLength + 1;
+        if (line.Length > pathStart + 1 && (line[pathStart] == ' ' || line[pathStart] == '*'))
+        {
+            pathStart++;
+        }
+
+        sha256Hex = line[..HashLength];
+        relativePath = line[pathStart..];
+        return true;
     }
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
@@ -160,14 +205,22 @@ public static class ArchiveManifest
                 $checked = 0
                 $failed = 0
                 foreach ($line in Get-Content -LiteralPath $manifest -Encoding UTF8) {
-                    $trimmed = $line.Trim()
-                    if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
-                    $idx = $trimmed.IndexOf('  ')
-                    if ($idx -lt 0) { continue }
-                    $expected = $trimmed.Substring(0, $idx).Trim().ToLowerInvariant()
-                    $relPath = $trimmed.Substring($idx + 2).Trim() -replace '/', [IO.Path]::DirectorySeparatorChar
-                    $fullPath = Join-Path $PSScriptRoot $relPath
+                    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                    if ($line -notmatch '^([0-9A-Fa-f]{64}) [ *]?(.+)$') {
+                        Write-Host "[UNREADABLE] a line of IGNISDISC-MANIFEST.sha256" -ForegroundColor Red
+                        $failed++
+                        continue
+                    }
+                    $expected = $Matches[1].ToLowerInvariant()
+                    $listedPath = $Matches[2]
                     $checked++
+                    if ([IO.Path]::IsPathRooted($listedPath) -or $listedPath -match '(^|[\\/])\.\.([\\/]|$)') {
+                        Write-Host "[REJECTED] $listedPath (points outside the disc)" -ForegroundColor Red
+                        $failed++
+                        continue
+                    }
+                    $relPath = $listedPath -replace '/', [IO.Path]::DirectorySeparatorChar
+                    $fullPath = Join-Path $PSScriptRoot $relPath
                     if (-not (Test-Path -LiteralPath $fullPath)) {
                         Write-Host "[MISSING] $relPath" -ForegroundColor Red
                         $failed++
@@ -181,12 +234,30 @@ public static class ArchiveManifest
                         Write-Host "[OK]      $relPath" -ForegroundColor Green
                     }
                 }
+                if ($checked -eq 0) {
+                    Write-Host "[UNREADABLE] IGNISDISC-MANIFEST.sha256 lists no files" -ForegroundColor Red
+                    $failed++
+                }
+                $index = Join-Path $PSScriptRoot 'IGNISDISC-ARCHIVE.json'
+                if (Test-Path -LiteralPath $index) {
+                    try {
+                        $doc = Get-Content -LiteralPath $index -Raw -Encoding UTF8 | ConvertFrom-Json
+                        $listed = if ($null -eq $doc.files) { 0 } else { @($doc.files).Count }
+                        if ($listed -ne $checked) {
+                            Write-Host "[MISMATCH] the manifest lists $checked files, IGNISDISC-ARCHIVE.json lists $listed" -ForegroundColor Red
+                            $failed++
+                        }
+                    } catch {
+                        Write-Host "[UNREADABLE] IGNISDISC-ARCHIVE.json" -ForegroundColor Red
+                        $failed++
+                    }
+                }
                 Write-Host ""
                 if ($failed -eq 0) {
                     Write-Host "Archive verification PASSED ($checked files intact)." -ForegroundColor Green
                     exit 0
                 } else {
-                    Write-Host "Archive verification FAILED ($failed of $checked files missing or corrupt)." -ForegroundColor Red
+                    Write-Host "Archive verification FAILED ($failed problems, $checked files listed)." -ForegroundColor Red
                     exit 1
                 }
                 """;
@@ -266,9 +337,15 @@ public static class ArchiveManifest
             throw new FileNotFoundException($"Archive manifest file not found: '{manifestPath}'.", manifestPath);
         }
 
+        var missing = new List<string>();
+        var corrupt = new List<string>();
+
+        // The disc carries the file list twice: the sha256sum manifest and the JSON index. Each is used to check
+        // the other, so damage to either one cannot shrink the set of files that gets verified.
         string? setId = null;
         int? discNumber = null;
         int? discCount = null;
+        IReadOnlyList<ArchiveManifestEntry>? indexFiles = null;
 
         string indexPath = Path.Combine(discRoot, IndexFileName);
         if (File.Exists(indexPath))
@@ -280,16 +357,21 @@ public static class ArchiveManifest
                 {
                     PropertyNameCaseInsensitive = true
                 });
-                if (index != null)
+                if (index?.Files != null)
                 {
                     setId = index.SetId;
                     discNumber = index.DiscNumber;
                     discCount = index.DiscCount;
+                    indexFiles = index.Files;
+                }
+                else
+                {
+                    corrupt.Add($"{IndexFileName} (unreadable)");
                 }
             }
-            catch
+            catch (Exception ex) when (ex is JsonException or IOException or NotSupportedException)
             {
-                // Ignore deserialization errors and leave fields null
+                corrupt.Add($"{IndexFileName} (unreadable)");
             }
         }
 
@@ -297,46 +379,83 @@ public static class ArchiveManifest
         bool hasRecoveryData = Directory.Exists(recoveryPath) &&
                                Directory.EnumerateFiles(recoveryPath, "*.par2").Any();
 
-        var lines = await File.ReadAllLinesAsync(manifestPath, cancellationToken).ConfigureAwait(false);
-        var manifestLines = lines
-            .Where(l => !string.IsNullOrWhiteSpace(l))
-            .Select(l => l.Trim())
-            .ToList();
+        var entries = new List<(string Hash, string RelativePath)>();
+        int unreadableLines = 0;
 
-        var missing = new List<string>();
-        var corrupt = new List<string>();
-        int filesChecked = 0;
-
-        for (int i = 0; i < manifestLines.Count; i++)
+        foreach (string line in await File.ReadAllLinesAsync(manifestPath, cancellationToken).ConfigureAwait(false))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            string line = manifestLines[i];
-
-            int spaceIndex = line.IndexOf("  ", StringComparison.Ordinal);
-            string expectedHash;
-            string relativePath;
-
-            if (spaceIndex > 0)
+            if (string.IsNullOrWhiteSpace(line))
             {
-                expectedHash = line[..spaceIndex].Trim();
-                relativePath = line[(spaceIndex + 2)..].Trim();
+                continue;
+            }
+
+            if (TryParseManifestLine(line, out string lineHash, out string linePath))
+            {
+                entries.Add((lineHash, linePath));
             }
             else
             {
-                int singleSpace = line.IndexOf(' ');
-                if (singleSpace > 0)
+                unreadableLines++;
+            }
+        }
+
+        if (unreadableLines > 0)
+        {
+            corrupt.Add($"{ManifestFileName} ({unreadableLines} unreadable line(s))");
+        }
+
+        if (indexFiles != null)
+        {
+            var manifestHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (hash, path) in entries)
+            {
+                manifestHashes[path] = hash;
+            }
+
+            int absentFromManifest = 0;
+            bool listsDisagree = false;
+            foreach (var indexEntry in indexFiles)
+            {
+                if (indexEntry?.RelativePath is not { Length: > 0 } indexedPath || indexEntry.Sha256 is not { } indexedHash)
                 {
-                    expectedHash = line[..singleSpace].Trim();
-                    relativePath = line[(singleSpace + 1)..].TrimStart('*', ' ').Trim();
+                    listsDisagree = true;
                 }
-                else
+                else if (!manifestHashes.TryGetValue(indexedPath, out string? manifestHash))
                 {
-                    continue;
+                    // Still verify the file, against the hash the index recorded for it.
+                    entries.Add((indexedHash, indexedPath));
+                    absentFromManifest++;
+                }
+                else if (!string.Equals(manifestHash, indexedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    listsDisagree = true;
                 }
             }
 
+            if (absentFromManifest > 0)
+            {
+                corrupt.Add($"{ManifestFileName} ({absentFromManifest} file(s) listed in {IndexFileName} are absent)");
+            }
+
+            if (listsDisagree)
+            {
+                corrupt.Add($"{IndexFileName} (does not match {ManifestFileName})");
+            }
+        }
+
+        if (entries.Count == 0)
+        {
+            corrupt.Add($"{ManifestFileName} (lists no files)");
+        }
+
+        int filesChecked = 0;
+
+        foreach (var (expectedHash, relativePath) in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
             filesChecked++;
-            progress?.Report($"Verifying {filesChecked}/{manifestLines.Count}: {relativePath}");
+            progress?.Report($"Verifying {filesChecked}/{entries.Count}: {relativePath}");
 
             // The manifest comes from the disc and is untrusted: never open anything outside the disc root.
             string? diskFilePath = ResolveInsideRoot(discRoot, relativePath);

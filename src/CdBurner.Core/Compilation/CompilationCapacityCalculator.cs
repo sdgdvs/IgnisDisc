@@ -79,17 +79,11 @@ public static class CompilationCapacityCalculator
 {
     /// <summary>
     /// Computes the exact number of 2048-byte sectors required for a file of the given byte size.
-    /// Files larger than 0 bytes round up to the next sector boundary.
+    /// Files larger than 0 bytes round up to the next sector boundary. A size beyond what an <see cref="int"/>
+    /// sector count can express (about 4 TiB) returns <see cref="int.MaxValue"/> instead of wrapping, so it
+    /// always compares as larger than any disc.
     /// </summary>
-    public static int CalculateFileSectors(long sizeBytes)
-    {
-        if (sizeBytes <= 0)
-        {
-            return 0;
-        }
-
-        return (int)((sizeBytes + OpticalConstants.DataSectorSize - 1) / OpticalConstants.DataSectorSize);
-    }
+    public static int CalculateFileSectors(long sizeBytes) => OpticalConstants.BytesToSectors(sizeBytes);
 
     /// <summary>
     /// Computes the total file data sectors for a collection of compilation files,
@@ -99,7 +93,7 @@ public static class CompilationCapacityCalculator
     {
         ArgumentNullException.ThrowIfNull(files);
 
-        int total = 0;
+        long total = 0;
         foreach (var file in files)
         {
             // If the file was imported from a previous session and is already on disc,
@@ -109,7 +103,7 @@ public static class CompilationCapacityCalculator
                 total += CalculateFileSectors(file.SizeBytes);
             }
         }
-        return total;
+        return (int)Math.Min(total, int.MaxValue);
     }
 
     /// <summary>

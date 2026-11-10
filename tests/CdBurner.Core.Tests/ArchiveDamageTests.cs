@@ -1,0 +1,393 @@
+using System.Diagnostics;
+using System.Text;
+using CdBurner.Core.Archival;
+using CdBurner.Core.Compilation;
+using CdBurner.Core.Primitives;
+using Xunit;
+
+namespace CdBurner.Core.Tests;
+
+/// <summary>
+/// Damage to the archive's own bookkeeping files (manifest, index, recovery volumes) must never make a
+/// verification pass, shrink the set of files that is checked, or cost the user a file.
+/// </summary>
+public sealed class ArchiveDamageTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "cdburner-test-" + Guid.NewGuid().ToString("N"));
+
+    public ArchiveDamageTests() => Directory.CreateDirectory(_root);
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task<string> StageAsync(params (string Name, string Content)[] files)
+    {
+        string source = Path.Combine(_root, "source-" + Guid.NewGuid().ToString("N"));
+        foreach (var (name, content) in files)
+        {
+            string path = Path.Combine(source, name.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, content);
+        }
+
+        var plan = ArchiveSpanPlanner.Plan(source, DiscMediaType.CdR, redundancyPercent: 0, setId: "damageset");
+        var discs = await ArchiveStager.StageAsync(plan, Path.Combine(_root, "staging-" + Guid.NewGuid().ToString("N")), par2Path: null);
+        return Assert.Single(discs);
+    }
+
+    private Task<string> StageThreeFilesAsync() =>
+        StageAsync(("alpha.txt", "alpha payload"), ("beta.txt", "beta payload"), ("docs/gamma.txt", "gamma payload"));
+
+    private static string ManifestPath(string disc) => Path.Combine(disc, ArchiveManifest.ManifestFileName);
+
+    private static string IndexPath(string disc) => Path.Combine(disc, ArchiveManifest.IndexFileName);
+
+    private static void DamageManifest(string disc, string kind)
+    {
+        string path = ManifestPath(disc);
+        byte[] original = File.ReadAllBytes(path);
+        string text = Encoding.UTF8.GetString(original);
+        int lastLineStart = text.TrimEnd('\n').LastIndexOf('\n') + 1;
+
+        byte[] damaged = kind switch
+        {
+            "empty" => [],
+            "zero-filled" => new byte[original.Length],
+            "last line lost" => original[..lastLineStart],
+            "cut inside last hash" => original[..(lastLineStart + 30)],
+            "separator zeroed" => [.. original[..64], 0, 0, .. original[66..]],
+            "first line zeroed" => [.. new byte[text.IndexOf('\n')], .. original[text.IndexOf('\n')..]],
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
+
+        File.WriteAllBytes(path, damaged);
+    }
+
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("zero-filled")]
+    [InlineData("last line lost")]
+    [InlineData("cut inside last hash")]
+    [InlineData("separator zeroed")]
+    [InlineData("first line zeroed")]
+    public async Task Verify_DamagedManifest_IsNotIntact_AndStillChecksEveryFile(string kind)
+    {
+        string disc = await StageThreeFilesAsync();
+        DamageManifest(disc, kind);
+
+        var result = await ArchiveManifest.VerifyAsync(disc);
+
+        Assert.False(result.IsIntact);
+        Assert.Equal(3, result.FilesChecked);
+        Assert.Contains(result.Corrupt, c => c.StartsWith(ArchiveManifest.ManifestFileName, StringComparison.Ordinal));
+        Assert.Empty(result.Missing);
+    }
+
+    [Fact]
+    public async Task Verify_ZeroFilledManifest_StillReportsTheCorruptPayloadFile()
+    {
+        string disc = await StageThreeFilesAsync();
+        DamageManifest(disc, "zero-filled");
+        await File.WriteAllTextAsync(Path.Combine(disc, "beta.txt"), "tampered");
+
+        var result = await ArchiveManifest.VerifyAsync(disc);
+
+        Assert.False(result.IsIntact);
+        Assert.Contains("beta.txt", result.Corrupt);
+    }
+
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("zero-filled")]
+    public async Task Verify_DamagedManifestWithoutIndex_IsNotIntact(string kind)
+    {
+        string disc = await StageThreeFilesAsync();
+        File.Delete(IndexPath(disc));
+        DamageManifest(disc, kind);
+
+        var result = await ArchiveManifest.VerifyAsync(disc);
+
+        Assert.False(result.IsIntact);
+        Assert.Equal(0, result.FilesChecked);
+    }
+
+    [Fact]
+    public async Task Verify_UnreadableIndex_IsNotIntact_ButFilesAreStillChecked()
+    {
+        string disc = await StageThreeFilesAsync();
+        File.WriteAllBytes(IndexPath(disc), new byte[new FileInfo(IndexPath(disc)).Length]);
+
+        var result = await ArchiveManifest.VerifyAsync(disc);
+
+        Assert.False(result.IsIntact);
+        Assert.Equal(3, result.FilesChecked);
+        string problem = Assert.Single(result.Corrupt);
+        Assert.StartsWith(ArchiveManifest.IndexFileName, problem);
+    }
+
+    [Fact]
+    public async Task Verify_IndexHashThatDisagreesWithManifest_IsNotIntact()
+    {
+        string disc = await StageThreeFilesAsync();
+        string manifestHash = (await File.ReadAllLinesAsync(ManifestPath(disc)))[0][..64];
+        string otherHash = (manifestHash[0] == '0' ? '1' : '0') + manifestHash[1..];
+        string index = await File.ReadAllTextAsync(IndexPath(disc));
+        Assert.Contains(manifestHash, index);
+        await File.WriteAllTextAsync(IndexPath(disc), index.Replace(manifestHash, otherHash));
+
+        var result = await ArchiveManifest.VerifyAsync(disc);
+
+        Assert.False(result.IsIntact);
+        Assert.Contains(result.Corrupt, c => c.StartsWith(ArchiveManifest.IndexFileName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Verify_FileNameWithLeadingSpace_IsIntact()
+    {
+        string disc = await StageAsync((" leading.txt", "one"), ("plain.txt", "two"));
+
+        var result = await ArchiveManifest.VerifyAsync(disc);
+
+        Assert.True(result.IsIntact, string.Join("; ", result.Missing.Concat(result.Corrupt)));
+        Assert.Equal(2, result.FilesChecked);
+    }
+
+    [Theory]
+    [InlineData("  docs/readme.txt", "docs/readme.txt")]
+    [InlineData(" *docs/readme.txt", "docs/readme.txt")]
+    [InlineData("   leading space.txt", " leading space.txt")]
+    [InlineData(" single-space.txt", "single-space.txt")]
+    public void TryParseManifestLine_AcceptsSha256sumFormats(string afterHash, string expectedPath)
+    {
+        string hash = new('a', 64);
+
+        Assert.True(ArchiveManifest.TryParseManifestLine(hash + afterHash, out string parsedHash, out string parsedPath));
+        Assert.Equal(hash, parsedHash);
+        Assert.Equal(expectedPath, parsedPath);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("abc123  file.txt")]
+    [InlineData("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz  file.txt")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\0\0file.txt")]
+    [InlineData("\0\0\0\0\0\0\0\0")]
+    public void TryParseManifestLine_RejectsDamagedLines(string line)
+    {
+        Assert.False(ArchiveManifest.TryParseManifestLine(line, out _, out _));
+    }
+
+    private static (int ExitCode, string Output) RunVerifyScript(string disc)
+    {
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-File");
+        psi.ArgumentList.Add(Path.Combine(disc, ArchiveManifest.VerifyPowerShellFileName));
+
+        using var process = Process.Start(psi)!;
+        string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, output);
+    }
+
+    [Fact]
+    public async Task VerifyScript_PassesOnAnIntactDisc_IncludingALeadingSpaceName()
+    {
+        string disc = await StageAsync((" leading.txt", "one"), ("plain.txt", "two"), ("docs/deep.txt", "three"));
+
+        var (exitCode, output) = RunVerifyScript(disc);
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains("PASSED (3 files intact)", output);
+    }
+
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("zero-filled")]
+    [InlineData("last line lost")]
+    [InlineData("cut inside last hash")]
+    public async Task VerifyScript_FailsOnADamagedManifest(string kind)
+    {
+        string disc = await StageThreeFilesAsync();
+        DamageManifest(disc, kind);
+
+        var (exitCode, output) = RunVerifyScript(disc);
+
+        Assert.True(exitCode != 0, output);
+        Assert.DoesNotContain("PASSED", output);
+    }
+
+    [Fact]
+    public async Task VerifyScript_FailsOnACorruptFile()
+    {
+        string disc = await StageThreeFilesAsync();
+        await File.WriteAllTextAsync(Path.Combine(disc, "alpha.txt"), "tampered");
+
+        var (exitCode, output) = RunVerifyScript(disc);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("[CORRUPT] alpha.txt", output);
+    }
+
+    [Theory]
+    [InlineData(1L << 42)]
+    [InlineData((1L << 42) + 1)]
+    [InlineData(1L << 43)]
+    [InlineData(1L << 50)]
+    [InlineData(long.MaxValue)]
+    public void Plan_FileOfFourTebibytesOrMore_IsRejected(long sizeBytes)
+    {
+        var files = new[] { new ArchiveSourceFile(@"X:\huge.bin", "huge.bin", sizeBytes) };
+
+        Assert.Throws<InvalidOperationException>(() => ArchiveSpanPlanner.Plan(files, DiscMediaType.DvdPlusRDualLayer, 0));
+        Assert.Equal(int.MaxValue, CompilationCapacityCalculator.CalculateFileSectors(sizeBytes));
+        Assert.Equal(int.MaxValue, OpticalConstants.BytesToSectors(sizeBytes));
+    }
+
+    [Theory]
+    [InlineData(0L, 0)]
+    [InlineData(1L, 1)]
+    [InlineData(2048L, 1)]
+    [InlineData(2049L, 2)]
+    [InlineData((1L << 42) - 2048, int.MaxValue)]
+    public void BytesToSectors_RoundsUpWithoutWrapping(long sizeBytes, int expectedSectors)
+    {
+        Assert.Equal(expectedSectors, OpticalConstants.BytesToSectors(sizeBytes));
+    }
+
+    // ---- PAR2 repair, driven by a stand-in for par2.exe so the outcome of each run is fixed ----
+
+    private const string GoodContent = "repaired content";
+    private const string DamagedContent = "damaged content";
+
+    /// <summary>
+    /// Builds a folder with one damaged file and three recovery files, plus a script that behaves like par2:
+    /// it moves data.bin to data.bin.1 and then either reports a matrix failure or writes the repaired file.
+    /// It fails while recovery.vol000+01.par2 is present, or always when "always-fail.flag" exists, and
+    /// reports "repair not possible" (exit 2, nothing renamed) when "not-possible.flag" exists.
+    /// </summary>
+    private (string Folder, string FakePar2) CreateRepairFolder()
+    {
+        string folder = Path.Combine(_root, "repair-" + Guid.NewGuid().ToString("N"));
+        string recovery = Path.Combine(folder, ArchiveManifest.RecoveryFolderName);
+        Directory.CreateDirectory(recovery);
+
+        File.WriteAllText(Path.Combine(folder, "data.bin"), DamagedContent);
+        File.WriteAllText(Path.Combine(folder, "notes.txt"), "an archived file");
+        File.WriteAllText(Path.Combine(folder, "notes.txt.1"), "another archived file that happens to end in .1");
+        File.WriteAllText(Path.Combine(recovery, "recovery.par2"), "index");
+        File.WriteAllText(Path.Combine(recovery, "recovery.vol000+01.par2"), "volume 0");
+        File.WriteAllText(Path.Combine(recovery, "recovery.vol001+02.par2"), "volume 1");
+        File.WriteAllText(Path.Combine(recovery, "good.copy"), GoodContent);
+
+        string fakePar2 = Path.Combine(_root, "fake-par2-" + Guid.NewGuid().ToString("N") + ".cmd");
+        File.WriteAllText(fakePar2, string.Join("\r\n",
+            "@echo off",
+            "if exist \"not-possible.flag\" exit /b 2",
+            "ren data.bin data.bin.1",
+            "if exist \"always-fail.flag\" goto matrixfailure",
+            "if exist \"RECOVERY\\recovery.vol000+01.par2\" goto matrixfailure",
+            "copy /y RECOVERY\\good.copy data.bin >nul",
+            "exit /b 0",
+            ":matrixfailure",
+            "echo RS computation error. 1>&2",
+            "exit /b 6",
+            ""));
+
+        return (folder, fakePar2);
+    }
+
+    private static string[] RecoveryFileNames(string folder) =>
+        Directory.EnumerateFiles(Path.Combine(folder, ArchiveManifest.RecoveryFolderName))
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray()!;
+
+    private static readonly string[] AllRecoveryFiles =
+        ["good.copy", "recovery.par2", "recovery.vol000+01.par2", "recovery.vol001+02.par2"];
+
+    [Fact]
+    public async Task Repair_MatrixFailure_IsRetriedWithoutOneRecoveryVolume()
+    {
+        var (folder, fakePar2) = CreateRepairFolder();
+
+        Par2RepairResult result = await Par2Runner.RepairAsync(fakePar2, folder);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(2, result.Attempts);
+        Assert.Equal(GoodContent, File.ReadAllText(Path.Combine(folder, "data.bin")));
+        Assert.Equal(AllRecoveryFiles, RecoveryFileNames(folder));
+    }
+
+    [Fact]
+    public async Task Repair_ListsOnlyTheBackupsItCreated_NotArchivedFilesEndingInDotOne()
+    {
+        var (folder, fakePar2) = CreateRepairFolder();
+
+        Par2RepairResult result = await Par2Runner.RepairAsync(fakePar2, folder);
+
+        string backup = Assert.Single(result.BackupFiles);
+        Assert.Equal(Path.Combine(folder, "data.bin.1"), backup);
+        Assert.Equal(DamagedContent, File.ReadAllText(backup));
+        Assert.True(File.Exists(Path.Combine(folder, "notes.txt.1")));
+    }
+
+    [Fact]
+    public async Task Repair_ThatFailsEveryAttempt_LeavesEveryFileUnderItsOwnName()
+    {
+        var (folder, fakePar2) = CreateRepairFolder();
+        File.WriteAllText(Path.Combine(folder, "always-fail.flag"), string.Empty);
+
+        Par2RepairResult result = await Par2Runner.RepairAsync(fakePar2, folder);
+
+        Assert.Equal(6, result.ExitCode);
+        Assert.Contains("RS computation error", result.ErrorOutput);
+        Assert.Equal(3, result.Attempts);
+        Assert.Empty(result.BackupFiles);
+        Assert.Equal(DamagedContent, File.ReadAllText(Path.Combine(folder, "data.bin")));
+        Assert.False(File.Exists(Path.Combine(folder, "data.bin.1")));
+        Assert.Equal(AllRecoveryFiles, RecoveryFileNames(folder));
+    }
+
+    [Fact]
+    public async Task Repair_ThatIsNotPossible_IsNotRetried()
+    {
+        var (folder, fakePar2) = CreateRepairFolder();
+        File.WriteAllText(Path.Combine(folder, "not-possible.flag"), string.Empty);
+
+        Par2RepairResult result = await Par2Runner.RepairAsync(fakePar2, folder);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal(1, result.Attempts);
+        Assert.Equal(DamagedContent, File.ReadAllText(Path.Combine(folder, "data.bin")));
+    }
+
+    [Fact]
+    public async Task Repair_PutsBackARecoveryVolumeLeftSetAsideByAnInterruptedRun()
+    {
+        var (folder, fakePar2) = CreateRepairFolder();
+        string recovery = Path.Combine(folder, ArchiveManifest.RecoveryFolderName);
+        File.Move(Path.Combine(recovery, "recovery.vol001+02.par2"), Path.Combine(recovery, "recovery.vol001+02.par2.held"));
+
+        await Par2Runner.RepairAsync(fakePar2, folder);
+
+        Assert.Equal(AllRecoveryFiles, RecoveryFileNames(folder));
+    }
+}

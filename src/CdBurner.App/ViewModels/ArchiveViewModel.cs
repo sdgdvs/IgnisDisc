@@ -1016,44 +1016,26 @@ public class ArchiveViewModel : ObservableObject
 
         try
         {
-            int exitCode = await Par2Runner.RepairAsync(par2Path, VerifyPath, token).ConfigureAwait(true);
+            Par2RepairResult repair = await Par2Runner.RepairAsync(par2Path, VerifyPath, token).ConfigureAwait(true);
+            int exitCode = repair.ExitCode;
             if (exitCode != 0)
             {
                 StatusMessage = $"par2 repair returned exit code {exitCode}. Some files may not be repairable.";
             }
 
-            // Delete *.1 backup files left by par2 for repaired files whose name without .1 exists in the manifest
-            string manifestPath = Path.Combine(VerifyPath, ArchiveManifest.ManifestFileName);
-            var manifestFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (File.Exists(manifestPath))
+            // Remove the copies par2 made of each damaged original. Only the files this repair created are
+            // touched (an archived file that happens to be called "name.1" stays), and only after a successful
+            // repair: a failed run must never cost the user a copy of their data.
+            if (exitCode == 0)
             {
-                var lines = await File.ReadAllLinesAsync(manifestPath, token).ConfigureAwait(true);
-                foreach (var line in lines)
+                foreach (string backup in repair.BackupFiles)
                 {
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    int spaceIndex = line.IndexOf("  ", StringComparison.Ordinal);
-                    string relPath = spaceIndex > 0 ? line[(spaceIndex + 2)..].Trim() : line.Trim();
-                    relPath = relPath.TrimStart('*', ' ').Replace('/', Path.DirectorySeparatorChar);
-                    manifestFiles.Add(relPath);
-                }
-            }
-
-            if (Directory.Exists(VerifyPath))
-            {
-                foreach (string file in Directory.EnumerateFiles(VerifyPath, "*.1", SearchOption.AllDirectories))
-                {
-                    string originalPath = file[..^2];
-                    string relOriginal = Path.GetRelativePath(VerifyPath, originalPath).Replace('/', Path.DirectorySeparatorChar);
-                    // Only after a successful repair: a failed run must never cost the user a copy of their data.
-                    if (exitCode == 0 && manifestFiles.Contains(relOriginal) && File.Exists(originalPath))
+                    try
                     {
-                        try
-                        {
-                            File.Delete(file);
-                        }
-                        catch
-                        {
-                        }
+                        File.Delete(backup);
+                    }
+                    catch
+                    {
                     }
                 }
             }

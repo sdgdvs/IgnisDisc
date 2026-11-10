@@ -168,7 +168,8 @@ public static class OpticalConstants
     public static long SectorsToBytes(int sectors, int sectorSize = DataSectorSize) => (long)sectors * sectorSize;
 
     /// <summary>
-    /// Converts byte count to total number of required sectors (rounding up).
+    /// Converts byte count to total number of required sectors (rounding up). A count that does not fit in an
+    /// <see cref="int"/> returns <see cref="int.MaxValue"/> rather than wrapping to a small or negative number.
     /// </summary>
     public static int BytesToSectors(long bytes, int sectorSize = DataSectorSize)
     {
@@ -177,6 +178,9 @@ public static class OpticalConstants
             throw new ArgumentOutOfRangeException(nameof(sectorSize), "Sector size must be positive.");
         }
         if (bytes <= 0) return 0;
-        return (int)((bytes + sectorSize - 1) / sectorSize);
+
+        // Divide first: bytes + sectorSize - 1 overflows for sizes near long.MaxValue.
+        long sectors = bytes / sectorSize + (bytes % sectorSize != 0 ? 1 : 0);
+        return sectors > int.MaxValue ? int.MaxValue : (int)sectors;
     }
 }
