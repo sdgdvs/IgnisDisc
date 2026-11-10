@@ -8,9 +8,17 @@ namespace CdBurner.Hardware.Simulation;
 /// Virtual optical drive recorder implementation of <see cref="IDiscRecorderBackend"/>
 /// simulating an Ignis virtual DVD/CD-RW optical drive.
 /// </summary>
-public class VirtualDiscRecorder : IDiscRecorderBackend
+public class VirtualDiscRecorder : IDiscRecorderBackend, IDriveMediaReportProvider
 {
     private readonly object _lock = new();
+
+    /// <summary>
+    /// What the drive answers to READ FORMAT CAPACITIES / GET PERFORMANCE; empty unless a test sets it (for example
+    /// from <see cref="Scsi.MmcMediaReport.Query"/> over a <see cref="VirtualMmcDrive"/>).
+    /// </summary>
+    public DriveMediaReport SimulatedDriveMediaReport { get; set; } = DriveMediaReport.Empty;
+
+    public DriveMediaReport ReadDriveMediaReport() => SimulatedDriveMediaReport;
     private string? _exclusiveClientName;
     private VirtualDiscMedium? _trayMedium;
     private bool _disposed;

@@ -74,6 +74,15 @@ public static class DiscMediaTypeExtensions
 
     public static bool IsMultiLayer(this DiscMediaType media) => media.GetLayerCount() > 1;
 
+    /// <summary>
+    /// Media whose usable size depends on how they are formatted (DVD+RW, DVD-RW restricted overwrite, DVD-RAM,
+    /// BD-RE, BD-R with spare areas). On other media a drive's "formatted capacity" only echoes what is recorded.
+    /// </summary>
+    public static bool IsFormattable(this DiscMediaType media) => media is
+        DiscMediaType.DvdPlusRw or DiscMediaType.DvdMinusRw or DiscMediaType.DvdRam or
+        DiscMediaType.BdR or DiscMediaType.BdRe or DiscMediaType.BdRDualLayer or DiscMediaType.BdReDualLayer or
+        DiscMediaType.BdxlRTripleLayer or DiscMediaType.BdxlRQuadLayer or DiscMediaType.BdxlReTripleLayer;
+
     public static bool IsRewritable(this DiscMediaType media) => media switch
     {
         DiscMediaType.CdRw or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam or

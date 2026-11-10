@@ -315,6 +315,12 @@ public static class CliCommandRunner
 
         var status = recorder.WithManufacturerId(recorder.QueryMediaStatus());
         var caps = recorder.GetCapabilities();
+        // Straight from the drive (read-only): formatted size and the write speeds it offers for this disc.
+        var driveReport = status.MediaPresent && recorder is IDriveMediaReportProvider reportProvider
+            ? reportProvider.ReadDriveMediaReport()
+            : DriveMediaReport.Empty;
+        // Only where formatting decides the usable size; on a CD-RW the drive just echoes the recorded data.
+        var formatted = status.MediaType.IsFormattable() ? driveReport.FormattedCapacity : null;
         // Overwrite-only media (DVD+RW, DVD-RAM) are never "finalized": each burn rewrites them from the start.
         bool isFinalized = status.MediaPresent && !status.IsBlank && !status.IsAppendable && !status.IsOverwriteOnly;
         long usedBytes = status.UsedSectors > 0
@@ -356,6 +362,27 @@ public static class CliCommandRunner
                     multiplier = s.Multiplier,
                     bytesPerSecond = s.BytesPerSecond,
                     mediaType = s.MediaType.ToString()
+                }).ToList(),
+                formattedCapacity = formatted == null ? null : new
+                {
+                    state = formatted.StateName,
+                    blocks = formatted.Blocks,
+                    blockLength = formatted.BlockLength,
+                    bytes = formatted.Bytes,
+                    formats = formatted.Formats.Select(f => new
+                    {
+                        formatType = $"0x{f.FormatType:X2}",
+                        blocks = f.Blocks,
+                        typeParameter = f.TypeParameter
+                    }).ToList()
+                },
+                writeSpeedsFromDrive = driveReport.WriteSpeeds.Select(s => new
+                {
+                    multiplier = s.Multiplier(status.MediaType),
+                    kilobytesPerSecond = s.KilobytesPerSecond,
+                    bytesPerSecond = s.BytesPerSecond,
+                    endLba = s.EndLba,
+                    exact = s.Exact
                 }).ToList()
             };
 
@@ -389,6 +416,16 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Used Capacity:         {FormatBytes(usedBytes)} ({status.UsedSectors:N0} sectors)");
             stdout.WriteLine($"  Sessions:              {status.SessionCount}");
             stdout.WriteLine($"  Next Writable LBA:     {status.NextWritableLba:N0}");
+            if (formatted != null)
+            {
+                stdout.WriteLine(formatted.State == FormattedCapacityState.Formatted
+                    ? $"  Formatted Capacity:    {FormatBytes(formatted.Bytes)} ({formatted.Blocks:N0} blocks of {formatted.BlockLength})"
+                    : $"  Formattable Up To:     {FormatBytes(formatted.Bytes)} ({formatted.Blocks:N0} blocks, not formatted)");
+            }
+            if (driveReport.WriteSpeeds.Count > 0)
+            {
+                stdout.WriteLine($"  Drive's Write Speeds:  {string.Join(", ", driveReport.WriteSpeeds.Select(s => $"{s.Multiplier(status.MediaType):0.#}x"))}");
+            }
         }
 
         return 0;

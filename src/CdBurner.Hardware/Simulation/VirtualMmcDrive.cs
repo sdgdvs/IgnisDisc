@@ -190,6 +190,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
             0xBE => ReadCd(cdb, dataBuffer),
             0x28 => Read10(cdb, dataBuffer),
             0x43 => ReadToc(cdb, dataBuffer),
+            MmcMediaReport.OpCodeReadFormatCapacities => CannedResponse(FormatCapacitiesResponse, dataBuffer),
+            MmcMediaReport.OpCodeGetPerformance when cdb.Length >= 11 && cdb[10] == MmcMediaReport.PerformanceTypeWriteSpeed
+                => CannedResponse(WriteSpeedPerformanceResponse, dataBuffer),
             0xBB => SetCdSpeed(cdb),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
@@ -197,6 +200,23 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     public void Dispose()
     {
+    }
+
+    /// <summary>Raw READ FORMAT CAPACITIES reply; null makes the drive refuse the command (5/20/00), as many do for write-once discs.</summary>
+    public byte[]? FormatCapacitiesResponse { get; set; }
+
+    /// <summary>Raw GET PERFORMANCE type 03h reply; null makes the drive refuse it.</summary>
+    public byte[]? WriteSpeedPerformanceResponse { get; set; }
+
+    private ScsiExecutionResult CannedResponse(byte[]? response, Span<byte> data)
+    {
+        if (response == null)
+        {
+            return Sense(0x05, 0x20, 0x00);
+        }
+        int length = Math.Min(response.Length, data.Length);
+        response.AsSpan(0, length).CopyTo(data);
+        return Good((uint)length);
     }
 
     private ScsiExecutionResult TestUnitReady()

@@ -192,6 +192,72 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task MediaInfo_Json_AddsTheDrivesFormattedCapacityAndWriteSpeeds()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankBluRay(DiscMediaType.BdRe);
+        _recorder.InsertMedia(medium);
+        _recorder.SimulatedDriveMediaReport = new DriveMediaReport(
+            new FormattedCapacityInfo(11_826_176, 2048, FormattedCapacityState.Formatted,
+                [new FormattableCapacity(0x30, 11_826_176, 0x3000)]),
+            [new DriveWriteSpeed(8_991, 11_826_175, 8_991, Exact: true)]);
+
+        var (stdout, stderr) = CreateStringWriters();
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "media-info", "--drive", "VDRV-01", "--json" }, stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ParseJsonOutput(stdout);
+        var formatted = doc.RootElement.GetProperty("formattedCapacity");
+        Assert.Equal("formatted", formatted.GetProperty("state").GetString());
+        Assert.Equal(11_826_176L * 2048, formatted.GetProperty("bytes").GetInt64());
+        Assert.Equal("0x30", formatted.GetProperty("formats")[0].GetProperty("formatType").GetString());
+        var speed = doc.RootElement.GetProperty("writeSpeedsFromDrive")[0];
+        Assert.Equal(2.0, speed.GetProperty("multiplier").GetDouble());
+        Assert.Equal(8_991, speed.GetProperty("kilobytesPerSecond").GetInt32());
+        Assert.True(speed.GetProperty("exact").GetBoolean());
+    }
+
+    [Fact]
+    public async Task MediaInfo_OnACdRw_LeavesOutFormattedCapacity()
+    {
+        // The real GP60NB50 reports the recorded size of a CD-RW as "formatted"; that is not a capacity.
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+        _recorder.SimulatedDriveMediaReport = new DriveMediaReport(
+            new FormattedCapacityInfo(10_066, 2048, FormattedCapacityState.Formatted, []),
+            [new DriveWriteSpeed(1_764, 359_849, 1_764, Exact: false)]);
+
+        var (stdout, stderr) = CreateStringWriters();
+        await CliCommandRunner.RunAsync(
+            new[] { "media-info", "--drive", "VDRV-01", "--json" }, stdout, stderr, _deviceService, _burnEngine);
+
+        using var doc = ParseJsonOutput(stdout);
+        Assert.False(doc.RootElement.TryGetProperty("formattedCapacity", out _)); // empty values are left out of the JSON
+        Assert.Equal(10.0, doc.RootElement.GetProperty("writeSpeedsFromDrive")[0].GetProperty("multiplier").GetDouble());
+
+        // Plain-text output names the speed too.
+        var (text, _) = CreateStringWriters();
+        await CliCommandRunner.RunAsync(new[] { "media-info", "--drive", "VDRV-01" }, text, stderr, _deviceService, _burnEngine);
+        Assert.Contains("Drive's Write Speeds:  10x", text.ToString());
+        Assert.DoesNotContain("Formatted Capacity", text.ToString());
+    }
+
+    [Fact]
+    public async Task MediaInfo_WhenTheDriveSaysNothing_HasEmptyFields()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+
+        var (stdout, stderr) = CreateStringWriters();
+        await CliCommandRunner.RunAsync(
+            new[] { "media-info", "--drive", "VDRV-01", "--json" }, stdout, stderr, _deviceService, _burnEngine);
+
+        using var doc = ParseJsonOutput(stdout);
+        Assert.False(doc.RootElement.TryGetProperty("formattedCapacity", out _)); // empty values are left out of the JSON
+        Assert.Equal(0, doc.RootElement.GetProperty("writeSpeedsFromDrive").GetArrayLength());
+    }
+
+    [Fact]
     public async Task MediaInfo_NoMediaPresent_ReturnsZeroAndReportsMediaPresentFalse()
     {
         // Empty drive

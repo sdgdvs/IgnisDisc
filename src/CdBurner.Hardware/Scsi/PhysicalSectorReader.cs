@@ -659,6 +659,34 @@ public static partial class PhysicalSectorReader
         }
     }
 
+    /// <summary>
+    /// Asks the drive for the disc's formatted capacity and its own write speeds (<see cref="MmcMediaReport"/>).
+    /// Read-only; returns <see cref="DriveMediaReport.Empty"/> when pass-through is not available. Never throws.
+    /// </summary>
+    public static DriveMediaReport ProbeDriveMediaReport(string? volumePath)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return DriveMediaReport.Empty;
+        }
+
+        try
+        {
+            using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+            if (handle == null || handle.IsInvalid)
+            {
+                return DriveMediaReport.Empty;
+            }
+
+            using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+            return MmcMediaReport.Query(transport);
+        }
+        catch
+        {
+            return DriveMediaReport.Empty;
+        }
+    }
+
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> C2SupportCache =
         new(StringComparer.OrdinalIgnoreCase);
 
