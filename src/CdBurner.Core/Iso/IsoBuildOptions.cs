@@ -18,6 +18,8 @@ namespace CdBurner.Core.Iso;
 /// <param name="WriteSha256Manifest">Adds a <c>SHA256SUMS</c> file (GNU coreutils format) to the disc root listing
 /// every other file. Files are hashed while they stream into the image, so the source is read only once. First session
 /// only.</param>
+/// <param name="WriteBlake3Manifest">Adds a <c>BLAKE3SUMS</c> file (<c>b3sum</c> format) the same way, using IgnisDisc's
+/// built-in BLAKE3. Can be combined with <paramref name="WriteSha256Manifest"/>; the source is still read once.</param>
 public record IsoBuildOptions(
     string VolumeLabel = "CDBURNER_DISC",
     bool IncludeIso9660 = true,
@@ -28,5 +30,6 @@ public record IsoBuildOptions(
     string ApplicationId = "IGNISDISC OPTICAL STUDIO",
     ElToritoBootConfiguration? BootConfiguration = null,
     DateTime? FixedTimestampUtc = null,
-    bool WriteSha256Manifest = false);
+    bool WriteSha256Manifest = false,
+    bool WriteBlake3Manifest = false);
 

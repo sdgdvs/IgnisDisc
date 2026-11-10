@@ -26,6 +26,7 @@ public class DataBurnViewModel : ObservableObject
     private bool _closeDisc = true;
     private bool _verifyAfterBurn = false;
     private bool _writeSha256Manifest = false;
+    private bool _writeBlake3Manifest = false;
     private bool _ejectAfterBurn = false;
     private bool _bufferUnderrunFreeEnabled = true;
     private bool _isBootableEnabled = false;
@@ -113,6 +114,15 @@ public class DataBurnViewModel : ObservableObject
     {
         get => _writeSha256Manifest;
         set => SetProperty(ref _writeSha256Manifest, value);
+    }
+
+    /// <summary>
+    /// Whether to add a BLAKE3SUMS file to the disc root (checkable later with the official b3sum tool).
+    /// </summary>
+    public bool WriteBlake3Manifest
+    {
+        get => _writeBlake3Manifest;
+        set => SetProperty(ref _writeBlake3Manifest, value);
     }
 
     /// <summary>
@@ -957,7 +967,8 @@ public class DataBurnViewModel : ObservableObject
             IncludeUdf: includeUdf,
             UdfRevision: udfRev,
             BootConfiguration: bootConfig,
-            WriteSha256Manifest: WriteSha256Manifest);
+            WriteSha256Manifest: WriteSha256Manifest,
+            WriteBlake3Manifest: WriteBlake3Manifest);
     }
 
     private ElToritoBootConfiguration? BuildBootConfiguration()

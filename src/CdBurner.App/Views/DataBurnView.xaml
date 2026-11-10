@@ -112,6 +112,12 @@
                               AutomationProperties.Name="Add SHA256SUMS"
                               ToolTip="Adds a SHA256SUMS file to the disc root. Years from now, 'sha256sum -c SHA256SUMS' (Linux/macOS) or PowerShell can check every file without IgnisDisc."
                               IsChecked="{Binding WriteSha256Manifest}"
+                              VerticalAlignment="Center"
+                              Margin="0,0,16,0" />
+                    <CheckBox Content="Add BLAKE3SUMS"
+                              AutomationProperties.Name="Add BLAKE3SUMS"
+                              ToolTip="Adds a BLAKE3SUMS file to the disc root. 'b3sum -c BLAKE3SUMS' (the official BLAKE3 tool) can check every file later. Can be used together with SHA256SUMS."
+                              IsChecked="{Binding WriteBlake3Manifest}"
                               VerticalAlignment="Center" />
                 </StackPanel>
             </Grid>

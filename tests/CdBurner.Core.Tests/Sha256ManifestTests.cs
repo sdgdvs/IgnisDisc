@@ -175,6 +175,48 @@ public class Sha256ManifestTests
     }
 
     [Fact]
+    public void BothManifests_EachMatchesTheFilesAndNeitherListsTheOther_SourceStillReadOnce()
+    {
+        for (int seed = 40; seed <= 55; seed++)
+        {
+            var counter = new ReadCounter();
+            var root = CreateTree(seed, counter);
+            var options = new IsoBuildOptions(WriteSha256Manifest: true, WriteBlake3Manifest: true);
+            using var stream = IsoUdfImageBuilder.BuildToMemoryStream(root, options);
+            Assert.All(counter.Opens.Values, opens => Assert.True(opens <= 1));
+
+            using var reader = IsoImageReader.FromStream(new MemoryStream(stream.ToArray()));
+            var sha = ParseManifest(reader.ReadFileBytes("/SHA256SUMS"));
+            var b3 = ParseManifest(reader.ReadFileBytes("/BLAKE3SUMS"));
+
+            Assert.Equal(sha.Select(e => e.Path), b3.Select(e => e.Path));
+            Assert.DoesNotContain(sha, e => e.Path is "SHA256SUMS" or "BLAKE3SUMS");
+            Assert.Equal(reader.AllFiles.Count - 2, b3.Count);
+            foreach (var (hash, path) in b3)
+            {
+                byte[] bytes = reader.ReadFileBytes("/" + path);
+                Assert.Equal(hash, Convert.ToHexString(CdBurner.Core.Utilities.Blake3Hasher.HashData(bytes)).ToLowerInvariant());
+            }
+            foreach (var (hash, path) in sha)
+            {
+                Assert.Equal(hash, Convert.ToHexString(SHA256.HashData(reader.ReadFileBytes("/" + path))).ToLowerInvariant());
+            }
+        }
+    }
+
+    [Fact]
+    public void Blake3Only_EmptyFileGetsTheBlake3OfNoBytes()
+    {
+        var root = CompilationDirectory.CreateRoot();
+        root.AddFile("empty.txt", Array.Empty<byte>());
+        using var stream = IsoUdfImageBuilder.BuildToMemoryStream(root, new IsoBuildOptions(WriteBlake3Manifest: true));
+        using var reader = IsoImageReader.FromStream(new MemoryStream(stream.ToArray()));
+        Assert.Null(reader.FindFile("/SHA256SUMS"));
+        Assert.Contains(("af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262", "empty.txt"),
+            ParseManifest(reader.ReadFileBytes("/BLAKE3SUMS")));
+    }
+
+    [Fact]
     public void WithoutTheOption_NoManifestIsAdded()
     {
         var root = CreateTree(4);

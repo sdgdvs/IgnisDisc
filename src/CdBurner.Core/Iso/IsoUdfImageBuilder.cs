@@ -119,6 +119,48 @@ public static class IsoUdfImageBuilder
     /// <summary>Name of the root hash list written when <see cref="IsoBuildOptions.WriteSha256Manifest"/> is set.</summary>
     public const string Sha256ManifestFileName = "SHA256SUMS";
 
+    /// <summary>Name of the root hash list written when <see cref="IsoBuildOptions.WriteBlake3Manifest"/> is set.</summary>
+    public const string Blake3ManifestFileName = "BLAKE3SUMS";
+
+    /// <summary>One file's hash, fed as its bytes stream into the image.</summary>
+    private interface IFileHasher : IDisposable
+    {
+        void Append(byte[] buffer, int offset, int count);
+        byte[] Finish();
+    }
+
+    private sealed class Sha256FileHasher : IFileHasher
+    {
+        private readonly System.Security.Cryptography.IncrementalHash _hash =
+            System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        public void Append(byte[] buffer, int offset, int count) => _hash.AppendData(buffer, offset, count);
+        public byte[] Finish() => _hash.GetHashAndReset();
+        public void Dispose() => _hash.Dispose();
+    }
+
+    private sealed class Blake3FileHasher : IFileHasher
+    {
+        private readonly CdBurner.Core.Utilities.Blake3Hasher _hash = new();
+        public void Append(byte[] buffer, int offset, int count) => _hash.Append(buffer, offset, count);
+        public byte[] Finish() => _hash.GetHashAndReset();
+        public void Dispose() { }
+    }
+
+    /// <summary>One root hash list: its file name, hash kind, layout node and the hashes collected while writing.</summary>
+    private sealed class ManifestSpec
+    {
+        public ManifestSpec(string fileName, Func<IFileHasher> createHasher)
+        {
+            FileName = fileName;
+            CreateHasher = createHasher;
+        }
+
+        public string FileName { get; }
+        public Func<IFileHasher> CreateHasher { get; }
+        public FileLayoutNode? Node { get; set; }
+        public Dictionary<FileLayoutNode, byte[]> Hashes { get; } = new(ReferenceEqualityComparer.Instance);
+    }
+
     #region Layout and Serialization Engine
 
     private sealed class LayoutContext
@@ -174,14 +216,11 @@ public static class IsoUdfImageBuilder
                 : DateTime.UtcNow;
         }
 
-        /// <summary>The root <c>SHA256SUMS</c> file node when <see cref="IsoBuildOptions.WriteSha256Manifest"/> is set.</summary>
-        public FileLayoutNode? ManifestNode { get; set; }
+        /// <summary>The root hash lists being written (<c>SHA256SUMS</c>, <c>BLAKE3SUMS</c>), in the order chosen.</summary>
+        public List<ManifestSpec> Manifests { get; } = new();
 
-        /// <summary>Every other file and the path it is listed under in the manifest, in manifest line order.</summary>
+        /// <summary>Every other file and the path it is listed under in the manifests, in manifest line order.</summary>
         public List<(FileLayoutNode File, string Path)> ManifestEntries { get; } = new();
-
-        /// <summary>SHA-256 of each file, filled in while its data streams into the image.</summary>
-        public Dictionary<FileLayoutNode, byte[]> FileHashes { get; } = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>
         /// The one time used for every volume, descriptor and integrity timestamp in this image: the fixed time when
@@ -244,10 +283,7 @@ public static class IsoUdfImageBuilder
 
             // 1. Build hierarchy of layout nodes
             var rootLayout = BuildNodeHierarchy(root);
-            if (options.WriteSha256Manifest)
-            {
-                AddManifestNode(ctx, rootLayout, sessionStartLba);
-            }
+            AddManifestNodes(ctx, rootLayout, sessionStartLba);
 
             // 2. Perform Breadth-First traversal to assign 1-based directory numbers
             var queue = new Queue<DirectoryLayoutNode>();
@@ -299,9 +335,9 @@ public static class IsoUdfImageBuilder
 
             // 2b. Resolve unique ISO 9660 / Joliet / UDF identifiers per directory (handles truncation collisions)
             AssignUniqueNames(ctx);
-            if (ctx.ManifestNode != null)
+            if (ctx.Manifests.Count > 0)
             {
-                SizeManifest(ctx);
+                SizeManifests(ctx);
             }
 
             // 3. Pre-calculate extent sector requirements for each directory
@@ -472,11 +508,11 @@ public static class IsoUdfImageBuilder
                 }
             }
 
-            // Assign file extents. The SHA256SUMS extent comes after every other file: the image is written in LBA
-            // order, so each file has streamed through its hash by the time the manifest's bytes are needed.
-            var extentOrder = ctx.ManifestNode == null
+            // Assign file extents. Hash-list extents come after every other file: the image is written in LBA order, so
+            // each file has streamed through its hashes by the time a manifest's bytes are needed.
+            var extentOrder = ctx.Manifests.Count == 0
                 ? ctx.AllFiles
-                : ctx.AllFiles.Where(f => f != ctx.ManifestNode).Append(ctx.ManifestNode).ToList();
+                : ctx.AllFiles.Where(f => !IsManifestNode(ctx, f)).Concat(ctx.Manifests.Select(m => m.Node!)).ToList();
             foreach (var file in extentOrder)
             {
                 bool isImportedFromPriorSession = sessionStartLba > 0
@@ -649,39 +685,60 @@ public static class IsoUdfImageBuilder
         }
 
 
-        private static void AddManifestNode(LayoutContext ctx, DirectoryLayoutNode rootLayout, int sessionStartLba)
+        private static void AddManifestNodes(LayoutContext ctx, DirectoryLayoutNode rootLayout, int sessionStartLba)
         {
+            var wanted = new List<ManifestSpec>();
+            if (ctx.Options.WriteSha256Manifest)
+            {
+                wanted.Add(new ManifestSpec(Sha256ManifestFileName, () => new Sha256FileHasher()));
+            }
+            if (ctx.Options.WriteBlake3Manifest)
+            {
+                wanted.Add(new ManifestSpec(Blake3ManifestFileName, () => new Blake3FileHasher()));
+            }
+            if (wanted.Count == 0)
+            {
+                return;
+            }
+
             if (sessionStartLba > 0)
             {
                 throw new NotSupportedException(
-                    $"A {Sha256ManifestFileName} file can only be written to the first session of a disc: files from earlier sessions are not read again to hash them.");
-            }
-            bool taken = rootLayout.Files.Any(f => string.Equals(f.SourceFile.Name, Sha256ManifestFileName, StringComparison.OrdinalIgnoreCase))
-                         || rootLayout.SubDirectories.Any(d => string.Equals(d.SourceDir.Name, Sha256ManifestFileName, StringComparison.OrdinalIgnoreCase));
-            if (taken)
-            {
-                throw new InvalidOperationException(
-                    $"The disc root already has an item named '{Sha256ManifestFileName}'. Rename it or turn off the {Sha256ManifestFileName} option.");
+                    $"A {wanted[0].FileName} file can only be written to the first session of a disc: files from earlier sessions are not read again to hash them.");
             }
 
-            var manifestFile = new CompilationFile(Sha256ManifestFileName, 0, () => new MemoryStream(BuildManifestBytes(ctx), writable: false))
+            foreach (var spec in wanted)
             {
-                LastWriteTimeUtc = ctx.BuildTimeUtc
-            };
-            var node = new FileLayoutNode(manifestFile, rootLayout);
-            rootLayout.Files.Add(node);
-            ctx.ManifestNode = node;
+                bool taken = rootLayout.Files.Any(f => string.Equals(f.SourceFile.Name, spec.FileName, StringComparison.OrdinalIgnoreCase))
+                             || rootLayout.SubDirectories.Any(d => string.Equals(d.SourceDir.Name, spec.FileName, StringComparison.OrdinalIgnoreCase));
+                if (taken)
+                {
+                    throw new InvalidOperationException(
+                        $"The disc root already has an item named '{spec.FileName}'. Rename it or turn off the {spec.FileName} option.");
+                }
+
+                var manifestFile = new CompilationFile(spec.FileName, 0, () => new MemoryStream(BuildManifestBytes(ctx, spec), writable: false))
+                {
+                    LastWriteTimeUtc = ctx.BuildTimeUtc
+                };
+                spec.Node = new FileLayoutNode(manifestFile, rootLayout);
+                rootLayout.Files.Add(spec.Node);
+                ctx.Manifests.Add(spec);
+            }
         }
 
+        public static bool IsManifestNode(LayoutContext ctx, FileLayoutNode file) => ctx.Manifests.Any(m => m.Node == file);
+
         /// <summary>
-        /// Fixes the manifest's size before extents are laid out: every line is 64 hex digits, two spaces, the path and
-        /// a newline, so the size is known before any file has been hashed.
+        /// Fixes each manifest's size before extents are laid out: every line is 64 hex digits (SHA-256 and BLAKE3 are
+        /// both 32 bytes), two spaces, the path and a newline, so the size is known before any file has been hashed.
+        /// Manifests do not list each other.
         /// </summary>
-        private static void SizeManifest(LayoutContext ctx)
+        private static void SizeManifests(LayoutContext ctx)
         {
             foreach (var file in ctx.AllFiles)
             {
-                if (file != ctx.ManifestNode)
+                if (!IsManifestNode(ctx, file))
                 {
                     ctx.ManifestEntries.Add((file, ManifestPathOf(ctx, file)));
                 }
@@ -693,8 +750,11 @@ public static class IsoUdfImageBuilder
             {
                 size += Encoding.UTF8.GetByteCount(FormatManifestLine(new string('0', 64), entry.Path));
             }
-            ctx.ManifestNode!.SourceFile.SizeBytes = size;
-            ctx.ManifestNode.SectorCount = ctx.ManifestNode.SourceFile.RequiredSectors;
+            foreach (var spec in ctx.Manifests)
+            {
+                spec.Node!.SourceFile.SizeBytes = size;
+                spec.Node.SectorCount = spec.Node.SourceFile.RequiredSectors;
+            }
         }
 
         /// <summary>The path a file is listed under: the names a reader sees when the disc is mounted.</summary>
@@ -729,29 +789,30 @@ public static class IsoUdfImageBuilder
             return hashHex + "  " + path + "\n";
         }
 
-        private static byte[] BuildManifestBytes(LayoutContext ctx)
+        private static byte[] BuildManifestBytes(LayoutContext ctx, ManifestSpec spec)
         {
+            byte[] emptyHash = spec.CreateHasher().Finish();
             var sb = new StringBuilder();
             foreach (var (file, path) in ctx.ManifestEntries)
             {
                 byte[] hash;
                 if (file.SourceFile.SizeBytes <= 0)
                 {
-                    hash = System.Security.Cryptography.SHA256.HashData(ReadOnlySpan<byte>.Empty);
+                    hash = emptyHash;
                 }
-                else if (!ctx.FileHashes.TryGetValue(file, out hash!))
+                else if (!spec.Hashes.TryGetValue(file, out hash!))
                 {
                     throw new InvalidOperationException(
-                        $"Internal layout error: {Sha256ManifestFileName} was due before '{path}' had been written and hashed.");
+                        $"Internal layout error: {spec.FileName} was due before '{path}' had been written and hashed.");
                 }
                 sb.Append(FormatManifestLine(Convert.ToHexString(hash).ToLowerInvariant(), path));
             }
 
             byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
-            if (bytes.Length != ctx.ManifestNode!.SourceFile.SizeBytes)
+            if (bytes.Length != spec.Node!.SourceFile.SizeBytes)
             {
                 throw new InvalidOperationException(
-                    $"Internal layout error: {Sha256ManifestFileName} is {bytes.Length} bytes, but {ctx.ManifestNode.SourceFile.SizeBytes} were reserved.");
+                    $"Internal layout error: {spec.FileName} is {bytes.Length} bytes, but {spec.Node.SourceFile.SizeBytes} were reserved.");
             }
             return bytes;
         }
@@ -1037,13 +1098,23 @@ public static class IsoUdfImageBuilder
             }
             else
             {
-                using var hasher = ctx.ManifestNode != null && item.File != ctx.ManifestNode
-                    ? System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256)
-                    : null;
-                await WriteFilePayload(stream, item.File!, zeroSector, isAsync, cancellationToken, hasher).ConfigureAwait(false);
-                if (hasher != null)
+                IFileHasher[] hashers = ctx.Manifests.Count == 0 || LayoutContext.IsManifestNode(ctx, item.File!)
+                    ? Array.Empty<IFileHasher>()
+                    : ctx.Manifests.Select(m => m.CreateHasher()).ToArray();
+                try
                 {
-                    ctx.FileHashes[item.File!] = hasher.GetHashAndReset();
+                    await WriteFilePayload(stream, item.File!, zeroSector, isAsync, cancellationToken, hashers).ConfigureAwait(false);
+                    for (int h = 0; h < hashers.Length; h++)
+                    {
+                        ctx.Manifests[h].Hashes[item.File!] = hashers[h].Finish();
+                    }
+                }
+                finally
+                {
+                    foreach (var hasher in hashers)
+                    {
+                        hasher.Dispose();
+                    }
                 }
                 writtenLba += item.File!.SectorCount;
 
@@ -1086,7 +1157,7 @@ public static class IsoUdfImageBuilder
         byte[] zeroSector,
         bool isAsync,
         CancellationToken cancellationToken,
-        System.Security.Cryptography.IncrementalHash? hasher = null)
+        IFileHasher[]? hashers = null)
     {
         long expected = file.SourceFile.SizeBytes;
         long remaining = expected;
@@ -1110,7 +1181,13 @@ public static class IsoUdfImageBuilder
                         $"Source file '{file.SourceFile.Name}' ended after {expected - remaining:N0} of {expected:N0} bytes. It may have been modified after it was added to the compilation.");
                 }
 
-                hasher?.AppendData(transferBuf, 0, read);
+                if (hashers != null)
+                {
+                    foreach (var hasher in hashers)
+                    {
+                        hasher.Append(transferBuf, 0, read);
+                    }
+                }
                 if (isAsync)
                 {
                     await stream.WriteAsync(transferBuf.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
