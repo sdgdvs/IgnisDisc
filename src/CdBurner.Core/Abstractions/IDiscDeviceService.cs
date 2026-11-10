@@ -310,6 +310,19 @@ public class AudioBurnOptions
     public bool UseDiscAtOnce { get; init; } = true;
     public int PreGapFrames { get; init; } = OpticalConstants.CdLeadInFrames; // default 150 frames = 2.0s
     public byte[]? CdTextBytes { get; init; }
+
+    /// <summary>
+    /// 13-digit UPC/EAN written into the disc's sub-channel. Only the direct drive-command writer can write it;
+    /// the Windows burning service ignores it.
+    /// </summary>
+    public string? MediaCatalogNumber { get; init; }
+
+    /// <summary>
+    /// Keep a CUE sheet's INDEX 00 marks and the audio before track 1 (see
+    /// <see cref="AudioTrackSource.PreGapPcmStreamFactory"/>). Set only for the direct drive-command writer: the
+    /// Windows burning service writes every pre-gap as silence and would lose that audio.
+    /// </summary>
+    public bool KeepIndexMarks { get; init; }
 }
 
 /// <summary>
@@ -329,4 +342,20 @@ public class AudioTrackSource
     public long TotalPcmBytes { get; init; }
     public Stream? PcmStream { get; init; }
     public Func<Stream>? PcmStreamFactory { get; init; }
+
+    /// <summary>
+    /// Audio that belongs in the last <see cref="PreGapAudioFrames"/> frames of this track's pre-gap (its INDEX 00
+    /// area): the count-in before a track, or hidden audio before track 1. Written only by the direct
+    /// drive-command writer; other engines ignore it.
+    /// </summary>
+    public Func<Stream>? PreGapPcmStreamFactory { get; init; }
+
+    /// <summary>Length of the pre-gap audio in CD frames (1/75 s).</summary>
+    public int PreGapAudioFrames { get; init; }
+
+    /// <summary>The track was mastered with pre-emphasis (CUE "FLAGS PRE").</summary>
+    public bool PreEmphasis { get; init; }
+
+    /// <summary>Digital copying of the track is permitted (CUE "FLAGS DCP").</summary>
+    public bool CopyPermitted { get; init; }
 }

@@ -157,6 +157,21 @@
                                           VerticalAlignment="Center"
                                           Margin="0,0,12,0" />
 
+                                <CheckBox Content="Direct drive commands (experimental)"
+                                          AutomationProperties.Name="Direct drive commands (experimental)"
+                                          IsChecked="{Binding UseDirectDriveCommands}"
+                                          ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer. Writes CD-Text, ISRC and catalog codes, pre-emphasis flags and CUE gap marks, then reads the disc back to check it. Needs a blank CD-R or CD-RW and a drive that reports Session-at-Once."
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0" />
+
+                                <CheckBox Content="Test write first"
+                                          AutomationProperties.Name="Test write first"
+                                          IsChecked="{Binding TestWriteFirst}"
+                                          IsEnabled="{Binding UseDirectDriveCommands}"
+                                          ToolTip="Run the whole burn with the laser off before the real one. Most drives then need the disc reloaded before they record it: the burn stops after the test, and you burn again with this switched off."
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0" />
+
                                 <TextBlock Text="Crossfade (s):"
                                            VerticalAlignment="Center"
                                            Foreground="{DynamicResource TextSecondaryBrush}"

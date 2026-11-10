@@ -209,14 +209,53 @@ public class AudioCdBurnService
                 }
             }
 
+            // INDEX 00 marks for the direct drive-command writer: the tail of the previous track's audio becomes
+            // this track's pre-gap audio. The bytes on the disc stay in the same order; only the track mark moves.
+            // Not done with a crossfade (track lengths have changed) or when it would leave a track under 4 seconds.
+            var gapAudio = new (byte[] Source, int Offset, int Frames)?[preparedTracks.Length];
+            var audibleLength = new int[preparedTracks.Length];
+            for (int i = 0; i < preparedTracks.Length; i++)
+            {
+                audibleLength[i] = preparedTracks[i].Length;
+            }
+            if (options.KeepIndexMarks && compilation.CrossfadeSeconds <= 0)
+            {
+                const int minimumTrackFrames = 4 * OpticalConstants.AudioFramesPerSecond;
+                for (int i = 1; i < preparedTracks.Length; i++)
+                {
+                    int lead = compilation.Tracks[i].Index00LeadFrames;
+                    int previousFrames = preparedTracks[i - 1].Length / OpticalConstants.RawSectorSize;
+                    if (lead > 0 && previousFrames - lead >= minimumTrackFrames)
+                    {
+                        audibleLength[i - 1] = (previousFrames - lead) * OpticalConstants.RawSectorSize;
+                        gapAudio[i] = (preparedTracks[i - 1], audibleLength[i - 1], lead);
+                    }
+                }
+            }
+
             for (int i = 0; i < preparedTracks.Length; i++)
             {
                 var trackItem = compilation.Tracks[i];
                 byte[] pcmBytes = preparedTracks[i];
+                int pcmLength = audibleLength[i];
                 int frames = pcmBytes.Length / OpticalConstants.RawSectorSize;
                 trackItem.DurationFrames = frames;
                 int preGap = i > 0 ? Math.Max(0, trackItem.PreGapFrames) : Math.Max(0, trackItem.PreGapFrames - OpticalConstants.CdLeadInFrames);
                 totalRequiredFrames += frames + preGap;
+
+                Func<Stream>? preGapFactory = null;
+                int preGapAudioFrames = 0;
+                if (gapAudio[i] is { } gap)
+                {
+                    preGapFactory = () => new MemoryStream(gap.Source, gap.Offset, gap.Frames * OpticalConstants.RawSectorSize, writable: false);
+                    preGapAudioFrames = gap.Frames;
+                }
+                else if (i == 0 && options.KeepIndexMarks && trackItem is { HiddenAudioFrames: > 0, HiddenAudioPcmStreamFactory: not null })
+                {
+                    preGapFactory = trackItem.HiddenAudioPcmStreamFactory;
+                    preGapAudioFrames = trackItem.HiddenAudioFrames;
+                    totalRequiredFrames += preGapAudioFrames;
+                }
 
                 audioTrackSources.Add(new AudioTrackSource
                 {
@@ -228,10 +267,14 @@ public class AudioCdBurnService
                     Composer = trackItem.Composer ?? compilation.Composer,
                     Isrc = trackItem.Isrc,
                     PreGapFrames = trackItem.PreGapFrames,
-                    TotalPcmBytes = pcmBytes.Length,
-                    Duration = TimeSpan.FromSeconds((double)frames / OpticalConstants.AudioFramesPerSecond),
-                    PcmStream = new MemoryStream(pcmBytes, writable: false),
-                    PcmStreamFactory = () => new MemoryStream(pcmBytes, writable: false)
+                    TotalPcmBytes = pcmLength,
+                    Duration = TimeSpan.FromSeconds((double)pcmLength / OpticalConstants.RawSectorSize / OpticalConstants.AudioFramesPerSecond),
+                    PcmStream = new MemoryStream(pcmBytes, 0, pcmLength, writable: false),
+                    PcmStreamFactory = () => new MemoryStream(pcmBytes, 0, pcmLength, writable: false),
+                    PreGapPcmStreamFactory = preGapFactory,
+                    PreGapAudioFrames = preGapAudioFrames,
+                    PreEmphasis = trackItem.PreEmphasis,
+                    CopyPermitted = trackItem.CopyPermitted
                 });
             }
 
@@ -255,7 +298,9 @@ public class AudioCdBurnService
                 WriteCdText = includeCdText,
                 UseDiscAtOnce = compilation.RecordingMode == AudioRecordingMode.DiscAtOnceGapless,
                 PreGapFrames = options.PreGapFrames > 0 ? options.PreGapFrames : compilation.DefaultPreGapFrames,
-                CdTextBytes = cdTextPayload
+                CdTextBytes = cdTextPayload,
+                MediaCatalogNumber = options.MediaCatalogNumber ?? compilation.UpcEan,
+                KeepIndexMarks = options.KeepIndexMarks
             };
 
             // 6. Execute burn through backend

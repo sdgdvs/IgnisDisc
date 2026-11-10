@@ -37,7 +37,7 @@ pipeline can be tested without hardware or blank media.
 | Bootable discs (El Torito BIOS + UEFI) | ✅ | ✅ | Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders |
 | DVD-Video authoring | ⚠️ | ✅ | Requires `ffmpeg.exe`; test on a standalone player before relying on it |
 | Blu-ray (BD-R / BD-RE) | ❌ | — | Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first |
-| CD-Text / ISRC on burned audio CDs | ❌ | ✅ | IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and `.cue` files |
+| CD-Text / ISRC on burned audio CDs | ⚠️ | ✅ | The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware once so far: one drive (LG GP60NB50), one CD-RW, CD-Text and audio read back correctly. ISRC and catalog codes have only been run in the simulator |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
 | Test-write / simulation | ❌ | ✅ | Not available through IMAPIv2 |
 <!-- SUPPORT-TABLE-END -->
@@ -72,7 +72,7 @@ ignisdisc-cli <command> [options]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
-             [--speed <X>] [--dao] [--native --test-write]
+             [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
@@ -97,10 +97,21 @@ ISO 9660 plus the file systems you name.
 to do that unless you pass `--overwrite`. Sequential rewritable discs (CD-RW, sequential DVD-RW) cannot be overwritten
 in place once finalized—run `ignisdisc-cli erase --drive <id>` before burning them again.
 
-`--native --test-write` (experimental): a test write of the audio CD using IgnisDisc's own drive commands instead of
-Windows' burning service — Session-at-Once, with CD-Text in the lead-in, and the laser off, so the disc is not
-written. It needs a blank CD-R or CD-RW and a drive that offers Session-at-Once test writes, and saves a log of every
-drive command under `%LOCALAPPDATA%\IgnisDisc\logs`. Real native burns are not enabled yet.
+`--native` (experimental): burns the audio CD with IgnisDisc's own drive commands instead of Windows' burning
+service, Session-at-Once. It writes CD-Text into the lead-in, ISRC and catalog (UPC/EAN) codes, pre-emphasis and
+copy flags from a `.cue` sheet's `FLAGS`, the sheet's `INDEX 00` gap marks, and audio in front of track 1. After
+writing it reads the whole disc back and compares the track list, the CD-Text and every audio sample; the burn only
+counts as a success if that check passes. It needs a blank CD-R or CD-RW and a drive that reports Session-at-Once,
+and saves a log of every drive command under `%LOCALAPPDATA%\IgnisDisc\logs` (or `--log-dir`).
+
+- `--native --test-write`: the same burn with the laser off; the disc stays blank.
+- `--native --test-first`: a test write, then the real burn. Most drives keep showing the simulated session after
+  a test write and refuse to record until the disc is reloaded; the burn then stops after the test and says so.
+
+Status: experimental. On real hardware it has run on one drive (an LG GP60NB50): test writes on CD-R and CD-RW, and
+one real burn of a two-track CD-RW with CD-Text, which read back identical to the source. Other drives, CD-R, and
+the ISRC, catalog, pre-emphasis, gap and hidden-audio features have only been run against the built-in drive
+simulator.
 
 Examples:
 

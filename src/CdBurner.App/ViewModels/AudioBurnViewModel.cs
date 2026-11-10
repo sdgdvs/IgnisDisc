@@ -251,6 +251,45 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _includeCdText, value);
     }
 
+    private bool _useDirectDriveCommands;
+    private bool _testWriteFirst;
+
+    /// <summary>
+    /// Burn with IgnisDisc's own drive commands (Session-at-Once) instead of the Windows burning service. Off by
+    /// default, chosen per burn. This writes CD-Text, ISRC and catalog codes, pre-emphasis flags and a CUE sheet's
+    /// gap marks to the disc, and reads the disc back afterwards.
+    /// </summary>
+    public bool UseDirectDriveCommands
+    {
+        get => _useDirectDriveCommands;
+        set
+        {
+            if (SetProperty(ref _useDirectDriveCommands, value) && !value)
+            {
+                TestWriteFirst = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// With <see cref="UseDirectDriveCommands"/>: run a laser-off test write before the real one. Most drives then
+    /// need the disc reloaded before they record it, so the burn stops after the test and says so.
+    /// </summary>
+    public bool TestWriteFirst
+    {
+        get => _testWriteFirst;
+        set => SetProperty(ref _testWriteFirst, value && _useDirectDriveCommands);
+    }
+
+    /// <summary>Folder for the command logs of direct burns; null for the default under %LOCALAPPDATA%.</summary>
+    public string? DirectBurnLogDirectory { get; set; }
+
+    /// <summary>The direct writer's own result for the last burn made with <see cref="UseDirectDriveCommands"/>.</summary>
+    public CdBurner.Hardware.NativeWriting.NativeSaoWriteResult? LastDirectBurnResult { get; private set; }
+
+    /// <summary>The command log of the last direct burn.</summary>
+    public string? LastDirectBurnLogPath { get; private set; }
+
     /// <summary>
     /// Ordered list of audio tracks in this compilation.
     /// </summary>
@@ -1660,19 +1699,46 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 StatusMessage = $"{p.CurrentActionDescription} ({BurnProgress:F0}%)";
             });
 
+            // Direct drive commands are opt-in per burn and only for drives whose probe shows Session-at-Once.
+            bool direct = UseDirectDriveCommands;
+            CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine? directEngine = null;
+            LastDirectBurnResult = null;
+            LastDirectBurnLogPath = null;
+            if (direct)
+            {
+                if (!recorder.GetCapabilities().SupportsNativeSao)
+                {
+                    StatusMessage = "Burn failed: this drive does not report Session-at-Once writing, so direct drive commands cannot be used with it. "
+                                  + "Switch off \"Direct drive commands\" to burn with the Windows writer.";
+                    var unsupported = BurnOperationResult.Failed(StatusMessage);
+                    LastBurnResult = unsupported;
+                    return unsupported;
+                }
+                directEngine = new CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine(DirectBurnLogDirectory) { TestWriteFirst = TestWriteFirst };
+            }
+
             var audioBurnOptions = new AudioBurnOptions
             {
                 UseDiscAtOnce = (RecordingMode == AudioRecordingMode.DiscAtOnceGapless),
                 WriteCdText = IncludeCdText,
                 PerformNormalization = NormalizeAllTracks,
                 PreGapFrames = DefaultPreGapFrames,
-                Speed = SelectedWriteSpeed
+                Speed = SelectedWriteSpeed,
+                KeepIndexMarks = direct
             };
 
-            var burnResult = await _audioBurnService.BurnAsync(recorder, compilation, audioBurnOptions, progress, activeToken);
+            var burnService = directEngine != null ? new AudioCdBurnService(directEngine, _audioDecoder) : _audioBurnService;
+            var burnResult = await burnService.BurnAsync(recorder, compilation, audioBurnOptions, progress, activeToken);
             LastBurnResult = burnResult;
+            LastDirectBurnResult = directEngine?.LastResult;
+            LastDirectBurnLogPath = directEngine?.LastLogPath;
 
-            if (burnResult.Success)
+            if (burnResult.Success && direct)
+            {
+                StatusMessage = $"Audio CD burned with direct drive commands and read back correctly ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
+                BurnProgress = 100.0;
+            }
+            else if (burnResult.Success)
             {
                 StatusMessage = $"Audio CD burned successfully ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
                 bool hasDiscMetadata = (compilation.AlbumTitle is { Length: > 0 } title && title != "Untitled Album")
@@ -1687,6 +1753,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             else
             {
                 StatusMessage = $"Burn failed: {burnResult.ErrorMessage}";
+                if (direct && directEngine?.LastResult is { StoppedBeforeWriting: true } && !TestWriteFirst)
+                {
+                    // Stopped before the laser came on: the same disc can still be burned the standard way.
+                    StatusMessage += " The disc is unchanged; switch off \"Direct drive commands\" to burn it with the Windows writer.";
+                }
                 if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
                 {
                     System.Windows.MessageBox.Show(

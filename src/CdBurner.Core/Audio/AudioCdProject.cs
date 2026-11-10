@@ -74,6 +74,28 @@ public record AudioCdTrackItem(
     public SingleFileAlbumSource? AlbumSource { get; init; }
 
     /// <summary>
+    /// How many frames at the end of the previous track's audio are this track's INDEX 00 (its pre-gap) in the CUE
+    /// sheet. The audio stays where it is; the direct drive-command writer only moves the track mark, so a player
+    /// counts down through it. Zero when the CUE sheet has no INDEX 00 for the track.
+    /// </summary>
+    public int Index00LeadFrames { get; init; }
+
+    /// <summary>
+    /// Audio in front of track 1's INDEX 01 in a single-file CUE album ("hidden track one audio"), which a player
+    /// reaches by rewinding from the start. Only the direct drive-command writer can write it.
+    /// </summary>
+    public Func<Stream>? HiddenAudioPcmStreamFactory { get; init; }
+
+    /// <summary>Length of the hidden audio in CD frames.</summary>
+    public int HiddenAudioFrames { get; init; }
+
+    /// <summary>CUE "FLAGS PRE": the track was mastered with pre-emphasis.</summary>
+    public bool PreEmphasis { get; init; }
+
+    /// <summary>CUE "FLAGS DCP": digital copying is permitted.</summary>
+    public bool CopyPermitted { get; init; }
+
+    /// <summary>
     /// Total duration of this track in 2,352-byte Red Book frames (75 fps).
     /// </summary>
     public int DurationFrames
@@ -691,7 +713,9 @@ public class AudioCdCompilation
                 {
                     Songwriter = trk.Songwriter ?? meta?.Songwriter ?? Songwriter,
                     Composer = meta?.Composer ?? Composer,
-                    DurationFrames = totalFileFrames
+                    DurationFrames = totalFileFrames,
+                    PreEmphasis = trk.Flags.Contains("PRE"),
+                    CopyPermitted = trk.Flags.Contains("DCP")
                 });
                 added++;
             }
@@ -707,6 +731,9 @@ public class AudioCdCompilation
                 // silence, so moving that audio into PreGapFrames would replace real audio with silence.)
                 static int? GetIndex01Frames(CueTrack track) =>
                     (track.Indices.FirstOrDefault(idx => idx.IndexNumber == 1) ?? track.Indices.FirstOrDefault())?.Position.ToFrameCount();
+
+                static int? GetIndex00Frames(CueTrack track) =>
+                    track.Indices.FirstOrDefault(idx => idx.IndexNumber == 0)?.Position.ToFrameCount();
 
                 for (int k = 0; k < audioTracks.Count; k++)
                 {
@@ -726,6 +753,20 @@ public class AudioCdCompilation
                     string performer = !string.IsNullOrWhiteSpace(trk.Performer) ? trk.Performer : AlbumPerformer;
                     int preGap = trk.PreGap?.ToFrameCount() ?? (trackNum == 1 ? DefaultPreGapFrames : 0);
 
+                    // INDEX 00 marks: for a later track the gap audio is the tail of the previous slice; for the
+                    // first track of the file it is audio in front of INDEX 01 that no slice covers.
+                    int index00Lead = 0;
+                    int hiddenFrames = 0;
+                    if (k > 0 && GetIndex00Frames(trk) is int index00 && index00 < startFrame)
+                    {
+                        int previousStart = GetIndex01Frames(audioTracks[k - 1]) ?? 0;
+                        index00Lead = Math.Max(0, startFrame - Math.Max(index00, previousStart));
+                    }
+                    else if (k == 0 && trackNum == 1 && startFrame > 0)
+                    {
+                        hiddenFrames = startFrame;
+                    }
+
                     AddTrack(new AudioCdTrackItem(
                         TrackNumber: trackNum,
                         SourceFilePath: audioFilePath,
@@ -740,7 +781,12 @@ public class AudioCdCompilation
                         DurationFrames = displayFrames,
                         SourceStartFrame = startFrame,
                         SourceFrameCount = sliceFrameCount,
-                        AlbumSource = album
+                        AlbumSource = album,
+                        Index00LeadFrames = index00Lead,
+                        HiddenAudioFrames = hiddenFrames,
+                        HiddenAudioPcmStreamFactory = hiddenFrames > 0 ? album.CreateSliceFactory(0, hiddenFrames) : null,
+                        PreEmphasis = trk.Flags.Contains("PRE"),
+                        CopyPermitted = trk.Flags.Contains("DCP")
                     });
                     added++;
                 }

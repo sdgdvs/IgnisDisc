@@ -154,10 +154,10 @@
   {
     "featureMarkdown": "CD-Text / ISRC on burned audio CDs",
     "featureHtml": "CD-Text / ISRC on burned audio CDs",
-    "physical": "❌",
+    "physical": "⚠️",
     "virtual": "✅",
-    "notesMarkdown": "IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and `.cue` files",
-    "notesHtml": "IMAPIv2 cannot write lead-in CD-Text; metadata is kept in projects and <code>.cue</code> files"
+    "notesMarkdown": "The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or \"Direct drive commands\" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware once so far: one drive (LG GP60NB50), one CD-RW, CD-Text and audio read back correctly. ISRC and catalog codes have only been run in the simulator",
+    "notesHtml": "The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (<code>--native</code>, or \"Direct drive commands\" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware once so far: one drive (LG GP60NB50), one CD-RW, CD-Text and audio read back correctly. ISRC and catalog codes have only been run in the simulator"
   },
   {
     "featureMarkdown": "DVD+R book type (bitsetting)",

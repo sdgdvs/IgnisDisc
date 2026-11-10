@@ -499,6 +499,105 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.Equal("Acoustic AI", root.GetProperty("artist").GetString());
     }
 
+    private (string Wav1, string Wav2) WriteNoiseTracks()
+    {
+        // Direct Session-at-Once writing needs tracks of at least 4 seconds (300 frames).
+        byte[] pcm1 = new byte[300 * OpticalConstants.RawSectorSize];
+        byte[] pcm2 = new byte[320 * OpticalConstants.RawSectorSize];
+        new Random(1).NextBytes(pcm1);
+        new Random(2).NextBytes(pcm2);
+        string wav1 = Path.Combine(_tempDir, "noise1.wav");
+        string wav2 = Path.Combine(_tempDir, "noise2.wav");
+        WavFileCodec.WriteWavFile(wav1, pcm1);
+        WavFileCodec.WriteWavFile(wav2, pcm2);
+        return (wav1, wav2);
+    }
+
+    private async Task<(int ExitCode, StringWriter Stdout, StringWriter Stderr)> RunNativeBurn(params string[] extra)
+    {
+        var (wav1, wav2) = WriteNoiseTracks();
+        var (stdout, stderr) = CreateStringWriters();
+        var args = new List<string>
+        {
+            "burn-audio", "--drive", "VDRV-01", "--tracks", $"{wav1},{wav2}", "--title", "Direct Album", "--artist", "Direct Artist",
+            "--dao", "--native", "--log-dir", Path.Combine(_tempDir, "logs"), "--json"
+        };
+        args.AddRange(extra);
+        int exitCode = await CliCommandRunner.RunAsync(args.ToArray(), stdout, stderr, _deviceService, _burnEngine);
+        return (exitCode, stdout, stderr);
+    }
+
+    [Fact]
+    public async Task BurnAudio_Native_RecordsTheDisc_ReadsItBack_AndWritesCdText()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (exitCode, stdout, stderr) = await RunNativeBurn();
+
+        Assert.True(exitCode == 0, stdout.ToString() + stderr);
+        using var doc = ParseJsonOutput(stdout);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.True(root.GetProperty("native").GetBoolean());
+        Assert.False(root.GetProperty("testWrite").GetBoolean());
+        Assert.True(root.GetProperty("discRecorded").GetBoolean());
+        Assert.True(root.GetProperty("verified").GetBoolean());
+        Assert.Equal(620L * 588, root.GetProperty("samplesCompared").GetInt64());
+        Assert.True(File.Exists(root.GetProperty("commandLog").GetString()));
+
+        Assert.True(medium.IsFinalized);
+        var cdText = CdTextPackParser.ParsePacks(medium.CdTextBytes!);
+        Assert.Equal("Direct Album", cdText.AlbumTitle);
+        Assert.Equal(2, cdText.Tracks!.Count);
+    }
+
+    [Fact]
+    public async Task BurnAudio_NativeTestWrite_LeavesTheDiscBlank()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (exitCode, stdout, stderr) = await RunNativeBurn("--test-write");
+
+        Assert.True(exitCode == 0, stdout.ToString() + stderr);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.GetProperty("testWrite").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("discStillBlank").GetBoolean());
+        Assert.True(medium.IsBlank);
+    }
+
+    [Fact]
+    public async Task BurnAudio_NativeTestFirst_StopsAfterTheTest_WhenTheDriveNeedsAReload()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (exitCode, stdout, _) = await RunNativeBurn("--test-first");
+
+        Assert.Equal(1, exitCode);
+        using var doc = ParseJsonOutput(stdout);
+        var root = doc.RootElement;
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.True(root.GetProperty("testWritePassedFirst").GetBoolean());
+        Assert.Contains("reloaded", root.GetProperty("error").GetString());
+        Assert.True(medium.IsBlank);
+    }
+
+    [Fact]
+    public async Task BurnAudio_TestFirstWithoutNative_IsRejected()
+    {
+        var (wav1, wav2) = WriteNoiseTracks();
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-audio", "--drive", "VDRV-01", "--tracks", $"{wav1},{wav2}", "--test-first" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--test-first only applies", stdout.ToString() + stderr);
+    }
+
     #endregion
 
     #region 9. burn-dvd command tests

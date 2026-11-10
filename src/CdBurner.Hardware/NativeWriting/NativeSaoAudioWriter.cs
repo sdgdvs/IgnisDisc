@@ -11,13 +11,17 @@ namespace CdBurner.Hardware.NativeWriting;
 /// stream is padded with silence; extra bytes are ignored.</param>
 /// <param name="CdTextPacks">CD-Text packs (18 bytes each) for the lead-in, or null for none.</param>
 /// <param name="MediaCatalogNumber">Optional 13-digit UPC/EAN.</param>
-/// <param name="TestWrite">Laser-off simulation. Must be true: this build does not do real native writes.</param>
+/// <param name="TestWrite">True: laser-off simulation, the disc stays blank. False: the disc is recorded and then
+/// read back and compared.</param>
+/// <param name="WriteSpeedKiloBytesPerSecond">Write speed to ask the drive for (176 per 1x), or null for the drive's
+/// own choice for the disc.</param>
 public sealed record NativeSaoWriteRequest(
     IReadOnlyList<SaoTrack> Tracks,
     Func<int, Stream> OpenTrackAudio,
     byte[]? CdTextPacks,
     string? MediaCatalogNumber,
-    bool TestWrite);
+    bool TestWrite,
+    int? WriteSpeedKiloBytesPerSecond = null);
 
 /// <summary>Outcome of a native Session-at-Once write.</summary>
 public sealed record NativeSaoWriteResult
@@ -37,12 +41,22 @@ public sealed record NativeSaoWriteResult
 
     /// <summary>After a test write: whether the drive still reported a blank disc. Null when not checked.</summary>
     public bool? DiscStillBlankAfterTestWrite { get; init; }
+
+    /// <summary>True when a real write sent every sector and the drive closed the session.</summary>
+    public bool DiscRecorded { get; init; }
+
+    /// <summary>True when the run stopped only because the drive has no test-write mode for this disc.</summary>
+    public bool TestWriteNotOffered { get; init; }
+
+    /// <summary>After a real write: the read-back check. Null after a test write or when writing did not finish.</summary>
+    public NativeVerifyResult? Verification { get; init; }
 }
 
 /// <summary>
 /// Writes an audio CD Session-at-Once by sending MMC commands to the drive: mode page 0x05, SEND CUE SHEET, the
 /// CD-Text lead-in, the audio from LBA −150, then SYNCHRONIZE CACHE. Follows docs/NATIVE-WRITER-DESIGN.md: every
-/// check runs before the first WRITE, and any failure up to that point leaves the disc untouched.
+/// check runs before the first WRITE, and any failure up to that point leaves the disc untouched. A real write is
+/// always followed by <see cref="NativeSaoVerifier"/>; the result is a success only if that check passes.
 /// </summary>
 public sealed class NativeSaoAudioWriter
 {
@@ -89,6 +103,7 @@ public sealed class NativeSaoAudioWriter
             {
                 Success = false,
                 Cancelled = stop.Cancelled,
+                TestWriteNotOffered = state.TestWriteNotOffered,
                 StoppedBeforeWriting = !state.WritingStarted,
                 Message = stop.Message,
                 LeadInSectorsWritten = state.LeadInSectors,
@@ -102,11 +117,6 @@ public sealed class NativeSaoAudioWriter
 
     private NativeSaoWriteResult Run(NativeSaoWriteRequest request, IProgress<BurnProgressSnapshot>? progress, CancellationToken ct, Stopwatch clock, RunState state)
     {
-        if (!request.TestWrite)
-        {
-            throw Stop("Real native writes are not enabled in this version. Only test writes (laser off) are allowed.");
-        }
-
         SaoAudioLayout layout;
         byte[]? leadInCycle = null;
         try
@@ -138,6 +148,7 @@ public sealed class NativeSaoAudioWriter
         }
         if (request.TestWrite && !mastering.TestWrite)
         {
+            state.TestWriteNotOffered = true;
             throw Stop("The drive does not offer test writes in Session-at-Once mode.");
         }
         if (cdText && !mastering.RwSubchannel)
@@ -198,6 +209,11 @@ public sealed class NativeSaoAudioWriter
             ?? throw Stop("The drive rejected every cue sheet layout.");
         Check(ct);
 
+        if (request.WriteSpeedKiloBytesPerSecond is int speed and > 0)
+        {
+            SetWriteSpeed(speed);
+        }
+
         // 5. From here on the drive is writing (with the laser at read power during a test write).
         int leadInSectors = cdText ? -151 - leadInStartLba + 1 : 0;
         int totalSectors = leadInSectors + layout.TotalSectors;
@@ -238,18 +254,48 @@ public sealed class NativeSaoAudioWriter
             }
         }
 
+        // 7. A real write is read back and compared. Cancelling is no longer offered: the disc is already recorded.
+        NativeVerifyResult? verification = null;
+        if (!request.TestWrite)
+        {
+            _note("Write finished; reading the disc back.");
+            verification = new NativeSaoVerifier(_transport, _note, _sleep).Verify(
+                layout, request.OpenTrackAudio, request.CdTextPacks,
+                (done, total) => reporter.Report(totalSectors, $"Checking the disc ({100.0 * done / Math.Max(1, total):F0}%)"),
+                CancellationToken.None);
+        }
+
         reporter.Report(totalSectors, "Done");
         return new NativeSaoWriteResult
         {
-            Success = true,
-            Message = request.TestWrite ? "Test write finished; the disc was not written." + extra : "Write finished.",
+            Success = verification?.Passed ?? true,
+            Message = request.TestWrite
+                ? "Test write finished; the disc was not written." + extra
+                : verification!.Passed
+                    ? "The disc was written and read back correctly. " + verification.Message
+                    : "The disc was written, but the check afterwards failed: " + verification.Message,
             LeadInSectorsWritten = state.LeadInSectors,
             AudioSectorsWritten = state.AudioSectors,
             Elapsed = clock.Elapsed,
             CueSheetVariantAccepted = state.Variant,
             DataBlockTypeAccepted = state.BlockType,
-            DiscStillBlankAfterTestWrite = stillBlank
+            DiscStillBlankAfterTestWrite = stillBlank,
+            DiscRecorded = !request.TestWrite,
+            Verification = verification
         };
+    }
+
+    /// <summary>SET CD SPEED (0xBB). A drive that refuses keeps its own speed; that is logged, not an error.</summary>
+    private void SetWriteSpeed(int kiloBytesPerSecond)
+    {
+        byte[] cdb = new byte[12];
+        cdb[0] = 0xBB;
+        cdb[2] = 0xFF; cdb[3] = 0xFF; // read speed: fastest
+        BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(4, 2), (ushort)Math.Min(kiloBytesPerSecond, 0xFFFF));
+        var r = _transport.ExecuteCommand(cdb, Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, ShortTimeout);
+        _note(r.IsSuccess
+            ? $"Write speed set to {kiloBytesPerSecond} kB/s ({kiloBytesPerSecond / 176.4:F0}x)."
+            : $"The drive did not accept a write speed of {kiloBytesPerSecond} kB/s and keeps its own: {Describe(r)}");
     }
 
     private void WriteLeadIn(byte[] cycle, int startLba, int count, RunState state, ProgressReporter reporter, CancellationToken ct)
@@ -276,11 +322,10 @@ public sealed class NativeSaoAudioWriter
 
     private void WriteProgramArea(NativeSaoWriteRequest request, SaoAudioLayout layout, RunState state, ProgressReporter reporter, int doneBefore, CancellationToken ct)
     {
-        const int sectorSize = 2352;
+        const int sectorSize = ProgramAreaReader.SectorSize;
         byte[] buffer = new byte[AudioSectorsPerWrite * sectorSize];
-        int lba = SaoAudioLayout.FirstWritableLba;
         int filled = 0;
-        int chunkLba = lba;
+        int chunkLba = SaoAudioLayout.FirstWritableLba;
 
         void FlushChunk()
         {
@@ -292,40 +337,27 @@ public sealed class NativeSaoAudioWriter
             filled = 0;
         }
 
-        for (int t = 0; t < layout.Tracks.Count; t++)
+        using var source = new ProgramAreaReader(layout, request.OpenTrackAudio, _note);
+        while (true)
         {
-            var track = layout.Tracks[t];
-            for (int i = 0; i < track.PreGapSectors; i++)
-            {
-                Array.Clear(buffer, filled * sectorSize, sectorSize);
-                if (++filled == AudioSectorsPerWrite) { Check(ct, state); FlushChunk(); }
-            }
-
-            Stream audio;
+            bool more;
             try
             {
-                audio = request.OpenTrackAudio(t);
+                more = source.ReadSector(buffer.AsSpan(filled * sectorSize, sectorSize));
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             {
-                throw Stop($"Could not read the audio for track {track.TrackNumber}: {ex.Message}");
+                throw Stop($"Could not read the audio for track {source.CurrentTrackNumber}: {ex.Message}");
             }
 
-            using (audio)
+            if (!more)
             {
-                bool shortStream = false;
-                for (int i = 0; i < track.SectorCount; i++)
-                {
-                    Span<byte> sector = buffer.AsSpan(filled * sectorSize, sectorSize);
-                    int got = shortStream ? 0 : ReadFully(audio, sector);
-                    if (got < sectorSize)
-                    {
-                        if (!shortStream) _note($"Track {track.TrackNumber} audio ended early at sector {i}; padding with silence.");
-                        shortStream = true;
-                        sector.Slice(got).Clear();
-                    }
-                    if (++filled == AudioSectorsPerWrite) { Check(ct, state); FlushChunk(); }
-                }
+                break;
+            }
+            if (++filled == AudioSectorsPerWrite)
+            {
+                Check(ct, state);
+                FlushChunk();
             }
         }
 
@@ -431,7 +463,7 @@ public sealed class NativeSaoAudioWriter
             BufferUnderrunFree: (flags & 0x40) != 0);
     }
 
-    internal readonly record struct DiscInformation(int Status, Msf LeadInStart, Msf LastLeadOutStart);
+    internal readonly record struct DiscInformation(int Status, bool Erasable, Msf LeadInStart, Msf LastLeadOutStart);
 
     private DiscInformation? ReadDiscInformation()
     {
@@ -442,7 +474,28 @@ public sealed class NativeSaoAudioWriter
             return null;
         }
 
-        return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[17], buffer[18], buffer[19]), new Msf(buffer[21], buffer[22], buffer[23]));
+        return new DiscInformation(buffer[2] & 0x03, (buffer[2] & 0x10) != 0, new Msf(buffer[17], buffer[18], buffer[19]), new Msf(buffer[21], buffer[22], buffer[23]));
+    }
+
+    /// <summary>
+    /// What to tell the user when the disc cannot be recorded straight after its test write. Measured on an LG
+    /// GP60NB50: the drive keeps reporting the simulated session as an open session, and in that state rejects the
+    /// real cue sheet (5/30/06). A spindle stop/start, a load command, a sleep/wake cycle and a quick blank of a
+    /// CD-RW all leave it unchanged; only reloading the disc clears it.
+    /// </summary>
+    public const string ReloadMessage =
+        "The test write passed. This drive keeps showing the simulated session until the disc is reloaded: "
+        + "open and close the tray, then burn again without the test write.";
+
+    /// <summary>True when the drive reports a blank disc. Sends no write command.</summary>
+    public bool DiscReadsBlank() => ReadDiscInformation() is { Status: 0 };
+
+    private bool AudioReadableAtLbaZero(out ScsiExecutionResult result)
+    {
+        byte[] sector = new byte[2352];
+        result = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadCdCdb(0, 1, expectedSectorType: 1, mainChannelSelectionBits: 0x10),
+            sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        return result.IsSuccess && result.DataTransferLength > 0;
     }
 
     /// <summary>
@@ -470,10 +523,7 @@ public sealed class NativeSaoAudioWriter
             return false;
         }
 
-        byte[] sector = new byte[2352];
-        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadCdCdb(0, 1, expectedSectorType: 1, mainChannelSelectionBits: 0x10),
-            sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
-        if (r.IsSuccess && r.DataTransferLength > 0)
+        if (AudioReadableAtLbaZero(out var r))
         {
             _note("WARNING: audio could be read back at LBA 0 after the test write.");
             return false;
@@ -548,18 +598,6 @@ public sealed class NativeSaoAudioWriter
         return Math.Clamp(100.0 * (cap.Length - Math.Min(cap.Blank, cap.Length)) / cap.Length, 0, 100);
     }
 
-    private static int ReadFully(Stream s, Span<byte> destination)
-    {
-        int total = 0;
-        while (total < destination.Length)
-        {
-            int n = s.Read(destination.Slice(total));
-            if (n <= 0) break;
-            total += n;
-        }
-        return total;
-    }
-
     private static void Check(CancellationToken ct, RunState? state = null)
     {
         if (ct.IsCancellationRequested)
@@ -576,6 +614,7 @@ public sealed class NativeSaoAudioWriter
     private sealed class RunState
     {
         public bool WritingStarted;
+        public bool TestWriteNotOffered;
         public int LeadInSectors;
         public int AudioSectors;
         public CueSheetVariant? Variant;

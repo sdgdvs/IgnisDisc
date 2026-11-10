@@ -3,18 +3,23 @@
 **Status:** partly built. What exists:
 
 - the read-only capability probe (`MmcWriteCapabilityProbe`, `MmcMediaIdInspector`);
-- the audio CD Session-at-Once test write (Phase 2) in `src/CdBurner.Hardware/NativeWriting/`, reached only through
-  `ignisdisc-cli burn-audio --native --test-write`. `NativeSaoAudioWriter` refuses a request without the test-write
-  flag, so this version cannot burn a disc natively. Tested against the virtual drive (`VirtualMmcDrive`) and on
-  one real drive (see Test hardware).
+- audio CD Session-at-Once in `src/CdBurner.Hardware/NativeWriting/`: test write and real write
+  (`NativeSaoAudioWriter`), the read-back check that follows every real write (`NativeSaoVerifier`), CD-Text in the
+  lead-in, ISRC and catalog codes, pre-emphasis and copy bits, audio in pre-gaps (INDEX 00) and in front of track 1.
+  Reached through `ignisdisc-cli burn-audio --native` and the "Direct drive commands" option on the app's Audio CD
+  screen; both are off by default.
 - Exclusive access opens the drive by its device interface path (`\\?\…{53f56308-…}`): the cdrom driver refuses
   the lock (ERROR_INVALID_HANDLE) on a handle opened by drive letter, because that handle belongs to the mounted
   file system.
 
-Phases 3–6 below are still plans.
+**What has run where.** Everything above passes against the virtual drive (`VirtualMmcDrive`). On real hardware
+(see Test hardware) the test write has run on CD-R and CD-RW, and one real write has run: two tracks with CD-Text
+on a CD-RW, read back identical. A real write on CD-R, ISRC and catalog codes, pre-emphasis and copy bits, and
+audio in pre-gaps or in front of track 1 have only run in the simulator.
 
-**First feature (decided 2026-11-08):** audio CD Session-at-Once with CD-Text. Phase 2 (test write) is built on that
-path, so the first laser-off test write is an audio CD with CD-Text, not a data CD.
+Phases 5–6 below are still plans.
+
+**First feature (decided 2026-11-08):** audio CD Session-at-Once with CD-Text.
 
 ## Why
 
@@ -34,9 +39,13 @@ way (`Win32ScsiTransport`, `IOCTL_SCSI_PASS_THROUGH_DIRECT`); this proposal adds
 2. **Probed drives only.** The drive must report the needed feature: CD Mastering (0x002E) with SAO for audio
    Session-at-Once, plus its R-W bit for CD-Text (`supportsNativeCdText` in `drives --json`); Track-at-Once (0x002D)
    for TAO; DVD-R/-RW Write (0x002F) or the DVD+R feature for DVD.
-3. **Test write first.** For write-once media the app offers a test write (Test Write bit in mode page 0x05) before
-   the real burn, on drives that report it.
-4. **Verify after every native burn.** Not optional in native mode.
+3. **Test write on offer.** A test write (Test Write bit in mode page 0x05) can be run on its own, or first in the
+   same burn (`--test-first`, "Test write first"), on drives that report it. It is not forced: see "After a test
+   write" for why most drives cannot go straight on to the real write.
+4. **Verify after every native burn.** Not optional in native mode: `NativeSaoVerifier` reads the table of contents
+   (track starts, lead-out, pre-emphasis and copy bits), the CD-Text packs and all the audio back and compares them.
+   Audio reads back shifted by the drive's write and read offsets, so the check first finds that shift (searching
+   up to 2,352 samples either way from a stretch of real signal) and then compares every sample under it.
 5. **Stop before the laser starts.** Any error during setup (exclusive access, `MODE SELECT`, `SEND CUE SHEET`) aborts
    and offers the IMAPIv2 burn instead. Errors after writing has begun fail the burn; they are never retried silently.
 6. **Log everything.** Every CDB, transfer length, status and sense key/ASC/ASCQ goes into a log the user can save and
@@ -84,6 +93,19 @@ SENSE, reports Session-at-Once and the requested test-write setting; the drive a
 the simulated session as an open, incomplete session until the disc is reloaded; then `READ CD` of LBA 0 must fail.
 A closed disc, or audio readable at LBA 0, means the drive recorded: the run fails and says so.
 
+While it shows that simulated session, the GP60NB50 rejects the real cue sheet with 5/30/06 (measured 2026-11-10).
+A spindle stop and start, a load command on the closed tray, a sleep and wake cycle, and a quick blank of a CD-RW
+all leave the state unchanged; only reloading the disc clears it. So a burn with a test write first stops after
+the test with a message to reload the disc and burn again without the test. Nothing is ejected automatically:
+slim drives cannot close their tray. On drives with a motorized tray an automatic reload would be possible; that
+is not built.
+
+**Pre-gap audio and flags.** A track's cue sheet entries carry its control bits (0x10 pre-emphasis, 0x20 digital
+copy permitted); the lead-in, catalog and lead-out entries carry plain audio control. A pre-gap may end in audio
+from the track's own stream (its INDEX 00 area). Track 1's first 150 sectors (before LBA 0) are always silence;
+audio after them and before INDEX 01 is hidden audio that players reach by rewinding. From a single-file `.cue`
+album the bytes on the disc stay in file order; only the track marks move.
+
 **DVD±R:** `RESERVE TRACK` (DVD-R DAO) or sequential writing (DVD+R) → `WRITE(10)` → `SYNCHRONIZE CACHE` →
 `CLOSE TRACK/SESSION`. Dual layer adds `SEND DISC STRUCTURE` with the layer-break address before writing.
 
@@ -106,7 +128,7 @@ BURN-Free / buffer-underrun protection (BUFE bit in page 0x05) when the drive su
 
 - Virtual drive: each command is implemented in `VirtualDiscBackend`, including failure injection (sense codes at
   chosen LBAs), so the error paths are tested.
-- Real hardware, in order: test write on CD-RW, real write on CD-RW, then CD-R; DVD after CD.
+- Real hardware, in order: test write on CD-RW (done), real write on CD-RW (done), then CD-R (not yet run); DVD after CD.
 
 ## Test hardware
 
@@ -119,6 +141,10 @@ Results:
 | Date | Drive | Disc | Run | Result |
 |---|---|---|---|---|
 | 2026-11-08 | GP60NB50 | CD-R, FORNET (ATIP 97:26:07) | Test write, 2 tracks, CD-Text | Write parameters, cue sheet and all 64 WRITEs accepted. Drive showed the simulated session until reload; after reload the disc read as blank with all 359,844 sectors free. |
+| 2026-11-10 | GP60NB50 | CD-RW, Mitsubishi (ATIP 97:34:23), quick-erased | Test write, 2 tracks of 20 s, CD-Text | All WRITEs accepted, 14,077 sectors in 46 s. LBA 0 unreadable afterwards: nothing recorded. Drive showed the simulated session (status 1, lead-out 00:42:00). |
+| 2026-11-10 | GP60NB50 | same CD-RW, not reloaded | Attempts to clear the simulated session | Stop/start, load, sleep/wake and BLANK (minimal) all left status 1. |
+| 2026-11-10 | GP60NB50 | same CD-RW, not reloaded | Real write attempted over the simulated session | Mode page accepted (SAO, test write off, block type 3); SEND CUE SHEET rejected twice with 5/30/06. Stopped before any WRITE; disc unchanged. |
+| 2026-11-10 | GP60NB50 | same CD-RW, reloaded (blank again, status 0) | Real write, 2 tracks of 20 s, CD-Text, no test write | Cue sheet accepted, 135 WRITEs, 14,077 sectors with the CD-Text lead-in; closing the session took 20 s. Read-back check passed: table of contents, 9 CD-Text packs and 1,764,000 audio samples identical, combined drive offset 0 samples. 67 s in all. A separate `rip-audio` of the disc gave files identical to the sources and took its names from CD-Text. Disc reports one closed session of 3,000 sectors. |
 
 Media on hand: CD-RW, CD-R, DVD±R / DVD±RW, DVD±R DL.
 

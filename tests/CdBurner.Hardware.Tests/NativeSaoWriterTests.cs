@@ -80,20 +80,6 @@ public class NativeSaoWriterTests
     }
 
     [Fact]
-    public void RealWrite_IsRefusedBeforeAnyCommandThatChangesTheDrive()
-    {
-        var drive = new VirtualMmcDrive();
-
-        var result = Run(drive, Request(testWrite: false));
-
-        Assert.False(result.Success);
-        Assert.True(result.StoppedBeforeWriting);
-        Assert.DoesNotContain(OpModeSelect, drive.CommandsReceived);
-        Assert.DoesNotContain(OpCueSheet, drive.CommandsReceived);
-        Assert.DoesNotContain(OpWrite, drive.CommandsReceived);
-    }
-
-    [Fact]
     public void DriveThatDropsTheTestWriteBit_IsStoppedBeforeTheCueSheet()
     {
         var drive = new VirtualMmcDrive { DropsTestWriteBit = true };

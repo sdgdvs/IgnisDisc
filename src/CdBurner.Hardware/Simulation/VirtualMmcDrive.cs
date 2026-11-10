@@ -9,7 +9,9 @@ namespace CdBurner.Hardware.Simulation;
 /// commands a Session-at-Once audio write uses and enforces what a real drive enforces: write parameters before the
 /// cue sheet, cue sheet before WRITE, every WRITE at the next address with the right block size (96 bytes in a
 /// CD-Text lead-in, 2,352 in the program area), nothing past the lead-out. Faults can be switched on to test the
-/// writer's error handling. A test write leaves the disc blank, as on a real drive.
+/// writer's error handling. A test write leaves the disc blank, as on a real drive. A real write leaves a recorded
+/// disc that answers READ TOC, CD-Text read-back and READ CD, shifted by a drive offset the way real hardware shifts
+/// audio, so the read-back check is tested against the same behaviour.
 /// </summary>
 public sealed class VirtualMmcDrive : IScsiTransport
 {
@@ -68,8 +70,32 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>A recorded Session-at-Once disc is closed (status 2). Off: it reads as an open session (status 1).</summary>
     public bool ClosesDiscAfterWrite { get; set; } = true;
 
-    /// <summary>Keep the bytes sent with WRITE so tests can inspect them.</summary>
+    /// <summary>Keep the bytes sent with WRITE so tests can inspect them and a recorded disc can be read back.</summary>
     public bool CaptureWrites { get; set; } = true;
+
+    /// <summary>
+    /// Audio reads back this many samples later than it was written (the combined write and read offset every real
+    /// drive has). Samples shifted in from outside the recorded area read as silence.
+    /// </summary>
+    public int ReadOffsetSamples { get; set; }
+
+    /// <summary>READ CD returns this sector with one sample changed, like a marginal burn.</summary>
+    public int? ReadBackDifferenceAtLba { get; set; }
+
+    /// <summary>READ CD of this sector fails with 3/11/00 (unrecovered read error).</summary>
+    public int? ReadErrorAtLba { get; set; }
+
+    /// <summary>The recorded disc returns no CD-Text although a CD-Text lead-in was sent.</summary>
+    public bool LosesCdText { get; set; }
+
+    /// <summary>The recorded table of contents places track 2 and later one sector late.</summary>
+    public bool ShiftsTrackStartsInToc { get; set; }
+
+    /// <summary>The drive ignores the pre-emphasis and copy-permitted bits of the cue sheet.</summary>
+    public bool DropsControlBits { get; set; }
+
+    /// <summary>SET CD SPEED fails with 5/24/00.</summary>
+    public bool RejectsSetSpeed { get; set; }
 
     // ---- What happened ----
 
@@ -83,6 +109,20 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     /// <summary>True once audio has really been recorded (not just test-written).</summary>
     public bool Recorded { get; private set; }
+
+    /// <summary>The last write speed set with SET CD SPEED, in kB/s.</summary>
+    public int? WriteSpeedSet { get; private set; }
+
+    /// <summary>Tracks of the recorded disc: number, INDEX 01 address and cue sheet control bits.</summary>
+    public IReadOnlyList<(byte TrackNumber, int Index01Lba, byte CueControl)> RecordedTracks => _recordedTracks;
+
+    public int RecordedLeadOutLba { get; private set; }
+
+    /// <summary>The cue sheet the recorded disc was written from.</summary>
+    public byte[]? RecordedCueSheet { get; private set; }
+
+    private List<(byte TrackNumber, int Index01Lba, byte CueControl)> _recordedTracks = new();
+    private bool _recordedCdText;
 
     /// <summary>Ejecting and reloading the disc: the drive forgets a simulated session.</summary>
     public void Reload()
@@ -121,6 +161,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             NativeWriteCommands.OpCodeReadBufferCapacity => ReadBufferCapacity(dataBuffer),
             0x35 => SynchronizeCache(),
             0xBE => ReadCd(cdb, dataBuffer),
+            0x43 => ReadToc(cdb, dataBuffer),
+            0xBB => SetCdSpeed(cdb),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
     }
@@ -267,7 +309,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
         if (DiscStatus != 0)
         {
-            return Sense(0x05, 0x2C, 0x00);
+            // The GP60NB50 answers 5/30/06 here while it shows the simulated session of a test write.
+            return Sense(0x05, 0x30, 0x06);
         }
 
         var parsed = CueSheetState.Parse(sheet, this);
@@ -339,28 +382,116 @@ public sealed class VirtualMmcDrive : IScsiTransport
         return Good((uint)data.Length);
     }
 
-    /// <summary>READ CD of CD-DA user data. Unrecorded sectors cannot be read (5/21/00 here; real drives vary).</summary>
+    /// <summary>
+    /// READ CD of CD-DA user data. Unrecorded sectors cannot be read (5/21/00 here; real drives vary), and neither
+    /// can anything from the lead-out on.
+    /// </summary>
     private ScsiExecutionResult ReadCd(ReadOnlySpan<byte> cdb, Span<byte> data)
     {
         int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
         int count = (cdb[6] << 16) | (cdb[7] << 8) | cdb[8];
-        if (!Recorded || lba < 0 || count == 0 || data.Length < count * 2352)
+        if (!Recorded || lba < 0 || count == 0 || data.Length < count * 2352 || lba + count > RecordedLeadOutLba)
         {
             return Sense(0x05, 0x21, 0x00);
         }
-
-        long offset = (long)(lba + 150) * 2352;
-        byte[] program = ProgramAreaWritten.ToArray();
-        int n = count * 2352;
-        if (offset + n <= program.Length)
+        if (ReadErrorAtLba is int bad && bad >= lba && bad < lba + count)
         {
-            program.AsSpan((int)offset, n).CopyTo(data);
+            return Sense(0x03, 0x11, 0x00);
         }
-        else
+
+        // The program area was captured from LBA -150. Sample i read back is sample i - offset as written.
+        ReadOnlySpan<byte> program = ProgramAreaWritten.GetBuffer().AsSpan(0, (int)ProgramAreaWritten.Length);
+        int n = count * 2352;
+        long source = (long)(lba + 150) * 2352 - (long)ReadOffsetSamples * 4;
+        Span<byte> destination = data.Slice(0, n);
+        destination.Clear();
+        long from = Math.Max(source, 0);
+        long to = Math.Min(source + n, program.Length);
+        if (to > from)
         {
-            data.Slice(0, n).Clear();
+            program.Slice((int)from, (int)(to - from)).CopyTo(destination.Slice((int)(from - source)));
+        }
+
+        if (ReadBackDifferenceAtLba is int changed && changed >= lba && changed < lba + count)
+        {
+            destination[(changed - lba) * 2352 + 100] ^= 0x01;
         }
         return Good((uint)n);
+    }
+
+    /// <summary>READ TOC/PMA/ATIP: format 0 (track list) and format 5 (CD-Text) of a recorded disc.</summary>
+    private ScsiExecutionResult ReadToc(ReadOnlySpan<byte> cdb, Span<byte> data)
+    {
+        if (!Recorded)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+
+        int format = cdb[2] & 0x0F;
+        if (format == 0x00)
+        {
+            byte[] r = new byte[4 + 8 * (_recordedTracks.Count + 1)];
+            BinaryPrimitives.WriteUInt16BigEndian(r, (ushort)(r.Length - 2));
+            r[2] = _recordedTracks[0].TrackNumber;
+            r[3] = _recordedTracks[^1].TrackNumber;
+            for (int i = 0; i <= _recordedTracks.Count; i++)
+            {
+                bool leadOut = i == _recordedTracks.Count;
+                var entry = r.AsSpan(4 + 8 * i, 8);
+                int control = leadOut || DropsControlBits ? 0 : _recordedTracks[i].CueControl >> 4;
+                entry[1] = (byte)(0x10 | control); // ADR 1, then the control bits
+                entry[2] = leadOut ? SaoCueSheetBuilder.LeadOutTrackNumber : _recordedTracks[i].TrackNumber;
+                int lba = leadOut ? RecordedLeadOutLba : _recordedTracks[i].Index01Lba + (ShiftsTrackStartsInToc && i > 0 ? 1 : 0);
+                BinaryPrimitives.WriteInt32BigEndian(entry.Slice(4, 4), lba);
+            }
+            return CopyOut(r, data);
+        }
+
+        if (format == 0x05)
+        {
+            byte[] packs = _recordedCdText && !LosesCdText ? DecodeLeadInPacks() : [];
+            byte[] r = new byte[4 + packs.Length];
+            BinaryPrimitives.WriteUInt16BigEndian(r, (ushort)(r.Length - 2));
+            packs.CopyTo(r, 4);
+            return CopyOut(r, data);
+        }
+
+        return Sense(0x05, 0x24, 0x00);
+    }
+
+    /// <summary>
+    /// Recovers the CD-Text packs from the R-W sub-channel bytes that were written to the lead-in, the way a drive
+    /// reads them: sector by sector until the first pack comes round again.
+    /// </summary>
+    private byte[] DecodeLeadInPacks()
+    {
+        ReadOnlySpan<byte> leadIn = LeadInWritten.GetBuffer().AsSpan(0, (int)LeadInWritten.Length);
+        var packs = new List<byte>();
+        Span<byte> group = stackalloc byte[72];
+        for (int sector = 0; (sector + 1) * 96 <= leadIn.Length; sector++)
+        {
+            CdTextLeadInEncoder.GatherFromRw(leadIn.Slice(sector * 96, 96), group);
+            for (int p = 0; p < 4; p++)
+            {
+                var pack = group.Slice(p * 18, 18);
+                if (packs.Count >= 18 && pack.Slice(0, 4).SequenceEqual(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(packs).Slice(0, 4)))
+                {
+                    return packs.ToArray();
+                }
+                packs.AddRange(pack);
+            }
+        }
+        return packs.ToArray();
+    }
+
+    private ScsiExecutionResult SetCdSpeed(ReadOnlySpan<byte> cdb)
+    {
+        if (RejectsSetSpeed)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        WriteSpeedSet = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(4, 2));
+        return Good(0);
     }
 
     private ScsiExecutionResult ReadBufferCapacity(Span<byte> data)
@@ -381,6 +512,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
             {
                 Recorded = true;
                 DiscStatus = ClosesDiscAfterWrite ? 2 : 1;
+                _recordedTracks = _cue.Tracks;
+                _recordedCdText = _cue.CdText;
+                RecordedLeadOutLba = _cue.LeadOutLba;
+                RecordedCueSheet = _cue.Raw;
             }
             else if (ShowsSimulatedSessionAfterTestWrite)
             {
@@ -441,6 +576,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         public bool CdText { get; init; }
         public int LeadOutLba { get; init; }
         public int FirstWriteLba { get; init; }
+        public List<(byte TrackNumber, int Index01Lba, byte CueControl)> Tracks { get; init; } = new();
 
         public static CueSheetState? Parse(ReadOnlySpan<byte> sheet, VirtualMmcDrive drive)
         {
@@ -480,6 +616,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             i++;
 
             // Tracks: ISRC pairs, INDEX 00 / 01 entries, times strictly increasing.
+            var tracks = new List<(byte TrackNumber, int Index01Lba, byte CueControl)>();
             int expectedTrack = 1;
             int lastLba = int.MinValue;
             bool sawIndex01ForTrack = false;
@@ -508,7 +645,11 @@ public sealed class VirtualMmcDrive : IScsiTransport
                 if (firstEntry && (e[2] != 0 || lba != SaoAudioLayout.FirstWritableLba)) return null; // track 1 INDEX 00 at 00:00:00
                 if (lba <= lastLba) return null;
                 if (e[2] == 0 && sawIndex01ForTrack) return null;
-                if (e[2] == 1) sawIndex01ForTrack = true;
+                if (e[2] == 1)
+                {
+                    sawIndex01ForTrack = true;
+                    tracks.Add(((byte)tno, lba, (byte)(e[0] & 0xF0)));
+                }
                 else if (e[2] != 0) return null;
                 lastLba = lba;
                 firstEntry = false;
@@ -529,6 +670,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
                 Raw = sheet.ToArray(),
                 CdText = cdText,
                 LeadOutLba = leadOutLba,
+                Tracks = tracks,
                 FirstWriteLba = cdText ? drive.LeadInStart.ToLba() : SaoAudioLayout.FirstWritableLba
             };
         }

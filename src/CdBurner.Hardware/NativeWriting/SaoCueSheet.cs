@@ -3,15 +3,43 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <summary>One audio track to be written Session-at-Once.</summary>
 /// <param name="TrackNumber">1–99.</param>
 /// <param name="SectorCount">Length of the track's audio in 2,352-byte sectors (from INDEX 01 to the next track).</param>
-/// <param name="PreGapSectors">Silence written before INDEX 01. Track 1 always gets at least 150 (two seconds).</param>
+/// <param name="PreGapSectors">Length of the pre-gap (INDEX 00 to INDEX 01). Track 1 always gets at least 150
+/// (two seconds), and its first 150 sectors are always silence.</param>
 /// <param name="Isrc">Optional ISRC (12 characters, hyphens allowed); invalid codes are left out.</param>
-public sealed record SaoTrack(int TrackNumber, int SectorCount, int PreGapSectors = 0, string? Isrc = null);
+/// <param name="PreGapAudioSectors">How many sectors at the end of the pre-gap hold audio instead of silence. The
+/// track's audio stream supplies these first, then <paramref name="SectorCount"/> sectors. On track 1 this is
+/// hidden audio that a player reaches by rewinding from the start of the disc.</param>
+/// <param name="PreEmphasis">Sets the pre-emphasis flag in the track's control bits.</param>
+/// <param name="CopyPermitted">Sets the digital-copy-permitted flag in the track's control bits.</param>
+public sealed record SaoTrack(
+    int TrackNumber,
+    int SectorCount,
+    int PreGapSectors = 0,
+    string? Isrc = null,
+    int PreGapAudioSectors = 0,
+    bool PreEmphasis = false,
+    bool CopyPermitted = false);
 
 /// <summary>Where each track lands on the disc.</summary>
 public sealed record SaoTrackPlacement(int TrackNumber, int PreGapLba, int Index01Lba, int EndLba, string? Isrc)
 {
     public int PreGapSectors => Index01Lba - PreGapLba;
     public int SectorCount => EndLba - Index01Lba;
+
+    /// <summary>Sectors at the end of the pre-gap that carry audio from the track's stream.</summary>
+    public int PreGapAudioSectors { get; init; }
+
+    public bool PreEmphasis { get; init; }
+    public bool CopyPermitted { get; init; }
+
+    /// <summary>
+    /// The control bits as SEND CUE SHEET wants them (high nibble of the CTL/ADR byte): 0x10 pre-emphasis,
+    /// 0x20 digital copy permitted. The same bits appear in the low nibble of the TOC's ADR/CONTROL byte
+    /// (<see cref="TocControl"/>).
+    /// </summary>
+    public byte CueControl => (byte)((PreEmphasis ? 0x10 : 0) | (CopyPermitted ? 0x20 : 0));
+
+    public byte TocControl => (byte)(CueControl >> 4);
 }
 
 /// <summary>
@@ -58,10 +86,26 @@ public sealed class SaoAudioLayout
                 throw new ArgumentException($"Track {t.TrackNumber} has a negative pre-gap.", nameof(tracks));
             }
 
-            int preGap = i == 0 ? Math.Max(150, t.PreGapSectors) : t.PreGapSectors;
+            if (t.PreGapAudioSectors < 0)
+            {
+                throw new ArgumentException($"Track {t.TrackNumber} has a negative pre-gap audio length.", nameof(tracks));
+            }
+
+            // The two seconds before LBA 0 cannot hold audio: a player cannot reach them, and the Red Book wants silence there.
+            int preGap = i == 0 ? Math.Max(150, Math.Max(t.PreGapSectors, 150 + t.PreGapAudioSectors)) : t.PreGapSectors;
+            if (t.PreGapAudioSectors > (i == 0 ? preGap - 150 : preGap))
+            {
+                throw new ArgumentException($"Track {t.TrackNumber} has more pre-gap audio than pre-gap.", nameof(tracks));
+            }
+
             int index01 = lba + preGap;
             int end = index01 + t.SectorCount;
-            placements.Add(new SaoTrackPlacement(t.TrackNumber, lba, index01, end, NormalizeIsrc(t.Isrc)));
+            placements.Add(new SaoTrackPlacement(t.TrackNumber, lba, index01, end, NormalizeIsrc(t.Isrc))
+            {
+                PreGapAudioSectors = t.PreGapAudioSectors,
+                PreEmphasis = t.PreEmphasis,
+                CopyPermitted = t.CopyPermitted
+            });
             lba = end;
         }
 
@@ -154,7 +198,9 @@ public static class SaoCueSheetBuilder
     {
         ArgumentNullException.ThrowIfNull(layout);
         var entries = new List<byte[]>();
-        const byte ctl = 0x00; // two-channel audio, no pre-emphasis, digital copy not permitted
+        // Lead-in, catalog number and lead-out entries carry plain two-channel audio control bits. Each track's own
+        // entries carry that track's pre-emphasis and copy-permitted bits, as cdrdao's generic MMC driver sends them.
+        const byte ctl = 0x00;
 
         string? catalog = SaoAudioLayout.NormalizeMcn(mcn);
         if (catalog != null)
@@ -175,20 +221,21 @@ public static class SaoCueSheetBuilder
         {
             var t = layout.Tracks[i];
             byte tno = (byte)t.TrackNumber;
+            byte trackCtl = t.CueControl;
 
             if (t.Isrc is { } isrc)
             {
-                byte isrcCtlAdr = (variant & CueSheetVariant.IsrcWithoutControl) != 0 ? (byte)0x03 : (byte)(ctl | 0x03);
+                byte isrcCtlAdr = (variant & CueSheetVariant.IsrcWithoutControl) != 0 ? (byte)0x03 : (byte)(trackCtl | 0x03);
                 entries.Add(Entry(isrcCtlAdr, tno, (byte)isrc[0], (byte)isrc[1], (byte)isrc[2], (byte)isrc[3], (byte)isrc[4], (byte)isrc[5]));
                 entries.Add(Entry(isrcCtlAdr, tno, (byte)isrc[6], (byte)isrc[7], (byte)isrc[8], (byte)isrc[9], (byte)isrc[10], (byte)isrc[11]));
             }
 
             if (i == 0 || t.PreGapSectors > 0)
             {
-                entries.Add(Entry((byte)(ctl | 0x01), tno, 0x00, DataFormAudio, 0x00, Msf.FromLba(t.PreGapLba)));
+                entries.Add(Entry((byte)(trackCtl | 0x01), tno, 0x00, DataFormAudio, 0x00, Msf.FromLba(t.PreGapLba)));
             }
 
-            entries.Add(Entry((byte)(ctl | 0x01), tno, 0x01, DataFormAudio, 0x00, Msf.FromLba(t.Index01Lba)));
+            entries.Add(Entry((byte)(trackCtl | 0x01), tno, 0x01, DataFormAudio, 0x00, Msf.FromLba(t.Index01Lba)));
         }
 
         entries.Add(Entry((byte)(ctl | 0x01), LeadOutTrackNumber, 0x01, DataFormGenerated, 0x00, Msf.FromLba(layout.LeadOutLba)));
