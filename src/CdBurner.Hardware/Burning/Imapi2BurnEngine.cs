@@ -952,6 +952,21 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
     }
 
     /// <inheritdoc/>
+    public Task<RipOperationResult> ReadSectorsForVerifyAsync(
+        IDiscRecorderBackend recorder,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
+        IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        ArgumentNullException.ThrowIfNull(sectorConsumer);
+        return PhysicalSectorReader.ReadAsync(recorder.VolumePath, startLba, sectorCount, raw2352Mode: false,
+            sectorConsumer, progress, cancellationToken, forceUnitAccess: true);
+    }
+
+    /// <inheritdoc/>
     public bool SupportsC2ErrorPointers(IDiscRecorderBackend recorder, int probeLba)
     {
         ArgumentNullException.ThrowIfNull(recorder);

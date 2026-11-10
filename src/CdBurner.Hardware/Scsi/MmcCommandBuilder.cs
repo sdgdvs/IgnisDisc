@@ -298,6 +298,33 @@ public static class MmcCommandBuilder
         return cdb;
     }
 
+    /// <summary>FUA (Force Unit Access) bit in byte 1 of READ (10): the drive must read the disc, not its cache.</summary>
+    public const byte Read10ForceUnitAccess = 0x08;
+
+    /// <summary>
+    /// Builds a 10-byte READ (10) CDB (OpCode 0x28) for 2,048-byte user-data sectors.
+    /// </summary>
+    /// <param name="forceUnitAccess">
+    /// Set FUA so the drive reads the sectors from the disc even if its cache holds them. Used for verify reads,
+    /// where a copy left in the drive's memory by the burn could hide a bad sector.
+    /// </param>
+    public static byte[] BuildRead10Cdb(int lba, int count, bool forceUnitAccess = false)
+    {
+        byte[] cdb = new byte[10];
+        cdb[0] = 0x28; // READ (10)
+        if (forceUnitAccess)
+        {
+            cdb[1] = Read10ForceUnitAccess;
+        }
+        cdb[2] = (byte)(lba >> 24);
+        cdb[3] = (byte)(lba >> 16);
+        cdb[4] = (byte)(lba >> 8);
+        cdb[5] = (byte)lba;
+        cdb[7] = (byte)(count >> 8);
+        cdb[8] = (byte)count;
+        return cdb;
+    }
+
     /// <summary>
     /// Builds a 12-byte MMC READ CD CDB (OpCode 0xBE) for extracting raw sectors, headers, and subchannel data.
     /// </summary>

@@ -77,6 +77,19 @@ public interface IBurnEngineBackend
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads 2,048-byte data sectors for verification: a real drive is told to read the disc itself (READ (10) with
+    /// FUA), not a copy of the sectors left in its memory by the burn. Backends without a drive cache read normally.
+    /// </summary>
+    Task<RipOperationResult> ReadSectorsForVerifyAsync(
+        IDiscRecorderBackend recorder,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
+        IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken cancellationToken) =>
+        ReadSectorsAsync(recorder, startLba, sectorCount, raw2352Mode: false, sectorConsumer, progress, cancellationToken);
 }
 
 /// <summary>
@@ -259,6 +272,12 @@ public class RipOperationResult
     }
     public int TotalRetriesPerformed { get; init; }
     public Exception? Exception { get; init; }
+
+    /// <summary>
+    /// A plain-language remark about how the sectors were read, e.g. that the drive refused to bypass its cache and
+    /// the cache was flushed instead. Null when there is nothing to say.
+    /// </summary>
+    public string? Note { get; init; }
 
     public static RipOperationResult Succeeded(int sectorsRead, TimeSpan duration, IReadOnlyList<int>? badSectors = null) => new()
     {

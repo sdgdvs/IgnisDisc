@@ -574,6 +574,7 @@ public static class CliCommandRunner
                 totalTimeSeconds = result.TotalTime.TotalSeconds,
                 averageSpeedMultiplier = result.AverageSpeedMultiplier,
                 verified = result.Verified,
+                verificationNote = result.VerificationNote,
                 error = result.ErrorMessage
             };
 
@@ -589,6 +590,7 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Duration:       {result.TotalTime}");
             stdout.WriteLine($"  Average Speed:  {result.AverageSpeedMultiplier:F1}x");
             stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
+            if (result.VerificationNote != null) stdout.WriteLine($"  Verify Note:    {result.VerificationNote}");
             return 0;
         }
 
@@ -695,6 +697,7 @@ public static class CliCommandRunner
                 totalTimeSeconds = result.TotalTime.TotalSeconds,
                 averageSpeedMultiplier = result.AverageSpeedMultiplier,
                 verified = result.Verified,
+                verificationNote = result.VerificationNote,
                 phases = phases.Phases.Select(p => new { phase = p.Name, seconds = Math.Round(p.Duration.TotalSeconds, 1) }),
                 error = result.ErrorMessage
             };
@@ -711,6 +714,7 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Sectors Burned: {result.SectorsWritten:N0}");
             stdout.WriteLine($"  Duration:       {result.TotalTime}");
             stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
+            if (result.VerificationNote != null) stdout.WriteLine($"  Verify Note:    {result.VerificationNote}");
             phases.WriteSummary(stdout);
             return 0;
         }

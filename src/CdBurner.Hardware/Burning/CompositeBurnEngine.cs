@@ -91,6 +91,19 @@ public class CompositeBurnEngine : IBurnEngineBackend, ISecureAudioReader
     }
 
     /// <inheritdoc/>
+    public Task<RipOperationResult> ReadSectorsForVerifyAsync(
+        IDiscRecorderBackend recorder,
+        int startLba,
+        int sectorCount,
+        Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
+        IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        return SelectBackend(recorder).ReadSectorsForVerifyAsync(recorder, startLba, sectorCount, sectorConsumer, progress, cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public bool SupportsC2ErrorPointers(IDiscRecorderBackend recorder, int probeLba)
     {
         ArgumentNullException.ThrowIfNull(recorder);

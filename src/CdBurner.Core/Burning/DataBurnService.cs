@@ -2,6 +2,7 @@ global using DataBurnStatus = CdBurner.Core.Abstractions.BurnStatus;
 using System.Security.Cryptography;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Compilation;
+using CdBurner.Core.Images;
 using CdBurner.Core.Iso;
 using CdBurner.Core.Primitives;
 
@@ -279,6 +280,7 @@ public class DataBurnService
         }
 
         bool verified = false;
+        string? verificationNote = null;
         if (verifyRequested && !burnOptions.Simulate)
         {
             int sectorsWritten = burnResult.SectorsWritten > 0 ? burnResult.SectorsWritten : estimatedSectors;
@@ -290,6 +292,7 @@ public class DataBurnService
                 burnStartLba,
                 progress,
                 cancellationToken);
+            verificationNote = verifyResult.Note;
             if (!verifyResult.Success)
             {
                 if (ejectRequested)
@@ -316,10 +319,17 @@ public class DataBurnService
             burnResult.SectorsWritten,
             burnResult.TotalTime,
             burnResult.AverageSpeedMultiplier,
-            verified);
+            verified,
+            verificationNote);
     }
 
-    private async Task<(bool Success, string? ErrorMessage)> VerifyBurnedDiscAsync(
+    /// <summary>
+    /// Reads the burned sectors back and compares each one with the image (roadmap M1.3). The drive is told to read
+    /// the disc itself, not its cache (<see cref="IBurnEngineBackend.ReadSectorsForVerifyAsync"/>). The disc's file
+    /// system is parsed from its own sectors, so bad sectors are reported with the files that own them, and when the
+    /// disc carries a root SHA256SUMS/BLAKE3SUMS every listed file is checked against it in the same pass.
+    /// </summary>
+    private async Task<(bool Success, string? ErrorMessage, string? Note)> VerifyBurnedDiscAsync(
         IDiscRecorderBackend recorder,
         Stream sourceStream,
         int sectorCount,
@@ -328,59 +338,145 @@ public class DataBurnService
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken)
     {
+        var notes = new List<string>();
+
+        // 1. The file system and hash lists, read from the disc's own sectors (small random reads, off this thread).
+        var (fileMap, manifestCheck, manifestError) = await Task.Run(
+            () => ReadDiscLayout(recorder, startLba, sectorCount, cancellationToken), cancellationToken).ConfigureAwait(false);
+        if (manifestError != null)
+        {
+            return (false, manifestError, null);
+        }
+
+        // 2. One pass over the disc: compare every sector with the image and feed the hash-list check.
         if (sourceStream.CanSeek)
         {
             sourceStream.Position = initialStreamPosition;
         }
 
-        using var sourceSha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var discSha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-
-        byte[] sourceBuf = new byte[OpticalConstants.DataSectorSize];
-        int sectorsToHash = sectorCount;
-
-        // Hash source stream sectors
-        while (sectorsToHash > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int read = await ReadSectorFullyAsync(sourceStream, sourceBuf, cancellationToken);
-            if (read == 0) break;
-            if (read < OpticalConstants.DataSectorSize)
-            {
-                Array.Clear(sourceBuf, read, OpticalConstants.DataSectorSize - read);
-            }
-            sourceSha.AppendData(sourceBuf);
-            sectorsToHash--;
-        }
-
-        // Read disc sectors and hash
-        var ripResult = await _burnEngine.ReadSectorsAsync(
+        byte[] expected = new byte[OpticalConstants.DataSectorSize];
+        var mismatchedLbas = new List<int>();
+        var ripResult = await _burnEngine.ReadSectorsForVerifyAsync(
             recorder,
-            startLba: startLba,
-            sectorCount: sectorCount,
-            raw2352Mode: false,
-            sectorConsumer: (lba, sectorData) =>
+            startLba,
+            sectorCount,
+            sectorConsumer: async (lba, sectorData) =>
             {
-                discSha.AppendData(sectorData.Span);
-                return ValueTask.CompletedTask;
+                int read = await ReadSectorFullyAsync(sourceStream, expected, cancellationToken).ConfigureAwait(false);
+                if (read < expected.Length)
+                {
+                    Array.Clear(expected, read, expected.Length - read);
+                }
+                if (!sectorData.Span.SequenceEqual(expected))
+                {
+                    mismatchedLbas.Add(lba);
+                }
+                manifestCheck?.AddSector(lba, sectorData.Span);
             },
-            progress: progress,
-            cancellationToken: cancellationToken);
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+        if (ripResult.Note != null)
+        {
+            notes.Add(ripResult.Note);
+        }
 
         if (!ripResult.Success)
         {
-            return (false, ripResult.ErrorMessage ?? "Failed to read burned sectors during verification.");
+            string where = ripResult.BadSectorsList.Count > 0 ? DescribeFiles(ripResult.BadSectorsList, fileMap) : string.Empty;
+            return (false, (ripResult.ErrorMessage ?? "Failed to read burned sectors during verification.") + where, null);
         }
 
-        byte[] sourceHash = sourceSha.GetHashAndReset();
-        byte[] discHash = discSha.GetHashAndReset();
-
-        if (!sourceHash.AsSpan().SequenceEqual(discHash))
+        if (mismatchedLbas.Count > 0)
         {
-            return (false, "Verification failed: burned disc SHA-256 hash does not match source image.");
+            return (false,
+                $"Verification failed: {mismatchedLbas.Count} sector(s) on the disc differ from the image, starting at sector {mismatchedLbas[0]}." +
+                DescribeFiles(mismatchedLbas, fileMap), null);
         }
 
-        return (true, null);
+        if (manifestCheck != null)
+        {
+            var check = manifestCheck.Finish();
+            string lists = string.Join(" and ", check.ManifestNames);
+            if (!check.Passed)
+            {
+                var bad = check.MismatchedFiles.Concat(check.MissingFiles.Select(p => p + " (missing)")).ToList();
+                return (false,
+                    $"Verification failed: {bad.Count} file(s) on the disc do not match its {lists}: " +
+                    string.Join(", ", bad.Take(10)) + (bad.Count > 10 ? ", ..." : "") + ".", null);
+            }
+            notes.Add($"All {check.FilesChecked} file(s) match the disc's {lists}." +
+                (check.FilesNotLookedUp > 0 ? $" {check.FilesNotLookedUp} file(s) with UDF-only names were checked by sector compare only." : ""));
+        }
+
+        return (true, null, notes.Count > 0 ? string.Join(" ", notes) : null);
+    }
+
+    /// <summary>
+    /// Parses the burned file system from the disc's sectors. Returns the file extents (to name bad sectors) and the
+    /// hash-list check, or an error if the disc has a hash list that cannot be read. A disc whose file system cannot
+    /// be parsed (e.g. a non-ISO image) is still verified sector by sector, just without file names.
+    /// </summary>
+    private (IReadOnlyList<LbaFileExtentMap>? FileMap, DiscManifestCheck? Check, string? Error) ReadDiscLayout(
+        IDiscRecorderBackend recorder, int startLba, int sectorCount, CancellationToken cancellationToken)
+    {
+        string? ReadSectors(int lba, int count, byte[] buffer)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int filled = 0;
+            var result = _burnEngine.ReadSectorsForVerifyAsync(recorder, lba, count, (_, data) =>
+            {
+                data.Span.CopyTo(buffer.AsSpan(filled * OpticalConstants.DataSectorSize));
+                filled++;
+                return ValueTask.CompletedTask;
+            }, null, cancellationToken).GetAwaiter().GetResult();
+            return result.Success && filled == count ? null : result.ErrorMessage ?? "read failed";
+        }
+
+        IsoImageReader reader;
+        try
+        {
+            reader = IsoImageReader.FromStream(new SectorReadStream(ReadSectors, startLba + sectorCount), leaveOpen: false, startLba);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
+        {
+            return (null, null, null);
+        }
+
+        using (reader)
+        {
+            var map = LbaFileExtentMap.FromIsoReader(reader);
+            try
+            {
+                return (map, DiscManifestCheck.Prepare(reader), null);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return (map, null, $"Verification failed: the hash list on the disc could not be read ({ex.Message}).");
+            }
+        }
+    }
+
+    private static string DescribeFiles(IReadOnlyList<int> lbas, IReadOnlyList<LbaFileExtentMap>? fileMap)
+    {
+        if (fileMap == null || fileMap.Count == 0)
+        {
+            return string.Empty;
+        }
+        var files = new List<string>();
+        foreach (int lba in lbas)
+        {
+            foreach (var extent in fileMap)
+            {
+                if (extent.SectorCount > 0 && extent.ContainsLba(lba) && !files.Contains(extent.FilePath))
+                {
+                    files.Add(extent.FilePath);
+                }
+            }
+        }
+        return files.Count == 0
+            ? " The damage is in the file system area, outside any file."
+            : " Affected file(s): " + string.Join(", ", files.Take(10)) + (files.Count > 10 ? ", ..." : "") + ".";
     }
 
     private static async ValueTask<int> ReadSectorFullyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
@@ -410,6 +506,12 @@ public class DataBurnResult : BurnOperationResult
     public bool Verified { get; init; }
 
     /// <summary>
+    /// What the post-burn check found worth saying when it passed, e.g. how many files matched the disc's SHA256SUMS,
+    /// or that the drive would not skip its cache. Null when there is nothing to add.
+    /// </summary>
+    public string? VerificationNote { get; init; }
+
+    /// <summary>
     /// Optional path to the temporary or source ISO image file burned.
     /// </summary>
     public string? ImagePath { get; init; }
@@ -418,14 +520,16 @@ public class DataBurnResult : BurnOperationResult
         int sectorsWritten,
         TimeSpan duration,
         double avgSpeed = 0.0,
-        bool verified = false) => new()
+        bool verified = false,
+        string? verificationNote = null) => new()
     {
         Success = true,
         Status = BurnStatus.Succeeded,
         SectorsWritten = sectorsWritten,
         TotalTime = duration,
         AverageSpeedMultiplier = avgSpeed,
-        Verified = verified
+        Verified = verified,
+        VerificationNote = verificationNote
     };
 
     public static new DataBurnResult Failed(string error, Exception? ex = null) => new()

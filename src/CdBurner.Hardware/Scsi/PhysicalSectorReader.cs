@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
@@ -41,7 +42,8 @@ public static partial class PhysicalSectorReader
         bool raw2352Mode,
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forceUnitAccess = false)
     {
         ArgumentNullException.ThrowIfNull(sectorConsumer);
 
@@ -61,8 +63,68 @@ public static partial class PhysicalSectorReader
         }
 
         // Device I/O is blocking; keep it off the caller's (possibly UI) thread.
-        return Task.Run(() => ReadCoreAsync(volumePath, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken), cancellationToken);
+        return Task.Run(async () =>
+        {
+            using ISectorSource? source = OpenBestSource(volumePath, raw2352Mode, out string? openError);
+            if (source == null)
+            {
+                return RipOperationResult.Failed(openError ?? $"Unable to open drive {volumePath} for reading.");
+            }
+            if (forceUnitAccess && !raw2352Mode && source is SptiSource spti)
+            {
+                spti.EnableForceUnitAccess(startLba, sectorCount);
+            }
+
+            var result = await ReadCoreAsync(source, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken).ConfigureAwait(false);
+            if (forceUnitAccess && !raw2352Mode && source is not SptiSource)
+            {
+                return WithNote(result, "The drive could only be read through Windows, which cannot tell it to skip its own cache.");
+            }
+            return result;
+        }, cancellationToken);
     }
+
+    /// <summary>
+    /// Reads 2,048-byte data sectors through <paramref name="transport"/> with READ (10). With
+    /// <paramref name="forceUnitAccess"/>, every read has FUA set so the drive reads the disc, not its cache; a drive
+    /// that refuses FUA gets its cache flushed instead (see <see cref="RipOperationResult.Note"/>).
+    /// </summary>
+    public static Task<RipOperationResult> ReadDataSectorsAsync(
+        IScsiTransport transport,
+        int startLba,
+        int sectorCount,
+        bool forceUnitAccess,
+        Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
+        IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        ArgumentNullException.ThrowIfNull(sectorConsumer);
+        if (startLba < 0 || sectorCount < 0)
+        {
+            return Task.FromResult(RipOperationResult.Failed($"Invalid sector range (start {startLba}, count {sectorCount})."));
+        }
+
+        var source = new SptiSource(transport, ownedHandle: null, raw: false);
+        if (forceUnitAccess)
+        {
+            source.EnableForceUnitAccess(startLba, sectorCount);
+        }
+        return ReadCoreAsync(source, startLba, sectorCount, false, sectorConsumer, progress, cancellationToken);
+    }
+
+    private static RipOperationResult WithNote(RipOperationResult result, string? note) => note == null ? result : new RipOperationResult
+    {
+        Success = result.Success,
+        ErrorMessage = result.ErrorMessage,
+        SectorsRead = result.SectorsRead,
+        BadSectorsCount = result.BadSectorsCount,
+        TotalTime = result.TotalTime,
+        BadSectorsList = result.BadSectorsList,
+        TotalRetriesPerformed = result.TotalRetriesPerformed,
+        Exception = result.Exception,
+        Note = note
+    };
 
     /// <summary>
     /// Best-effort SCSI START STOP UNIT (0x1B, start=false, loadEject=false, immediate=true) motor spin-down.
@@ -95,7 +157,20 @@ public static partial class PhysicalSectorReader
     }
 
     private static async Task<RipOperationResult> ReadCoreAsync(
-        string volumePath,
+        ISectorSource source,
+        int startLba,
+        int sectorCount,
+        bool raw2352Mode,
+        Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
+        IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var result = await ReadCoreLoopAsync(source, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken).ConfigureAwait(false);
+        return WithNote(result, (source as SptiSource)?.Note);
+    }
+
+    private static async Task<RipOperationResult> ReadCoreLoopAsync(
+        ISectorSource source,
         int startLba,
         int sectorCount,
         bool raw2352Mode,
@@ -105,12 +180,6 @@ public static partial class PhysicalSectorReader
     {
         var sw = Stopwatch.StartNew();
         int sectorSize = raw2352Mode ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
-
-        using ISectorSource? source = OpenBestSource(volumePath, raw2352Mode, out string? openError);
-        if (source == null)
-        {
-            return RipOperationResult.Failed(openError ?? $"Unable to open drive {volumePath} for reading.");
-        }
 
         byte[] buffer = new byte[ChunkSectors * sectorSize];
         int readCount = 0;
@@ -959,7 +1028,7 @@ public static partial class PhysicalSectorReader
         byte[] sector = new byte[OpticalConstants.DataSectorSize];
         int isoVolumeEndLba = 0;
         var pvdRes = transport.ExecuteCommand(
-            BuildRead10Cdb(lastSessionStartLba + 16, 1),
+            MmcCommandBuilder.BuildRead10Cdb(lastSessionStartLba + 16, 1),
             sector,
             ScsiPassThroughNative.SCSI_IOCTL_DATA_IN,
             TimeSpan.FromSeconds(5));
@@ -979,7 +1048,7 @@ public static partial class PhysicalSectorReader
             }
 
             var probe = transport.ExecuteCommand(
-                BuildRead10Cdb(candidate, 1),
+                MmcCommandBuilder.BuildRead10Cdb(candidate, 1),
                 sector,
                 ScsiPassThroughNative.SCSI_IOCTL_DATA_IN,
                 TimeSpan.FromSeconds(5));
@@ -1010,7 +1079,7 @@ public static partial class PhysicalSectorReader
         var rw = OpenDevice(volumePath, FileAccess.ReadWrite, out int rwError);
         if (rw != null)
         {
-            var spti = new SptiSource(rw, raw);
+            var spti = new SptiSource(rw, raw, volumePath);
             if (spti.Probe())
             {
                 return spti;
@@ -1037,15 +1106,83 @@ public static partial class PhysicalSectorReader
 
     private sealed class SptiSource : ISectorSource
     {
-        private readonly SafeFileHandle _handle;
-        private readonly Win32ScsiTransport _transport;
+        private readonly SafeFileHandle? _handle;
+        private readonly IScsiTransport _transport;
+        private readonly bool _ownsTransport;
         private readonly bool _raw;
+        private bool _fua;
+        private int _rangeStart;
 
-        public SptiSource(SafeFileHandle handle, bool raw)
+        /// <summary>
+        /// Drives (by volume path, or by transport object) that refused FUA in this session, with the note to show.
+        /// Each verify makes several reader calls (file system first, then the whole disc), so the refusal and the
+        /// one cache flush are remembered rather than repeated on every call.
+        /// </summary>
+        private static readonly ConditionalWeakTable<object, string> FuaRefusedDrives = new();
+        private readonly object _driveKey;
+
+        public SptiSource(SafeFileHandle handle, bool raw, string volumePath)
+            : this(new Win32ScsiTransport(handle, ownsHandle: false), handle, raw,
+                string.Intern(volumePath.Trim().TrimEnd('\\').ToUpperInvariant()))
         {
-            _handle = handle;
-            _transport = new Win32ScsiTransport(handle, ownsHandle: false);
+            _ownsTransport = true;
+        }
+
+        public SptiSource(IScsiTransport transport, SafeFileHandle? ownedHandle, bool raw, object? driveKey = null)
+        {
+            _transport = transport;
+            _handle = ownedHandle;
             _raw = raw;
+            _driveKey = driveKey ?? transport;
+        }
+
+        /// <summary>Set when something about the read is worth telling the user (the FUA fallback).</summary>
+        public string? Note { get; private set; }
+
+        /// <summary>
+        /// Data reads from <paramref name="rangeStart"/> on set FUA so the drive reads the disc rather than whatever
+        /// its memory still holds from the burn. A drive already known to refuse FUA is read without it.
+        /// </summary>
+        public void EnableForceUnitAccess(int rangeStart, int rangeCount)
+        {
+            _rangeStart = rangeStart;
+            if (FuaRefusedDrives.TryGetValue(_driveKey, out string? note))
+            {
+                Note = note;
+                return;
+            }
+            _fua = !_raw;
+        }
+
+        /// <summary>5/24/00 Invalid Field in CDB: the drive does not accept the FUA bit.</summary>
+        private static bool RejectsFua(ScsiExecutionResult result) =>
+            result.SenseInfo is { SenseKey: 0x05, Asc: 0x24 };
+
+        /// <summary>
+        /// The drive refused FUA. Push anything left over from the burn out of its cache by reading
+        /// <see cref="CacheFlushSectors"/> sectors and throwing them away: from before the range when there is room
+        /// (an earlier session), else from its start, which is furthest from the last sectors written. Sectors that
+        /// enter the cache this way were read from the disc, so they are safe to verify against. Reads past the end of
+        /// a small disc just fail and are ignored; on a disc smaller than the drive's cache this cannot push
+        /// everything out, but the note says the drive refused FUA either way.
+        /// </summary>
+        private void FlushCacheAfterFuaRefused()
+        {
+            int start = Math.Max(0, _rangeStart - CacheFlushSectors);
+            byte[] scratch = new byte[ChunkSectors * OpticalConstants.DataSectorSize];
+            int flushed = 0;
+            for (int done = 0; done < CacheFlushSectors; done += ChunkSectors)
+            {
+                var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildRead10Cdb(start + done, ChunkSectors),
+                    scratch, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
+                if (r.IsSuccess)
+                {
+                    flushed += ChunkSectors;
+                }
+            }
+            Note = $"This drive would not read past its own memory, so {flushed * OpticalConstants.DataSectorSize / 1024 / 1024.0:0.#} MB " +
+                   "of the disc was read first to clear the burn out of that memory.";
+            FuaRefusedDrives.AddOrUpdate(_driveKey, Note);
         }
 
         /// <summary>TEST UNIT READY: confirms pass-through is permitted on this handle.</summary>
@@ -1061,17 +1198,24 @@ public static partial class PhysicalSectorReader
         {
             int sectorSize = _raw ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
             var span = buffer.AsSpan(0, count * sectorSize);
-            byte[] cdb = _raw
-                ? MmcCommandBuilder.BuildReadCdCdb(lba, count, expectedSectorType: 0, mainChannelSelectionBits: 0xF8)
-                : BuildRead10Cdb(lba, count);
 
             ScsiExecutionResult result = default!;
             for (int attempt = 0; attempt < 2; attempt++)
             {
+                byte[] cdb = _raw
+                    ? MmcCommandBuilder.BuildReadCdCdb(lba, count, expectedSectorType: 0, mainChannelSelectionBits: 0xF8)
+                    : MmcCommandBuilder.BuildRead10Cdb(lba, count, _fua);
                 result = _transport.ExecuteCommand(cdb, span, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
                 if (result.IsSuccess && result.DataTransferLength >= span.Length)
                 {
                     return null;
+                }
+                if (_fua && RejectsFua(result))
+                {
+                    // Fall back once for the whole read; this attempt does not count against the retry.
+                    _fua = false;
+                    FlushCacheAfterFuaRefused();
+                    attempt--;
                 }
             }
 
@@ -1082,8 +1226,11 @@ public static partial class PhysicalSectorReader
 
         public void Dispose()
         {
-            _transport.Dispose();
-            _handle.Dispose();
+            if (_ownsTransport)
+            {
+                _transport.Dispose();
+            }
+            _handle?.Dispose();
         }
     }
 
@@ -1151,19 +1298,6 @@ public static partial class PhysicalSectorReader
         }
 
         public void Dispose() => _handle.Dispose();
-    }
-
-    private static byte[] BuildRead10Cdb(int lba, int count)
-    {
-        byte[] cdb = new byte[10];
-        cdb[0] = 0x28; // READ (10)
-        cdb[2] = (byte)(lba >> 24);
-        cdb[3] = (byte)(lba >> 16);
-        cdb[4] = (byte)(lba >> 8);
-        cdb[5] = (byte)lba;
-        cdb[7] = (byte)(count >> 8);
-        cdb[8] = (byte)count;
-        return cdb;
     }
 
     #endregion

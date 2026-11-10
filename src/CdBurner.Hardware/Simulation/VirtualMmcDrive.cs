@@ -97,6 +97,32 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>SET CD SPEED fails with 5/24/00.</summary>
     public bool RejectsSetSpeed { get; set; }
 
+    // ---- Data discs (READ (10)) ----
+
+    /// <summary>
+    /// The 2,048-byte user data of a recorded data disc, from LBA 0. READ (10) reads it; null means no data disc.
+    /// <see cref="ReadErrorAtLba"/> and <see cref="ReadBackDifferenceAtLba"/> apply to it too.
+    /// </summary>
+    public byte[]? DataDiscImage { get; set; }
+
+    /// <summary>READ (10) with the FUA bit set fails with 5/24/00 (invalid field in CDB), as some drives do.</summary>
+    public bool RejectsFua { get; set; }
+
+    /// <summary>
+    /// What the drive's memory still holds, by LBA: a READ (10) without FUA returns these bytes instead of the disc's,
+    /// like a drive that kept the written data in its buffer. The entries are dropped once
+    /// <see cref="ReadCacheCapacitySectors"/> other sectors have been read without FUA, or on <see cref="Reload"/>.
+    /// </summary>
+    public Dictionary<int, byte[]> StaleReadCache { get; } = new();
+
+    /// <summary>How many other sectors must be read before <see cref="StaleReadCache"/> is pushed out.</summary>
+    public int ReadCacheCapacitySectors { get; set; } = 1024;
+
+    /// <summary>Every READ (10) received: start, count and whether FUA was set.</summary>
+    public List<(int Lba, int Count, bool Fua)> Read10Log { get; } = new();
+
+    private int _cacheMissesSinceFill;
+
     // ---- What happened ----
 
     public List<byte> CommandsReceived { get; } = new();
@@ -132,6 +158,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             DiscStatus = 0;
         }
         _cue = null;
+        StaleReadCache.Clear();
     }
 
     public ScsiExecutionResult ExecuteCommand(ReadOnlySpan<byte> cdb, Span<byte> dataBuffer, byte dataDirection, TimeSpan timeout)
@@ -161,6 +188,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             NativeWriteCommands.OpCodeReadBufferCapacity => ReadBufferCapacity(dataBuffer),
             0x35 => SynchronizeCache(),
             0xBE => ReadCd(cdb, dataBuffer),
+            0x28 => Read10(cdb, dataBuffer),
             0x43 => ReadToc(cdb, dataBuffer),
             0xBB => SetCdSpeed(cdb),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
@@ -417,6 +445,55 @@ public sealed class VirtualMmcDrive : IScsiTransport
             destination[(changed - lba) * 2352 + 100] ^= 0x01;
         }
         return Good((uint)n);
+    }
+
+    /// <summary>
+    /// READ (10) of a data disc (<see cref="DataDiscImage"/>). Without FUA, sectors held in
+    /// <see cref="StaleReadCache"/> come from there instead of the disc.
+    /// </summary>
+    private ScsiExecutionResult Read10(ReadOnlySpan<byte> cdb, Span<byte> data)
+    {
+        int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
+        int count = (cdb[7] << 8) | cdb[8];
+        bool fua = (cdb[1] & MmcCommandBuilder.Read10ForceUnitAccess) != 0;
+        Read10Log.Add((lba, count, fua));
+
+        if (fua && RejectsFua)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        byte[]? image = DataDiscImage;
+        int sectors = image == null ? 0 : image.Length / 2048;
+        if (image == null || lba < 0 || count == 0 || data.Length < count * 2048 || lba + count > sectors)
+        {
+            return Sense(0x05, 0x21, 0x00);
+        }
+        if (ReadErrorAtLba is int bad && bad >= lba && bad < lba + count)
+        {
+            return Sense(0x03, 0x11, 0x00);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            Span<byte> destination = data.Slice(i * 2048, 2048);
+            if (!fua && StaleReadCache.TryGetValue(lba + i, out byte[]? cached))
+            {
+                cached.AsSpan(0, 2048).CopyTo(destination);
+                continue;
+            }
+
+            image.AsSpan((lba + i) * 2048, 2048).CopyTo(destination);
+            if (ReadBackDifferenceAtLba == lba + i)
+            {
+                destination[100] ^= 0x01;
+            }
+            if (!fua && StaleReadCache.Count > 0 && ++_cacheMissesSinceFill >= ReadCacheCapacitySectors)
+            {
+                StaleReadCache.Clear();
+                _cacheMissesSinceFill = 0;
+            }
+        }
+        return Good((uint)(count * 2048));
     }
 
     /// <summary>READ TOC/PMA/ATIP: format 0 (track list) and format 5 (CD-Text) of a recorded disc.</summary>
