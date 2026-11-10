@@ -67,11 +67,13 @@ ignisdisc-cli <command> [options]
   drives [--json]                              List optical drives (physical and virtual)
   media-info --drive <id>                      Disc status, capacity, sessions, speeds
   build-iso  --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet]
-             [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>]
-                                               --fixed-time (or SOURCE_DATE_EPOCH) gives byte-identical images
+             [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--sha256sums]
+                                               --fixed-time (or SOURCE_DATE_EPOCH) gives byte-identical images;
+                                               --sha256sums adds a root SHA256SUMS that `sha256sum -c` can check
   burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <...>]
+             [--sha256sums]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
              [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]

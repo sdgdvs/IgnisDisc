@@ -25,6 +25,7 @@ public class DataBurnViewModel : ObservableObject
     private FileSystemPreset _selectedFileSystemPreset = FileSystemPreset.IsoJolietUdf;
     private bool _closeDisc = true;
     private bool _verifyAfterBurn = false;
+    private bool _writeSha256Manifest = false;
     private bool _ejectAfterBurn = false;
     private bool _bufferUnderrunFreeEnabled = true;
     private bool _isBootableEnabled = false;
@@ -103,6 +104,15 @@ public class DataBurnViewModel : ObservableObject
     {
         get => _verifyAfterBurn;
         set => SetProperty(ref _verifyAfterBurn, value);
+    }
+
+    /// <summary>
+    /// Whether to add a SHA256SUMS file to the disc root so anyone can check every file later with standard tools.
+    /// </summary>
+    public bool WriteSha256Manifest
+    {
+        get => _writeSha256Manifest;
+        set => SetProperty(ref _writeSha256Manifest, value);
     }
 
     /// <summary>
@@ -946,7 +956,8 @@ public class DataBurnViewModel : ObservableObject
             IncludeJoliet: includeJoliet,
             IncludeUdf: includeUdf,
             UdfRevision: udfRev,
-            BootConfiguration: bootConfig);
+            BootConfiguration: bootConfig,
+            WriteSha256Manifest: WriteSha256Manifest);
     }
 
     private ElToritoBootConfiguration? BuildBootConfiguration()

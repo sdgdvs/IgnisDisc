@@ -15,6 +15,9 @@ namespace CdBurner.Core.Iso;
 /// When set, every volume, descriptor and integrity timestamp uses it, file and directory times later than it are
 /// clamped to it, and the UDF volume-set ID is derived from the tree, so the same tree always gives the same bytes.
 /// When null (the default), images carry the build time as before.</param>
+/// <param name="WriteSha256Manifest">Adds a <c>SHA256SUMS</c> file (GNU coreutils format) to the disc root listing
+/// every other file. Files are hashed while they stream into the image, so the source is read only once. First session
+/// only.</param>
 public record IsoBuildOptions(
     string VolumeLabel = "CDBURNER_DISC",
     bool IncludeIso9660 = true,
@@ -24,5 +27,6 @@ public record IsoBuildOptions(
     string PublisherId = "IGNISDISC",
     string ApplicationId = "IGNISDISC OPTICAL STUDIO",
     ElToritoBootConfiguration? BootConfiguration = null,
-    DateTime? FixedTimestampUtc = null);
+    DateTime? FixedTimestampUtc = null,
+    bool WriteSha256Manifest = false);
 

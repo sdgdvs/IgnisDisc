@@ -106,6 +106,12 @@
                     <CheckBox Content="Verify After Burn"
                               AutomationProperties.Name="Verify After Burn"
                               IsChecked="{Binding VerifyAfterBurn}"
+                              VerticalAlignment="Center"
+                              Margin="0,0,16,0" />
+                    <CheckBox Content="Add SHA256SUMS"
+                              AutomationProperties.Name="Add SHA256SUMS"
+                              ToolTip="Adds a SHA256SUMS file to the disc root. Years from now, 'sha256sum -c SHA256SUMS' (Linux/macOS) or PowerShell can check every file without IgnisDisc."
+                              IsChecked="{Binding WriteSha256Manifest}"
                               VerticalAlignment="Center" />
                 </StackPanel>
             </Grid>
