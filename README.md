@@ -85,7 +85,7 @@ ignisdisc-cli <command> [options]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
              [--read-offset <samples>] [--verify-accuraterip] [--secure] [--continue-on-error] [--cover <image>]
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
-  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl]
+  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
              [--redundancy <0-100>]
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest
   verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img>

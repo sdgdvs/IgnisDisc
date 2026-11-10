@@ -447,7 +447,12 @@ public class ArchiveViewModel : ObservableObject
         {
             new("CD-R (700 MB)", DiscMediaType.CdR),
             new("DVD±R (4.7 GB)", DiscMediaType.DvdPlusR),
-            new("DVD±R DL (8.5 GB)", DiscMediaType.DvdMinusRDualLayer)
+            new("DVD±R DL (8.5 GB)", DiscMediaType.DvdMinusRDualLayer),
+            // Blu-ray plans use the BD-RE size (smaller, because of its spare area), so a plan fits either kind.
+            new("BD-R/RE (25 GB)", DiscMediaType.BdRe),
+            new("BD-R/RE DL (50 GB)", DiscMediaType.BdReDualLayer),
+            new("BD-R XL (100 GB)", DiscMediaType.BdxlRTripleLayer),
+            new("BD-R XL (128 GB)", DiscMediaType.BdxlRQuadLayer)
         };
         _selectedMedia = MediaOptions[1]; // default DVD
 

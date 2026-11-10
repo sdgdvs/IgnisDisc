@@ -244,6 +244,20 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
         new(DiscMediaType.DvdRam, OpticalConstants.DvdMinusR5Sectors, isBlank: true, backingFilePath: backingFile);
 
     /// <summary>
+    /// Creates a blank Blu-ray medium of the given type at its planning capacity (BD-R, BD-RE, DL or BDXL). Sectors are
+    /// stored only when written, so a 128 GB disc costs nothing until used.
+    /// </summary>
+    public static VirtualDiscMedium CreateBlankBluRay(DiscMediaType mediaType = DiscMediaType.BdR, string? backingFile = null)
+    {
+        if (!mediaType.IsBluRay() || !mediaType.IsWritable())
+        {
+            throw new ArgumentException($"{mediaType} is not a writable Blu-ray type.", nameof(mediaType));
+        }
+
+        return new(mediaType, mediaType.GetNominalCapacitySectors(), isBlank: true, backingFilePath: backingFile);
+    }
+
+    /// <summary>
     /// Creates a virtual disc medium mounted from an existing image file on disk (e.g. .iso).
     /// </summary>
     public static VirtualDiscMedium FromExistingFile(string filePath, DiscMediaType mediaType = DiscMediaType.CdRom)

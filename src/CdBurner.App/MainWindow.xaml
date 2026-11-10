@@ -413,7 +413,12 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
+                    <!-- Two columns, so on a narrow window the sector count trims instead of overlapping "Used". -->
                     <Grid Grid.Row="0" Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
                         <TextBlock HorizontalAlignment="Left"
                                    FontSize="11"
                                    Foreground="{DynamicResource TextSecondaryBrush}">
@@ -422,10 +427,14 @@
                             <Run Text=" / " />
                             <Run Text="{Binding CapacityMaxMbText, Mode=OneWay}" />
                         </TextBlock>
-                        <TextBlock HorizontalAlignment="Right"
+                        <TextBlock Grid.Column="1"
+                                   Margin="12,0,0,0"
+                                   HorizontalAlignment="Right"
                                    FontSize="11"
+                                   TextTrimming="CharacterEllipsis"
                                    Foreground="{DynamicResource TextMutedBrush}"
-                                   Text="{Binding CapacityLbaText, Mode=OneWay}" />
+                                   Text="{Binding CapacityLbaText, Mode=OneWay}"
+                                   ToolTip="{Binding CapacityLbaText, Mode=OneWay}" />
                     </Grid>
 
                     <ProgressBar Grid.Row="1"

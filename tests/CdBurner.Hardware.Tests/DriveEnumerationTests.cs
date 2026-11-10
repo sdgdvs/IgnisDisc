@@ -286,6 +286,10 @@ public class DriveEnumerationTests
         Assert.Equal(DiscMediaType.DvdPlusRDualLayer, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.DvdPlusRwDoubleLayer));
         Assert.Equal(DiscMediaType.DvdMinusRDualLayer, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.DvdDashRDoubleLayer));
         Assert.Equal(DiscMediaType.DvdRam, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.DvdRam));
+        Assert.Equal(DiscMediaType.BdRom, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.BdRom));
+        Assert.Equal(DiscMediaType.BdR, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.BdR));
+        Assert.Equal(DiscMediaType.BdRe, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.BdRe));
+        Assert.Equal(DiscMediaType.Unknown, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.HdDvdR));
         Assert.Equal(DiscMediaType.Unknown, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.Unknown));
     }
 

@@ -52,6 +52,11 @@ public readonly record struct WriteSpeedDescriptor : IComparable<WriteSpeedDescr
             return OpticalConstants.Dvd1XBytesPerSec;
         }
 
+        if (mediaType.IsBluRay())
+        {
+            return OpticalConstants.Bd1XBytesPerSec;
+        }
+
         return isAudio ? OpticalConstants.CdAudio1XBytesPerSec : OpticalConstants.CdData1XBytesPerSec;
     }
 

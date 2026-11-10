@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Compilation;
 using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Iso;
 using CdBurner.Core.Primitives;
@@ -398,6 +399,50 @@ public sealed class DataAndDvdViewModelTests : IDisposable
             menuVobSectors: 16,
             navPackSectors: largeNavList);
         Assert.Equal(6 * OpticalConstants.DataSectorSize, vtsIfo.Length);
+    }
+
+    [Fact]
+    public void DataDisc_OnABluRayDualLayerDisc_ShowsWhereTheLayerChanges()
+    {
+        var vrec = (VirtualDiscRecorder)_deviceManager.GetRecorderById("VDRV-01")!;
+        using var medium = VirtualDiscMedium.CreateBlankBluRay(DiscMediaType.BdRDualLayer);
+        vrec.InsertMedia(medium);
+
+        using var mainVm = new MainViewModel(_deviceManager, _burnEngine);
+        mainVm.NavigateCommand.Execute(NavigationTab.DataDisc);
+        var data = mainVm.DataBurn;
+        data.SelectedRecorder = vrec;
+
+        // 30 GB of data: more than one 25 GB layer holds.
+        data.Compilation.AddFile("/Backup/archive.bin", string.Empty, 30_000_000_000L);
+        data.RecalculateCapacity();
+
+        Assert.Equal(DiscMediaType.BdRDualLayer, data.Capacity.MediaType);
+        Assert.Equal(OpticalConstants.BdR50Sectors, data.Capacity.MediaMaxSectors);
+        Assert.Equal(CapacityStatus.FitsComfortably, data.Capacity.Status);
+        var split = Assert.IsType<CdBurner.Core.Compilation.LayerSplitPreview>(data.LayerSplit);
+        Assert.Equal([OpticalConstants.BdR25Sectors], split.LayerChangeLbas);
+
+        Assert.Equal(data.Capacity, mainVm.CurrentCapacity);
+        Assert.Equal("BD-R DL — Layer 0: 23.3 GB (full) · Layer 1: 4.6 GB · layer change at 23.3 GB", data.LayerSplitText);
+    }
+
+    [Fact]
+    public void DataDisc_OnASingleLayerDisc_ShowsNoLayerLine()
+    {
+        var vrec = (VirtualDiscRecorder)_deviceManager.GetRecorderById("VDRV-01")!;
+        using var medium = VirtualDiscMedium.CreateBlankBluRay(DiscMediaType.BdR);
+        vrec.InsertMedia(medium);
+
+        using var mainVm = new MainViewModel(_deviceManager, _burnEngine);
+        mainVm.NavigateCommand.Execute(NavigationTab.DataDisc);
+        mainVm.DataBurn.SelectedRecorder = vrec;
+        mainVm.DataBurn.Compilation.AddFile("/a.bin", string.Empty, 1_000_000_000L);
+        mainVm.DataBurn.RecalculateCapacity();
+
+        Assert.Equal(DiscMediaType.BdR, mainVm.DataBurn.Capacity.MediaType);
+        Assert.Null(mainVm.DataBurn.LayerSplit);
+        Assert.Equal(string.Empty, mainVm.DataBurn.LayerSplitText);
     }
 
     [Theory]

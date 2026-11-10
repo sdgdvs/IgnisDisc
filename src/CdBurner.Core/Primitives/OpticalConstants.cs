@@ -108,6 +108,27 @@ public static class OpticalConstants
     /// </summary>
     public const int DvdPlusR9Sectors = 4_173_824;
 
+    /// <summary>Single-layer BD-R, 25 GB (12,219,392 sectors).</summary>
+    public const int BdR25Sectors = 12_219_392;
+
+    /// <summary>Dual-layer BD-R, 50 GB (24,438,784 sectors).</summary>
+    public const int BdR50Sectors = 24_438_784;
+
+    /// <summary>Single-layer BD-RE with the default spare area (11,826,176 sectors).</summary>
+    public const int BdRe25Sectors = 11_826_176;
+
+    /// <summary>Dual-layer BD-RE with the default spare area (23,652,352 sectors).</summary>
+    public const int BdRe50Sectors = 23_652_352;
+
+    /// <summary>Three-layer BDXL, 100 GB (48,878,592 sectors).</summary>
+    public const int Bdxl100Sectors = 48_878_592;
+
+    /// <summary>Four-layer BDXL, 128 GB (62,500,864 sectors).</summary>
+    public const int Bdxl128Sectors = 62_500_864;
+
+    /// <summary>Blu-ray records in 64 KB clusters of 32 sectors.</summary>
+    public const int BdClusterSectors = 32;
+
     // --- Capacity Constants (Bytes) ---
 
     /// <summary>
@@ -161,6 +182,11 @@ public static class OpticalConstants
     /// DVD transfer rate at 1X speed: 1,385,000 bytes/sec (approx. 676.25 sectors/sec).
     /// </summary>
     public const int Dvd1XBytesPerSec = 1_385_000;
+
+    /// <summary>
+    /// Blu-ray transfer rate at 1X speed: 4,495,500 bytes/sec (36 Mbit/s of user data).
+    /// </summary>
+    public const int Bd1XBytesPerSec = 4_495_500;
 
     /// <summary>
     /// Converts a sector count to total byte size.

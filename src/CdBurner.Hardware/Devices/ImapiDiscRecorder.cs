@@ -231,6 +231,9 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
         bool canWriteDvdPlusRDL = profiles.Contains(0x002B);
         bool canWriteDvdMinusRDL = profiles.Contains(0x0015) || profiles.Contains(0x0016);
         bool canWriteDvdRam = profiles.Contains(0x0012);
+        // 0x0041 BD-R sequential, 0x0042 BD-R random, 0x0043 BD-RE. Layer counts are not in the profile list.
+        bool canWriteBdR = profiles.Contains(0x0041) || profiles.Contains(0x0042);
+        bool canWriteBdRe = profiles.Contains(0x0043);
 
         var mediaTypes = new HashSet<DiscMediaType>();
         if (canWriteCdR) mediaTypes.Add(DiscMediaType.CdR);
@@ -242,6 +245,8 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
         if (canWriteDvdPlusRDL) mediaTypes.Add(DiscMediaType.DvdPlusRDualLayer);
         if (canWriteDvdMinusRDL) mediaTypes.Add(DiscMediaType.DvdMinusRDualLayer);
         if (canWriteDvdRam) mediaTypes.Add(DiscMediaType.DvdRam);
+        if (canWriteBdR) mediaTypes.Add(DiscMediaType.BdR);
+        if (canWriteBdRe) mediaTypes.Add(DiscMediaType.BdRe);
 
         var writeSpeeds = new List<WriteSpeedDescriptor>();
 
@@ -484,6 +489,9 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
                         try { totalSectors = dataFormat.TotalSectorsOnMedia; } catch { }
                         try { freeSectors = dataFormat.FreeSectorsOnMedia; } catch { }
                         try { nextWritable = dataFormat.NextWritableAddress; } catch { }
+
+                        // Windows only says BD-R or BD-RE; the size the drive reports tells the layers apart.
+                        mediaType = mediaType.RefineBluRayByCapacity(totalSectors);
 
                         if (totalSectors <= 0)
                         {
@@ -800,6 +808,9 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
         ImapiMediaPhysicalType.DvdDashR => DiscMediaType.DvdMinusR,
         ImapiMediaPhysicalType.DvdDashRw => DiscMediaType.DvdMinusRw,
         ImapiMediaPhysicalType.DvdDashRDoubleLayer => DiscMediaType.DvdMinusRDualLayer,
+        ImapiMediaPhysicalType.BdRom => DiscMediaType.BdRom,
+        ImapiMediaPhysicalType.BdR => DiscMediaType.BdR,
+        ImapiMediaPhysicalType.BdRe => DiscMediaType.BdRe,
         _ => DiscMediaType.Unknown
     };
 

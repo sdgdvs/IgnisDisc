@@ -40,6 +40,7 @@ public enum CapacityStatus
 /// <param name="TotalFileDataBytes">Raw unpadded byte count of all file data payloads.</param>
 /// <param name="TotalFileDataSectors">Data sectors occupied by files after rounding each to 2048-byte sector boundary.</param>
 /// <param name="FileSystemOverheadSectors">Sectors reserved for ISO 9660, Joliet, UDF, and directory records.</param>
+/// <param name="MediaType">The disc type the compilation was measured against.</param>
 public record CapacityAssessment(
     long TotalBytes,
     int TotalSectors,
@@ -48,7 +49,8 @@ public record CapacityAssessment(
     CapacityStatus Status,
     long TotalFileDataBytes = 0,
     int TotalFileDataSectors = 0,
-    int FileSystemOverheadSectors = 0)
+    int FileSystemOverheadSectors = 0,
+    DiscMediaType MediaType = DiscMediaType.Unknown)
 {
     /// <summary>
     /// Available unallocated sectors remaining on media (clamped to 0 if full or overburn).
@@ -224,7 +226,8 @@ public static class CompilationCapacityCalculator
             Status: status,
             TotalFileDataBytes: totalFileDataBytes,
             TotalFileDataSectors: totalFileDataSectors,
-            FileSystemOverheadSectors: fileSystemOverheadSectors);
+            FileSystemOverheadSectors: fileSystemOverheadSectors,
+            MediaType: mediaType);
     }
 
     /// <summary>
@@ -236,7 +239,8 @@ public static class CompilationCapacityCalculator
         bool includeIso9660 = true,
         bool includeJoliet = true,
         bool includeUdf = true,
-        bool isBootable = false)
+        bool isBootable = false,
+        int mediaMaxSectors = 0)
     {
         ArgumentNullException.ThrowIfNull(root);
 
@@ -266,7 +270,7 @@ public static class CompilationCapacityCalculator
         return AssessCapacity(
             totalSectors: totalSectors,
             mediaType: mediaType,
-            mediaMaxSectors: 0,
+            mediaMaxSectors: mediaMaxSectors,
             totalFileDataBytes: rawBytes,
             totalFileDataSectors: fileSectors,
             fileSystemOverheadSectors: overheadSectors);

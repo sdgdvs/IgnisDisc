@@ -183,6 +183,9 @@ public class MediaStatusDto
     public int SessionCount { get; init; }
     public int Sessions => SessionCount;
     public string? MediaManufacturerId { get; set; }
+
+    /// <summary>True when the media ID belongs to M-DISC archival media (see <see cref="MDiscIdentifier"/>).</summary>
+    public bool IsMDisc => MDiscIdentifier.IsMDisc(MediaManufacturerId);
     public int LastRecordedLba { get; init; }
     public int NextWritableLba { get; init; } = -1;
     public DvdBookType? BookType { get; init; }

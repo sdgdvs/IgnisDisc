@@ -230,6 +230,8 @@ public class DataBurnViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(CapacityUsedMbText));
                 OnPropertyChanged(nameof(CapacityStatusText));
+                OnPropertyChanged(nameof(LayerSplit));
+                OnPropertyChanged(nameof(LayerSplitText));
                 OnPropertyChanged(nameof(TotalFilesCount));
                 OnPropertyChanged(nameof(TotalBytes));
             }
@@ -298,6 +300,15 @@ public class DataBurnViewModel : ObservableObject
     /// <summary>
     /// Status description of capacity classification.
     /// </summary>
+    /// <summary>
+    /// Where the compilation lands on a multi-layer disc (DVD±R DL, BD DL, BDXL), or null for single-layer media.
+    /// </summary>
+    public LayerSplitPreview? LayerSplit =>
+        LayerSplitPlanner.Project(Capacity.TotalSectors, Capacity.MediaType, Capacity.MediaMaxSectors);
+
+    /// <summary>The layer split as one line for the footer; empty (and hidden) for single-layer media.</summary>
+    public string LayerSplitText => LayerSplit?.Summary ?? string.Empty;
+
     public string CapacityStatusText => Capacity.Status switch
     {
         CapacityStatus.FitsComfortably => "Fits Comfortably",
@@ -653,12 +664,18 @@ public class DataBurnViewModel : ObservableObject
                        || SelectedFileSystemPreset == FileSystemPreset.DvdVideoBridge;
 
         var mediaType = DiscMediaType.CdR;
+        int reportedSectors = 0;
         if (SelectedRecorder != null)
         {
             var st = SelectedRecorder.QueryMediaStatus();
             if (st.MediaPresent && st.MediaType != DiscMediaType.NoMedia && st.MediaType != DiscMediaType.Unknown)
             {
                 mediaType = st.MediaType;
+                // A blank disc's own reported size beats the planning table (BD-RE spare area, BDXL, short media).
+                if (st.IsBlank && st.TotalSectors > 0)
+                {
+                    reportedSectors = st.TotalSectors;
+                }
             }
         }
 
@@ -667,7 +684,8 @@ public class DataBurnViewModel : ObservableObject
             includeIso9660: includeIso,
             includeJoliet: includeJoliet,
             includeUdf: includeUdf,
-            isBootable: IsBootableEnabled);
+            isBootable: IsBootableEnabled,
+            mediaMaxSectors: reportedSectors);
     }
 
     #endregion

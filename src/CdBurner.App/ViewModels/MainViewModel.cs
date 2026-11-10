@@ -306,7 +306,7 @@ public class MainViewModel : ObservableObject, IDisposable
                 return "Empty Tray";
             }
 
-            string name = FormatMediaTypeName(_currentMediaStatus.MediaType);
+            string name = FormatMediaTypeName(_currentMediaStatus.MediaType) + (_currentMediaStatus.IsMDisc ? " M-DISC" : "");
             double mb = _currentMediaStatus.TotalCapacityBytes / (1024.0 * 1024.0);
             if (mb >= 1000)
             {
@@ -325,7 +325,7 @@ public class MainViewModel : ObservableObject, IDisposable
         {
             if (!_currentMediaStatus.MediaPresent) return "Please insert or mount blank optical media.";
             var rw = _currentMediaStatus.IsRewritable ? "Rewritable" : "Write-Once";
-            string name = FormatMediaTypeName(_currentMediaStatus.MediaType);
+            string name = FormatMediaTypeName(_currentMediaStatus.MediaType) + (_currentMediaStatus.IsMDisc ? " M-DISC" : "");
             return $"{name} | {rw} | Free: {_currentMediaStatus.FreeSectors:N0} LBAs";
         }
     }

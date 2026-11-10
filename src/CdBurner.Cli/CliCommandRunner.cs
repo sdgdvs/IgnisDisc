@@ -1724,7 +1724,11 @@ public static class CliCommandRunner
             "cd" => DiscMediaType.CdR,
             "dvd" => DiscMediaType.DvdPlusR,                // the smaller single-layer capacity, safe for -R and +R
             "dvd-dl" => DiscMediaType.DvdMinusRDualLayer,   // the smaller dual-layer capacity
-            var other => throw new CommandLineException($"Invalid media '{other}'. Supported: cd, dvd, dvd-dl.")
+            "bd" => DiscMediaType.BdRe,                     // BD-RE's spare area makes it the smaller of BD-R/RE
+            "bd-dl" => DiscMediaType.BdReDualLayer,
+            "bdxl" => DiscMediaType.BdxlRTripleLayer,
+            "bdxl-ql" => DiscMediaType.BdxlRQuadLayer,
+            var other => throw new CommandLineException($"Invalid media '{other}'. Supported: cd, dvd, dvd-dl, bd, bd-dl, bdxl, bdxl-ql.")
         };
 
         string redundancyOpt = cmd.GetOption("redundancy") ?? "10";
@@ -1780,6 +1784,10 @@ public static class CliCommandRunner
             DiscMediaType.CdR => "CD-R (700 MB)",
             DiscMediaType.DvdPlusR => "DVD±R (4.7 GB)",
             DiscMediaType.DvdMinusRDualLayer => "DVD±R DL (8.5 GB)",
+            DiscMediaType.BdRe => "BD-R/RE (25 GB)",
+            DiscMediaType.BdReDualLayer => "BD-R/RE DL (50 GB)",
+            DiscMediaType.BdxlRTripleLayer => "BD-R XL (100 GB)",
+            DiscMediaType.BdxlRQuadLayer => "BD-R XL (128 GB)",
             _ => media.GetDisplayName()
         };
         stdout.WriteLine($"  Media:            {mediaName}");
@@ -2180,7 +2188,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
-        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl] [--redundancy <0-100>] [--json]");
+        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <0-100>] [--json]");
         stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data.");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");

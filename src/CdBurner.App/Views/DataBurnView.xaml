@@ -345,6 +345,31 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Multi-layer discs only (DVD±R DL, BD DL, BDXL): what lands on each layer and where the drive
+                     changes layer. Hidden for single-layer discs. -->
+                <TextBlock Grid.Row="1"
+                           Grid.ColumnSpan="3"
+                           Margin="0,8,0,0"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           AutomationProperties.Name="Layer split preview"
+                           Text="{Binding LayerSplitText, Mode=OneWay}"
+                           ToolTip="Where this compilation lands on each layer of the disc. Windows' writer fills layer 0 first; reading slows briefly at a layer change.">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <Trigger Property="Text" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
 
                 <!-- Left: File metrics & status line -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">

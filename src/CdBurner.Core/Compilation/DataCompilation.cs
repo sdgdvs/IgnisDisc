@@ -131,7 +131,8 @@ public class DataCompilation
         bool includeIso9660 = true,
         bool includeJoliet = true,
         bool includeUdf = true,
-        bool isBootable = false)
+        bool isBootable = false,
+        int mediaMaxSectors = 0)
     {
         return CompilationCapacityCalculator.Calculate(
             Root,
@@ -139,7 +140,8 @@ public class DataCompilation
             includeIso9660,
             includeJoliet,
             includeUdf,
-            isBootable);
+            isBootable,
+            mediaMaxSectors);
     }
 
     private static (string DirPath, string FileName) SplitVirtualPath(string virtualPath)

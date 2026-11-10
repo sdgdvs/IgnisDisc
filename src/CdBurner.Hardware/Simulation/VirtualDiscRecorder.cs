@@ -184,7 +184,14 @@ public class VirtualDiscRecorder : IDiscRecorderBackend
                 DiscMediaType.DvdPlusRw,
                 DiscMediaType.DvdMinusRDualLayer,
                 DiscMediaType.DvdPlusRDualLayer,
-                DiscMediaType.DvdRam
+                DiscMediaType.DvdRam,
+                DiscMediaType.BdR,
+                DiscMediaType.BdRe,
+                DiscMediaType.BdRDualLayer,
+                DiscMediaType.BdReDualLayer,
+                DiscMediaType.BdxlRTripleLayer,
+                DiscMediaType.BdxlRQuadLayer,
+                DiscMediaType.BdxlReTripleLayer
             },
             SupportedWriteSpeeds = new[]
             {
