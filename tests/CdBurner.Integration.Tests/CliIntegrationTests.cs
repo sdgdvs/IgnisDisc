@@ -320,6 +320,27 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.Throws<ArgumentException>(() => CliCommandRunner.ParseFixedTimestamp(value));
     }
 
+    [Theory]
+    [InlineData("1.02", 0x0102)]
+    [InlineData("2.01", 0x0201)]
+    [InlineData("2.50", 0x0250)]
+    [InlineData("260", 0x0260)]
+    [InlineData("0x0150", 0x0150)]
+    public void ParseUdfRevision_AcceptsTheSupportedRevisions(string value, int expected)
+    {
+        Assert.Equal((ushort)expected, CliCommandRunner.ParseUdfRevision(value));
+    }
+
+    [Theory]
+    [InlineData("2.5")]
+    [InlineData("3.00")]
+    [InlineData("1.01")]
+    [InlineData("udf")]
+    public void ParseUdfRevision_RejectsOthers(string value)
+    {
+        Assert.Throws<ArgumentException>(() => CliCommandRunner.ParseUdfRevision(value));
+    }
+
     #endregion
 
     #region 4. burn-iso command tests

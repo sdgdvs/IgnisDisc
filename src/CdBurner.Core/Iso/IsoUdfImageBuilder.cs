@@ -186,6 +186,22 @@ public static class IsoUdfImageBuilder
         public int UdfFsdTerminatorLba { get; set; } = -1;
         public int UdfClosingAvdpLba { get; set; } = -1;
 
+        /// <summary>UDF revision written, as BCD (0x0102, 0x0150, 0x0200, 0x0201, 0x0250 or 0x0260).</summary>
+        public ushort UdfRevision { get; set; } = 0x0102;
+
+        /// <summary>UDF 2.00 and later: NSR03, descriptor version 3, Extended File Entries.</summary>
+        public bool UdfNsr03 => UdfRevision >= 0x0200;
+
+        /// <summary>UDF 2.50 and later: directories and file entries live in a Metadata Partition.</summary>
+        public bool UdfMetadataPartition => UdfRevision >= 0x0250;
+
+        public int UdfMetadataFeLba { get; set; } = -1;
+        public int UdfMirrorFeLba { get; set; } = -1;
+        /// <summary>First sector of the Metadata File's data (block 0 of the metadata partition).</summary>
+        public int UdfMetadataStartLba { get; set; } = -1;
+        public int UdfMetadataBlocks { get; set; }
+        public int UdfMirrorStartLba { get; set; } = -1;
+
         public int BootCatalogLba { get; set; } = -1;
         public byte[]? DefaultBootImageData { get; set; }
         public int DefaultBootImageLba { get; set; } = -1;
@@ -393,6 +409,13 @@ public static class IsoUdfImageBuilder
             // Plain UDF 1.02 places its Anchor Volume Descriptor Pointer at fixed LBA 256 and cannot describe
             // sessions starting above LBA 0. Appended sessions therefore emit ISO 9660 / Joliet descriptors only.
             ctx.UdfEnabled = options.IncludeUdf && sessionStartLba == 0;
+            if (options.IncludeUdf && !SupportedUdfRevisions.Contains(options.UdfRevision))
+            {
+                throw new ArgumentException(
+                    $"UDF revision 0x{options.UdfRevision:X4} is not supported. Use one of: {string.Join(", ", SupportedUdfRevisions.Select(r => $"{r >> 8:X}.{r & 0xFF:X2}"))}.",
+                    nameof(options));
+            }
+            ctx.UdfRevision = options.UdfRevision;
 
             if (oversized != null && !ctx.UdfEnabled)
             {
@@ -491,6 +514,16 @@ public static class IsoUdfImageBuilder
             {
                 currentLba = Math.Max(currentLba, ctx.UdfPartitionStartLba);
 
+                if (ctx.UdfMetadataPartition)
+                {
+                    // UDF 2.50 §2.2.13: the Metadata File and its Mirror are File Entries in the physical partition;
+                    // the metadata itself starts on an allocation-unit boundary.
+                    ctx.UdfMetadataFeLba = currentLba++;
+                    ctx.UdfMirrorFeLba = currentLba++;
+                    currentLba = AlignInPartition(ctx, currentLba);
+                    ctx.UdfMetadataStartLba = currentLba;
+                }
+
                 ctx.UdfFsdLba = currentLba++;
                 ctx.UdfFsdTerminatorLba = currentLba++;
 
@@ -505,6 +538,12 @@ public static class IsoUdfImageBuilder
                 foreach (var file in ctx.AllFiles)
                 {
                     file.UdfFeLba = currentLba++;
+                }
+
+                if (ctx.UdfMetadataPartition)
+                {
+                    currentLba = AlignInPartition(ctx, currentLba);
+                    ctx.UdfMetadataBlocks = currentLba - ctx.UdfMetadataStartLba;
                 }
             }
 
@@ -565,6 +604,14 @@ public static class IsoUdfImageBuilder
                     }
                     currentLba += file.SectorCount;
                 }
+            }
+
+            if (ctx.UdfMetadataPartition)
+            {
+                // The Metadata Mirror File: a second copy of the metadata, after the file data.
+                currentLba = AlignInPartition(ctx, currentLba);
+                ctx.UdfMirrorStartLba = currentLba;
+                currentLba += ctx.UdfMetadataBlocks;
             }
 
             int total = currentLba;
@@ -1020,7 +1067,7 @@ public static class IsoUdfImageBuilder
         if (ctx.UdfEnabled)
         {
             metadata.Add((ctx.Bea01Lba, BuildUdfExtendedAreaDescriptor("BEA01")));
-            metadata.Add((ctx.NsrLba, BuildUdfExtendedAreaDescriptor("NSR02")));
+            metadata.Add((ctx.NsrLba, BuildUdfExtendedAreaDescriptor(ctx.UdfNsr03 ? "NSR03" : "NSR02")));
             metadata.Add((ctx.Tea01Lba, BuildUdfExtendedAreaDescriptor("TEA01")));
         }
 
@@ -1453,15 +1500,15 @@ public static class IsoUdfImageBuilder
         return descriptor;
     }
 
-    private static byte[] BuildUdfAvdpSector(uint tagLocation = 256, uint mainVdsLocation = 257)
+    private static byte[] BuildUdfAvdpSector(uint tagLocation, uint mainVdsLocation, ushort descriptorVersion)
     {
         byte[] sector = new byte[SectorSize];
 
         // ECMA-167 Anchor Volume Descriptor Pointer (AVDP)
         // Tag Identifier = 0x0002 (AVDP)
         BinaryPrimitives.WriteUInt16LittleEndian(sector.AsSpan(0, 2), 0x0002);
-        // Descriptor Version = 2
-        BinaryPrimitives.WriteUInt16LittleEndian(sector.AsSpan(2, 2), 2);
+        // Descriptor Version: 2 (NSR02, UDF 1.0x/1.50) or 3 (NSR03, UDF 2.00+)
+        BinaryPrimitives.WriteUInt16LittleEndian(sector.AsSpan(2, 2), descriptorVersion);
         // Offset 4: Tag Checksum (calculated later)
         sector[5] = 0x00; // Reserved
         // Tag Serial Number = 1
@@ -1553,13 +1600,10 @@ public static class IsoUdfImageBuilder
         return (2, 0, 0, upper);
     }
 
-    private static void FinalizeEcma167Tag(byte[] sector, ushort tagId, uint tagLocation, ushort crcPayloadLength = 496)
-        => FinalizeEcma167Tag(sector.AsSpan(), tagId, tagLocation, crcPayloadLength);
-
-    private static void FinalizeEcma167Tag(Span<byte> sector, ushort tagId, uint tagLocation, ushort crcPayloadLength = 496)
+    private static void FinalizeEcma167Tag(Span<byte> sector, ushort tagId, uint tagLocation, ushort crcPayloadLength, ushort descriptorVersion)
     {
         BinaryPrimitives.WriteUInt16LittleEndian(sector[..2], tagId);
-        BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(2, 2), 2); // Descriptor version 2 (NSR02)
+        BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(2, 2), descriptorVersion); // 2 = NSR02, 3 = NSR03
         sector[4] = 0; // Checksum placeholder
         sector[5] = 0; // Reserved
         BinaryPrimitives.WriteUInt16LittleEndian(sector.Slice(6, 2), 1); // Serial Number 1
@@ -1582,21 +1626,54 @@ public static class IsoUdfImageBuilder
 
     #endregion
 
-    #region UDF 1.02 (ECMA-167 / OSTA UDF) structures
+    #region UDF (ECMA-167 / OSTA UDF) structures: 1.02, 1.50, 2.00, 2.01, 2.50, 2.60
 
     private const int UdfVdsSectorCount = 16;
-    private const ushort UdfRevisionBcd = 0x0102;
     private const int UdfFileEntryFixedSize = 176;
+    private const int UdfExtendedFileEntryFixedSize = 216;
     private const uint UdfMaxExtentBytes = 0x3FFFF800; // largest 2048-aligned length that fits the 30-bit extent length field
     private const string UdfImplementationId = "*IgnisDisc";
 
+    /// <summary>
+    /// UDF 2.50 Metadata Partition allocation and alignment unit, in blocks: 32 blocks = 64 KiB, one Blu-ray ECC
+    /// cluster (and a multiple of the 16-block DVD ECC block).
+    /// </summary>
+    private const int UdfMetadataAllocationUnit = 32;
+
+    private const byte UdfFileTypeDirectory = 4;
+    private const byte UdfFileTypeFile = 5;
+    private const byte UdfFileTypeMetadata = 250;
+    private const byte UdfFileTypeMetadataMirror = 251;
+
+    /// <summary>UDF revisions the builder writes (BCD).</summary>
+    public static IReadOnlyList<ushort> SupportedUdfRevisions { get; } = new ushort[] { 0x0102, 0x0150, 0x0200, 0x0201, 0x0250, 0x0260 };
+
     private static int UdfFidLength(int identifierBytes) => (38 + identifierBytes + 3) & ~3;
 
+    /// <summary>Rounds an absolute LBA up so its offset from the partition start is a multiple of the allocation unit.</summary>
+    private static int AlignInPartition(LayoutContext ctx, int lba)
+    {
+        int offset = lba - ctx.UdfPartitionStartLba;
+        int aligned = (offset + UdfMetadataAllocationUnit - 1) / UdfMetadataAllocationUnit * UdfMetadataAllocationUnit;
+        return ctx.UdfPartitionStartLba + aligned;
+    }
+
+    /// <summary>Where a UDF descriptor points: a block in partition 0 (physical) or 1 (UDF 2.50 metadata).</summary>
+    private readonly record struct UdfAddress(uint Lbn, ushort PartitionReference);
+
     /// <summary>
-    /// Adds the complete UDF 1.02 volume: Anchor Volume Descriptor Pointers, Volume Descriptor Sequence,
-    /// Logical Volume Integrity Descriptor, File Set Descriptor, and one File Entry per directory and file,
-    /// plus the File Identifier Descriptor streams that make up each directory.
-    /// UDF shares file data extents with ISO 9660 / Joliet (UDF Bridge).
+    /// Adds the complete UDF volume: Anchor Volume Descriptor Pointers, Volume Descriptor Sequence,
+    /// Logical Volume Integrity Descriptor, File Set Descriptor, and one (Extended) File Entry per directory and
+    /// file, plus the File Identifier Descriptor streams that make up each directory. UDF shares file data extents
+    /// with ISO 9660 / Joliet (UDF Bridge).
+    /// <para>
+    /// 1.02/1.50: NSR02, descriptor version 2, File Entries with short_ad. 2.00/2.01: NSR03, descriptor version 3,
+    /// Extended File Entries. 2.50/2.60: as 2.0x, and the File Set Descriptor, directories and File Entries live
+    /// in a Metadata Partition (partition reference 1): a Metadata File near the start of the volume and an
+    /// identical Metadata Mirror File after the file data. Everything inside is addressed relative to the metadata
+    /// partition, so both copies are byte-identical. File data stays in the physical partition (reference 0) and
+    /// is reached through long_ad.
+    /// </para>
     /// </summary>
     private static void AddUdfStructures(LayoutContext ctx, List<(int Lba, byte[] Data)> metadata)
     {
@@ -1604,6 +1681,13 @@ public static class IsoUdfImageBuilder
         int partitionLength = ctx.UdfClosingAvdpLba - partitionStart;
         DateTime now = ctx.BuildTimeUtc;
         string label = ctx.Options.VolumeLabel ?? string.Empty;
+        ushort revision = ctx.UdfRevision;
+        ushort tagVersion = ctx.UdfNsr03 ? (ushort)3 : (ushort)2;
+        bool meta = ctx.UdfMetadataPartition;
+        byte[] domainSuffix = UdfDomainSuffix(revision);
+
+        void Tag(Span<byte> d, ushort id, uint location, int crcLength) =>
+            FinalizeEcma167Tag(d, id, location, (ushort)crcLength, tagVersion);
 
         // Unique IDs: root = 0, 1..15 reserved by UDF, the rest assigned sequentially.
         ulong nextUniqueId = 16;
@@ -1617,11 +1701,13 @@ public static class IsoUdfImageBuilder
             uniqueIds[file] = nextUniqueId++;
         }
 
-        uint Lbn(int absoluteLba) => (uint)(absoluteLba - partitionStart);
+        // Physical partition (reference 0) and, from UDF 2.50, the metadata partition (reference 1).
+        UdfAddress Physical(int absoluteLba) => new((uint)(absoluteLba - partitionStart), 0);
+        UdfAddress Meta(int absoluteLba) => meta ? new((uint)(absoluteLba - ctx.UdfMetadataStartLba), 1) : Physical(absoluteLba);
 
         // Anchors
-        metadata.Add((ctx.AvdpLba, BuildUdfAvdpSector((uint)ctx.AvdpLba, (uint)ctx.UdfVdsLba)));
-        metadata.Add((ctx.UdfClosingAvdpLba, BuildUdfAvdpSector((uint)ctx.UdfClosingAvdpLba, (uint)ctx.UdfVdsLba)));
+        metadata.Add((ctx.AvdpLba, BuildUdfAvdpSector((uint)ctx.AvdpLba, (uint)ctx.UdfVdsLba, tagVersion)));
+        metadata.Add((ctx.UdfClosingAvdpLba, BuildUdfAvdpSector((uint)ctx.UdfClosingAvdpLba, (uint)ctx.UdfVdsLba, tagVersion)));
 
         // Volume Descriptor Sequence (absolute tag locations)
         int v = ctx.UdfVdsLba;
@@ -1646,18 +1732,18 @@ public static class IsoUdfImageBuilder
             WriteUdfCharspec(d.Slice(264, 64));
             WriteUdfTimestamp(d.Slice(376, 12), now);
             WriteUdfRegid(d.Slice(388, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
-            FinalizeEcma167Tag(d, 0x0001, (uint)v, 496);
+            Tag(d, 0x0001, (uint)v, 496);
         }
 
         // [1] Implementation Use Volume Descriptor ("*UDF LV Info")
         {
             var d = S(1);
             BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 2);
-            WriteUdfRegid(d.Slice(20, 32), "*UDF LV Info", UdfDomainSuffix());
+            WriteUdfRegid(d.Slice(20, 32), "*UDF LV Info", domainSuffix);
             WriteUdfCharspec(d.Slice(52, 64));
             WriteUdfDString(d.Slice(116, 128), label);
             WriteUdfRegid(d.Slice(352, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
-            FinalizeEcma167Tag(d, 0x0004, (uint)(v + 1), 496);
+            Tag(d, 0x0004, (uint)(v + 1), 496);
         }
 
         // [2] Partition Descriptor
@@ -1666,32 +1752,53 @@ public static class IsoUdfImageBuilder
             BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 3);
             BinaryPrimitives.WriteUInt16LittleEndian(d[20..], 1);  // partition flags: allocated
             BinaryPrimitives.WriteUInt16LittleEndian(d[22..], 0);  // partition number
-            WriteUdfRegid(d.Slice(24, 32), "+NSR02", ReadOnlySpan<byte>.Empty);
+            WriteUdfRegid(d.Slice(24, 32), ctx.UdfNsr03 ? "+NSR03" : "+NSR02", ReadOnlySpan<byte>.Empty);
             BinaryPrimitives.WriteUInt32LittleEndian(d[184..], 1); // access type: read-only
             BinaryPrimitives.WriteUInt32LittleEndian(d[188..], (uint)partitionStart);
             BinaryPrimitives.WriteUInt32LittleEndian(d[192..], (uint)partitionLength);
             WriteUdfRegid(d.Slice(196, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
-            FinalizeEcma167Tag(d, 0x0005, (uint)(v + 2), 496);
+            Tag(d, 0x0005, (uint)(v + 2), 496);
         }
 
-        // [3] Logical Volume Descriptor with one Type 1 partition map
+        // [3] Logical Volume Descriptor: a Type 1 map for the physical partition, plus (2.50+) a Type 2
+        //     Metadata Partition Map.
+        var fsdAddress = Meta(ctx.UdfFsdLba);
         {
             var d = S(3);
             BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 4);
             WriteUdfCharspec(d.Slice(20, 64));
             WriteUdfDString(d.Slice(84, 128), label);
             BinaryPrimitives.WriteUInt32LittleEndian(d[212..], SectorSize);
-            WriteUdfRegid(d.Slice(216, 32), "*OSTA UDF Compliant", UdfDomainSuffix());
-            WriteUdfLongAd(d.Slice(248, 16), SectorSize, Lbn(ctx.UdfFsdLba)); // File Set Descriptor location
-            BinaryPrimitives.WriteUInt32LittleEndian(d[264..], 6); // map table length
-            BinaryPrimitives.WriteUInt32LittleEndian(d[268..], 1); // number of partition maps
+            WriteUdfRegid(d.Slice(216, 32), "*OSTA UDF Compliant", domainSuffix);
+            WriteUdfLongAd(d.Slice(248, 16), SectorSize, fsdAddress.Lbn, fsdAddress.PartitionReference); // File Set Descriptor
+            int mapTableLength = meta ? 6 + 64 : 6;
+            BinaryPrimitives.WriteUInt32LittleEndian(d[264..], (uint)mapTableLength);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[268..], meta ? 2u : 1u); // number of partition maps
             WriteUdfRegid(d.Slice(272, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
             WriteUdfExtentAd(d.Slice(432, 8), 2 * SectorSize, (uint)(v + 6)); // integrity sequence (LVID + TD)
+
             d[440] = 1; // partition map type 1
             d[441] = 6; // partition map length
             BinaryPrimitives.WriteUInt16LittleEndian(d[442..], 1); // volume sequence number
             BinaryPrimitives.WriteUInt16LittleEndian(d[444..], 0); // partition number
-            FinalizeEcma167Tag(d, 0x0006, (uint)(v + 3), 440 + 6 - 16);
+
+            if (meta)
+            {
+                // UDF 2.50 §2.2.10 Metadata Partition Map
+                var m = d.Slice(446, 64);
+                m[0] = 2;  // partition map type 2
+                m[1] = 64; // partition map length
+                WriteUdfRegid(m.Slice(4, 32), "*UDF Metadata Partition", domainSuffix);
+                BinaryPrimitives.WriteUInt16LittleEndian(m[36..], 1); // volume sequence number
+                BinaryPrimitives.WriteUInt16LittleEndian(m[38..], 0); // partition number (the physical partition)
+                BinaryPrimitives.WriteUInt32LittleEndian(m[40..], Physical(ctx.UdfMetadataFeLba).Lbn);
+                BinaryPrimitives.WriteUInt32LittleEndian(m[44..], Physical(ctx.UdfMirrorFeLba).Lbn);
+                BinaryPrimitives.WriteUInt32LittleEndian(m[48..], uint.MaxValue); // no Metadata Bitmap File (read-only)
+                BinaryPrimitives.WriteUInt32LittleEndian(m[52..], UdfMetadataAllocationUnit);
+                BinaryPrimitives.WriteUInt16LittleEndian(m[56..], UdfMetadataAllocationUnit); // alignment unit
+                m[58] = 1; // flags: duplicate metadata (the mirror has its own copy)
+            }
+            Tag(d, 0x0006, (uint)(v + 3), 440 + mapTableLength - 16);
         }
 
         // [4] Unallocated Space Descriptor (read-only media: none)
@@ -1699,36 +1806,46 @@ public static class IsoUdfImageBuilder
             var d = S(4);
             BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 5);
             BinaryPrimitives.WriteUInt32LittleEndian(d[20..], 0);
-            FinalizeEcma167Tag(d, 0x0007, (uint)(v + 4), 8);
+            Tag(d, 0x0007, (uint)(v + 4), 8);
         }
 
         // [5] Terminating Descriptor ends the main VDS
-        FinalizeEcma167Tag(S(5), 0x0008, (uint)(v + 5), 496);
+        Tag(S(5), 0x0008, (uint)(v + 5), 496);
 
         // [6] Logical Volume Integrity Descriptor (closed) + [7] Terminating Descriptor
         {
             var d = S(6);
+            int partitions = meta ? 2 : 1;
             WriteUdfTimestamp(d.Slice(16, 12), now);
             BinaryPrimitives.WriteUInt32LittleEndian(d[28..], 1); // integrity type: close
             BinaryPrimitives.WriteUInt64LittleEndian(d[40..], nextUniqueId); // logical volume header: next unique id
-            BinaryPrimitives.WriteUInt32LittleEndian(d[72..], 1);  // number of partitions
+            BinaryPrimitives.WriteUInt32LittleEndian(d[72..], (uint)partitions);
             BinaryPrimitives.WriteUInt32LittleEndian(d[76..], 46); // length of implementation use
-            BinaryPrimitives.WriteUInt32LittleEndian(d[80..], 0);  // free space table
-            BinaryPrimitives.WriteUInt32LittleEndian(d[84..], (uint)partitionLength); // size table
-            WriteUdfRegid(d.Slice(88, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
-            BinaryPrimitives.WriteUInt32LittleEndian(d[120..], (uint)ctx.AllFiles.Count);
-            BinaryPrimitives.WriteUInt32LittleEndian(d[124..], (uint)ctx.BfsDirectories.Count);
-            BinaryPrimitives.WriteUInt16LittleEndian(d[128..], UdfRevisionBcd); // min read revision
-            BinaryPrimitives.WriteUInt16LittleEndian(d[130..], UdfRevisionBcd); // min write revision
-            BinaryPrimitives.WriteUInt16LittleEndian(d[132..], UdfRevisionBcd); // max write revision
-            FinalizeEcma167Tag(d, 0x0009, (uint)(v + 6), 88 + 46 - 16);
-            FinalizeEcma167Tag(S(7), 0x0008, (uint)(v + 7), 496);
+            // Free space table, then size table, one entry per partition reference.
+            int free = 80, size = 80 + 4 * partitions;
+            BinaryPrimitives.WriteUInt32LittleEndian(d[free..], 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[size..], (uint)partitionLength);
+            if (meta)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(d[(free + 4)..], 0);
+                BinaryPrimitives.WriteUInt32LittleEndian(d[(size + 4)..], (uint)ctx.UdfMetadataBlocks);
+            }
+            int iu = 80 + 8 * partitions;
+            WriteUdfRegid(d.Slice(iu, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[(iu + 32)..], (uint)ctx.AllFiles.Count);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[(iu + 36)..], (uint)ctx.BfsDirectories.Count);
+            BinaryPrimitives.WriteUInt16LittleEndian(d[(iu + 40)..], revision); // min read revision
+            BinaryPrimitives.WriteUInt16LittleEndian(d[(iu + 42)..], revision); // min write revision
+            BinaryPrimitives.WriteUInt16LittleEndian(d[(iu + 44)..], revision); // max write revision
+            Tag(d, 0x0009, (uint)(v + 6), iu + 46 - 16);
+            Tag(S(7), 0x0008, (uint)(v + 7), 496);
         }
 
         metadata.Add((v, vds));
 
-        // File Set Descriptor + Terminating Descriptor (partition-relative tag locations)
+        // File Set Descriptor + Terminating Descriptor
         var root = ctx.BfsDirectories[0];
+        var rootAddress = Meta(root.UdfFeLba);
         {
             byte[] fsd = new byte[SectorSize];
             var d = fsd.AsSpan();
@@ -1741,14 +1858,23 @@ public static class IsoUdfImageBuilder
             WriteUdfDString(d.Slice(112, 128), label);
             WriteUdfCharspec(d.Slice(240, 64));
             WriteUdfDString(d.Slice(304, 32), label);
-            WriteUdfLongAd(d.Slice(400, 16), SectorSize, Lbn(root.UdfFeLba)); // root directory ICB
-            WriteUdfRegid(d.Slice(416, 32), "*OSTA UDF Compliant", UdfDomainSuffix());
-            FinalizeEcma167Tag(d, 0x0100, Lbn(ctx.UdfFsdLba), 496);
+            WriteUdfLongAd(d.Slice(400, 16), SectorSize, rootAddress.Lbn, rootAddress.PartitionReference); // root directory ICB
+            WriteUdfRegid(d.Slice(416, 32), "*OSTA UDF Compliant", domainSuffix);
+            Tag(d, 0x0100, fsdAddress.Lbn, 496);
             metadata.Add((ctx.UdfFsdLba, fsd));
 
             byte[] td = new byte[SectorSize];
-            FinalizeEcma167Tag(td, 0x0008, Lbn(ctx.UdfFsdTerminatorLba), 496);
+            Tag(td, 0x0008, Meta(ctx.UdfFsdTerminatorLba).Lbn, 496);
             metadata.Add((ctx.UdfFsdTerminatorLba, td));
+        }
+
+        byte[] Entry(int feLba, byte fileType, uint permissions, ushort linkCount, ulong length, UdfAddress data, ulong uniqueId, DateTime modified)
+        {
+            var at = fileType is UdfFileTypeMetadata or UdfFileTypeMetadataMirror ? Physical(feLba) : Meta(feLba);
+            return BuildUdfFileEntry(at.Lbn, fileType, permissions, linkCount, length, data,
+                // File data sits in another partition than the entry from 2.50 on, so it needs long_ad.
+                longAd: meta && fileType is UdfFileTypeFile or UdfFileTypeDirectory,
+                extended: ctx.UdfNsr03, tagVersion, uniqueId, modified, now);
         }
 
         // Directories: File Entry + File Identifier Descriptor stream
@@ -1758,23 +1884,24 @@ public static class IsoUdfImageBuilder
             int fidSectors = (dir.UdfFidBytes + SectorSize - 1) / SectorSize;
             byte[] fids = new byte[fidSectors * SectorSize];
             int offset = 0;
+            uint streamLbn = Meta(dir.UdfFidLba).Lbn;
 
-            offset += WriteUdfFid(fids, offset, Lbn(dir.UdfFidLba), characteristics: 0x0A, Array.Empty<byte>(), Lbn(parent.UdfFeLba));
+            offset += WriteUdfFid(fids, offset, streamLbn, characteristics: 0x0A, Array.Empty<byte>(), Meta(parent.UdfFeLba), tagVersion);
 
             foreach (var sub in dir.SubDirectories)
             {
                 byte characteristics = 0x02;
                 if (sub.SourceDir.Attributes.HasFlag(FileAttributes.Hidden)) characteristics |= 0x01;
-                offset += WriteUdfFid(fids, offset, Lbn(dir.UdfFidLba), characteristics,
-                    EncodeOstaCompressedUnicode(sub.UdfName, 255), Lbn(sub.UdfFeLba));
+                offset += WriteUdfFid(fids, offset, streamLbn, characteristics,
+                    EncodeOstaCompressedUnicode(sub.UdfName, 255), Meta(sub.UdfFeLba), tagVersion);
             }
 
             foreach (var file in dir.Files)
             {
                 byte characteristics = 0x00;
                 if (file.SourceFile.Attributes.HasFlag(FileAttributes.Hidden)) characteristics |= 0x01;
-                offset += WriteUdfFid(fids, offset, Lbn(dir.UdfFidLba), characteristics,
-                    EncodeOstaCompressedUnicode(file.UdfName, 255), Lbn(file.UdfFeLba));
+                offset += WriteUdfFid(fids, offset, streamLbn, characteristics,
+                    EncodeOstaCompressedUnicode(file.UdfName, 255), Meta(file.UdfFeLba), tagVersion);
             }
 
             if (offset != dir.UdfFidBytes)
@@ -1783,31 +1910,33 @@ public static class IsoUdfImageBuilder
             }
 
             metadata.Add((dir.UdfFidLba, fids));
-            metadata.Add((dir.UdfFeLba, BuildUdfFileEntry(
-                Lbn(dir.UdfFeLba),
-                fileType: 4,
-                permissions: 0x14A5,
-                linkCount: (ushort)(1 + dir.SubDirectories.Count),
-                informationLength: (ulong)dir.UdfFidBytes,
-                dataLba: Lbn(dir.UdfFidLba),
-                uniqueId: uniqueIds[dir],
-                modifiedUtc: ctx.Stamp(dir.SourceDir.LastWriteTimeUtc),
-                buildTimeUtc: now)));
+            metadata.Add((dir.UdfFeLba, Entry(dir.UdfFeLba, UdfFileTypeDirectory, 0x14A5, (ushort)(1 + dir.SubDirectories.Count),
+                (ulong)dir.UdfFidBytes, Meta(dir.UdfFidLba), uniqueIds[dir], ctx.Stamp(dir.SourceDir.LastWriteTimeUtc))));
         }
 
-        // Files: File Entry pointing at the shared ISO/UDF data extent
+        // Files: File Entry pointing at the shared ISO/UDF data extent (always in the physical partition)
         foreach (var file in ctx.AllFiles)
         {
-            metadata.Add((file.UdfFeLba, BuildUdfFileEntry(
-                Lbn(file.UdfFeLba),
-                fileType: 5,
-                permissions: 0x1084,
-                linkCount: 1,
-                informationLength: (ulong)Math.Max(0, file.SourceFile.SizeBytes),
-                dataLba: Lbn(file.StartLba),
-                uniqueId: uniqueIds[file],
-                modifiedUtc: ctx.Stamp(file.SourceFile.LastWriteTimeUtc),
-                buildTimeUtc: now)));
+            metadata.Add((file.UdfFeLba, Entry(file.UdfFeLba, UdfFileTypeFile, 0x1084, 1,
+                (ulong)Math.Max(0, file.SourceFile.SizeBytes), Physical(file.StartLba), uniqueIds[file],
+                ctx.Stamp(file.SourceFile.LastWriteTimeUtc))));
+        }
+
+        if (meta)
+        {
+            // The Metadata File and Metadata Mirror File entries, then the mirror's copy of every metadata sector.
+            ulong metadataBytes = (ulong)ctx.UdfMetadataBlocks * SectorSize;
+            metadata.Add((ctx.UdfMetadataFeLba, Entry(ctx.UdfMetadataFeLba, UdfFileTypeMetadata, 0, 1, metadataBytes,
+                Physical(ctx.UdfMetadataStartLba), 0, now)));
+            metadata.Add((ctx.UdfMirrorFeLba, Entry(ctx.UdfMirrorFeLba, UdfFileTypeMetadataMirror, 0, 1, metadataBytes,
+                Physical(ctx.UdfMirrorStartLba), 0, now)));
+
+            int metaEnd = ctx.UdfMetadataStartLba + ctx.UdfMetadataBlocks;
+            var copies = metadata
+                .Where(m => m.Lba >= ctx.UdfMetadataStartLba && m.Lba < metaEnd)
+                .Select(m => (m.Lba - ctx.UdfMetadataStartLba + ctx.UdfMirrorStartLba, m.Data))
+                .ToList();
+            metadata.AddRange(copies);
         }
     }
 
@@ -1817,76 +1946,107 @@ public static class IsoUdfImageBuilder
         uint permissions,
         ushort linkCount,
         ulong informationLength,
-        uint dataLba,
+        UdfAddress data,
+        bool longAd,
+        bool extended,
+        ushort tagVersion,
         ulong uniqueId,
         DateTime modifiedUtc,
         DateTime buildTimeUtc)
     {
         byte[] fe = new byte[SectorSize];
         var d = fe.AsSpan();
+        int fixedSize = extended ? UdfExtendedFileEntryFixedSize : UdfFileEntryFixedSize;
 
-        // Allocation descriptors (short_ad): split into extents of at most ~1 GiB
+        // Allocation descriptors (short_ad 8 bytes / long_ad 16 bytes): split into extents of at most ~1 GiB
+        int adSize = longAd ? 16 : 8;
         int adCount = 0;
         ulong remaining = informationLength;
-        uint position = dataLba;
-        int adOffset = UdfFileEntryFixedSize;
+        uint position = data.Lbn;
+        int adOffset = fixedSize;
         while (remaining > 0)
         {
-            if (adOffset + 8 > SectorSize)
+            if (adOffset + adSize > SectorSize)
             {
                 throw new NotSupportedException("File is too large to describe in a single UDF File Entry.");
             }
             uint length = (uint)Math.Min(remaining, UdfMaxExtentBytes);
-            BinaryPrimitives.WriteUInt32LittleEndian(d[adOffset..], length); // type 0: recorded and allocated
-            BinaryPrimitives.WriteUInt32LittleEndian(d[(adOffset + 4)..], position);
+            if (longAd)
+            {
+                WriteUdfLongAd(d.Slice(adOffset, 16), length, position, data.PartitionReference);
+            }
+            else
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(d[adOffset..], length); // type 0: recorded and allocated
+                BinaryPrimitives.WriteUInt32LittleEndian(d[(adOffset + 4)..], position);
+            }
             position += (length + SectorSize - 1) / SectorSize;
             remaining -= length;
-            adOffset += 8;
+            adOffset += adSize;
             adCount++;
         }
-        int adLength = adCount * 8;
+        int adLength = adCount * adSize;
         ulong blocksRecorded = (informationLength + SectorSize - 1) / SectorSize;
 
         // ICB tag
         BinaryPrimitives.WriteUInt32LittleEndian(d[16..], 0);  // prior recorded number of direct entries
         BinaryPrimitives.WriteUInt16LittleEndian(d[20..], 4);  // strategy type 4
         BinaryPrimitives.WriteUInt16LittleEndian(d[24..], 1);  // max number of entries
-        d[27] = fileType;                                      // 4 = directory, 5 = file
-        BinaryPrimitives.WriteUInt16LittleEndian(d[34..], 0);  // flags: short_ad allocation descriptors
+        d[27] = fileType;                                      // 4 directory, 5 file, 250/251 metadata (mirror) file
+        BinaryPrimitives.WriteUInt16LittleEndian(d[34..], (ushort)(longAd ? 1 : 0)); // flags: allocation descriptor type
 
         BinaryPrimitives.WriteUInt32LittleEndian(d[36..], uint.MaxValue); // uid (not specified)
         BinaryPrimitives.WriteUInt32LittleEndian(d[40..], uint.MaxValue); // gid (not specified)
         BinaryPrimitives.WriteUInt32LittleEndian(d[44..], permissions);
         BinaryPrimitives.WriteUInt16LittleEndian(d[48..], linkCount);
         BinaryPrimitives.WriteUInt64LittleEndian(d[56..], informationLength);
-        BinaryPrimitives.WriteUInt64LittleEndian(d[64..], blocksRecorded);
 
         DateTime ts = modifiedUtc == default || modifiedUtc.Year < 1980 ? buildTimeUtc : modifiedUtc;
-        WriteUdfTimestamp(d.Slice(72, 12), ts);  // access
-        WriteUdfTimestamp(d.Slice(84, 12), ts);  // modification
-        WriteUdfTimestamp(d.Slice(96, 12), ts);  // attribute
-        BinaryPrimitives.WriteUInt32LittleEndian(d[108..], 1); // checkpoint
-        WriteUdfRegid(d.Slice(128, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
-        BinaryPrimitives.WriteUInt64LittleEndian(d[160..], uniqueId);
-        BinaryPrimitives.WriteUInt32LittleEndian(d[168..], 0);        // length of extended attributes
-        BinaryPrimitives.WriteUInt32LittleEndian(d[172..], (uint)adLength);
-
-        FinalizeEcma167Tag(d, 0x0105, tagLbn, (ushort)(UdfFileEntryFixedSize + adLength - 16));
+        if (extended)
+        {
+            // ECMA-167 4/14.17 Extended File Entry
+            BinaryPrimitives.WriteUInt64LittleEndian(d[64..], informationLength); // object size (no named streams)
+            BinaryPrimitives.WriteUInt64LittleEndian(d[72..], blocksRecorded);
+            WriteUdfTimestamp(d.Slice(80, 12), ts);  // access
+            WriteUdfTimestamp(d.Slice(92, 12), ts);  // modification
+            WriteUdfTimestamp(d.Slice(104, 12), ts); // creation
+            WriteUdfTimestamp(d.Slice(116, 12), ts); // attribute
+            BinaryPrimitives.WriteUInt32LittleEndian(d[128..], 1); // checkpoint
+            WriteUdfRegid(d.Slice(168, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            BinaryPrimitives.WriteUInt64LittleEndian(d[200..], uniqueId);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[208..], 0);        // length of extended attributes
+            BinaryPrimitives.WriteUInt32LittleEndian(d[212..], (uint)adLength);
+            FinalizeEcma167Tag(d, 0x010A, tagLbn, (ushort)(fixedSize + adLength - 16), tagVersion);
+        }
+        else
+        {
+            // ECMA-167 4/14.9 File Entry
+            BinaryPrimitives.WriteUInt64LittleEndian(d[64..], blocksRecorded);
+            WriteUdfTimestamp(d.Slice(72, 12), ts);  // access
+            WriteUdfTimestamp(d.Slice(84, 12), ts);  // modification
+            WriteUdfTimestamp(d.Slice(96, 12), ts);  // attribute
+            BinaryPrimitives.WriteUInt32LittleEndian(d[108..], 1); // checkpoint
+            WriteUdfRegid(d.Slice(128, 32), UdfImplementationId, ReadOnlySpan<byte>.Empty);
+            BinaryPrimitives.WriteUInt64LittleEndian(d[160..], uniqueId);
+            BinaryPrimitives.WriteUInt32LittleEndian(d[168..], 0);        // length of extended attributes
+            BinaryPrimitives.WriteUInt32LittleEndian(d[172..], (uint)adLength);
+            FinalizeEcma167Tag(d, 0x0105, tagLbn, (ushort)(fixedSize + adLength - 16), tagVersion);
+        }
         return fe;
     }
 
-    private static int WriteUdfFid(byte[] buffer, int offset, uint streamStartLbn, byte characteristics, byte[] identifier, uint icbLbn)
+    private static int WriteUdfFid(byte[] buffer, int offset, uint streamStartLbn, byte characteristics, byte[] identifier, UdfAddress icb, ushort tagVersion)
     {
         int length = UdfFidLength(identifier.Length);
         var d = buffer.AsSpan(offset, length);
         BinaryPrimitives.WriteUInt16LittleEndian(d[16..], 1); // file version number
         d[18] = characteristics;
         d[19] = (byte)identifier.Length;
-        WriteUdfLongAd(d.Slice(20, 16), SectorSize, icbLbn);
+        WriteUdfLongAd(d.Slice(20, 16), SectorSize, icb.Lbn, icb.PartitionReference);
         BinaryPrimitives.WriteUInt16LittleEndian(d[36..], 0); // length of implementation use
         identifier.CopyTo(d[38..]);
         uint tagLocation = streamStartLbn + (uint)(offset / SectorSize);
-        FinalizeEcma167Tag(d, 0x0101, tagLocation, (ushort)(length - 16));
+        FinalizeEcma167Tag(d, 0x0101, tagLocation, (ushort)(length - 16), tagVersion);
         return length;
     }
 
@@ -1936,10 +2096,11 @@ public static class IsoUdfImageBuilder
         Encoding.ASCII.GetBytes("OSTA Compressed Unicode", destination[1..]);
     }
 
-    private static byte[] UdfDomainSuffix()
+    /// <summary>UDF Domain / UDF Identifier Suffix: the UDF revision, then flags and OS fields left zero.</summary>
+    private static byte[] UdfDomainSuffix(ushort revision)
     {
         byte[] suffix = new byte[8];
-        BinaryPrimitives.WriteUInt16LittleEndian(suffix, UdfRevisionBcd);
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, revision);
         return suffix;
     }
 

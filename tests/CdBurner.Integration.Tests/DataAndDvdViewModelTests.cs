@@ -399,4 +399,27 @@ public sealed class DataAndDvdViewModelTests : IDisposable
             navPackSectors: largeNavList);
         Assert.Equal(6 * OpticalConstants.DataSectorSize, vtsIfo.Length);
     }
+
+    [Theory]
+    [InlineData(FileSystemPreset.IsoJolietUdf)]
+    [InlineData(FileSystemPreset.UdfOnly201)]
+    [InlineData(FileSystemPreset.DvdVideoBridge)]
+    public void FileSystemPreset_NameShowsTheUdfRevisionTheImageReallyHas(FileSystemPreset preset)
+    {
+        // Roadmap M1.4: the builder now honours the revision, so the preset name must say what is written.
+        var vm = new DataBurnViewModel(_deviceManager, _burnEngine) { SelectedFileSystemPreset = preset, CloseDisc = true };
+        vm.Compilation.Root.AddFile("a.txt", new byte[] { 1, 2, 3 });
+        var options = vm.CreateIsoBuildOptions();
+        string label = (string)CdBurner.App.Converters.FileSystemPresetToStringConverter.Instance
+            .Convert(preset, typeof(string), null, System.Globalization.CultureInfo.InvariantCulture);
+
+        Assert.True(options.IncludeUdf);
+        Assert.Contains($"UDF {options.UdfRevision >> 8:X}.{options.UdfRevision & 0xFF:X2}", label);
+
+        using var image = IsoUdfImageBuilder.BuildToMemoryStream(vm.Compilation.Root, options);
+        byte[] bytes = image.ToArray();
+        // The revision the image declares: Logical Volume Descriptor domain suffix (VDS at LBA 257, LVD is the 4th).
+        ushort written = BitConverter.ToUInt16(bytes, (257 + 3) * OpticalConstants.DataSectorSize + 216 + 24);
+        Assert.Equal(options.UdfRevision, written);
+    }
 }

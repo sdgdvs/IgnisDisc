@@ -7,7 +7,9 @@ namespace CdBurner.Core.Iso;
 /// <param name="IncludeIso9660">Whether to include the standard ISO 9660 Primary Volume Descriptor and Level 1/2 directory tree.</param>
 /// <param name="IncludeJoliet">Whether to include Microsoft Joliet UCS-2BE Supplementary Volume Descriptor and directory tree.</param>
 /// <param name="IncludeUdf">Whether to include ECMA-167 / UDF bridge descriptors (BEA01, NSR02/NSR03, TEA01, AVDP at LBA 256).</param>
-/// <param name="UdfRevision">Requested UDF revision. The builder currently always writes UDF 1.02 (NSR02), the most widely compatible revision and the one required for DVD-Video.</param>
+/// <param name="UdfRevision">UDF revision to write, as BCD: 0x0102 (default; the most widely readable, and the one
+/// DVD-Video requires), 0x0150, 0x0200, 0x0201, 0x0250 or 0x0260. 2.00 and later use NSR03 and Extended File
+/// Entries; 2.50 and later add a Metadata Partition with a mirror copy (needed for BD-Video/AVCHD).</param>
 /// <param name="PublisherId">Publisher identifier string.</param>
 /// <param name="ApplicationId">Application identifier string.</param>
 /// <param name="BootConfiguration">Optional El Torito bootable configuration (BIOS / UEFI / Multi-boot).</param>

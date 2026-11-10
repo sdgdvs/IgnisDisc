@@ -17,8 +17,8 @@ public enum FileSystemPreset
     IsoOnlyLevel1,
 
     /// <summary>
-    /// UDF-first profile for large data archives (files of 4 GB and larger). The builder writes UDF 1.02; an
-    /// ISO 9660 tree is always present for compatibility. (Enum name kept for saved-project compatibility.)
+    /// UDF-first profile for large data archives (files of 4 GB and larger): UDF 2.01 (readable by Windows XP and
+    /// later, macOS and Linux), with an ISO 9660 tree for compatibility.
     /// </summary>
     UdfOnly201,
 

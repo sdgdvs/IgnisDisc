@@ -68,14 +68,16 @@ ignisdisc-cli <command> [options]
   media-info --drive <id>                      Disc status, capacity, sessions, speeds
   build-iso  --input <folder> --output <file.iso> [--label <vol>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--sha256sums]
-             [--blake3sums]
+             [--blake3sums] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>]
+                                               --udf-rev picks the UDF revision (default 1.02; 2.50/2.60 add the
+                                               metadata partition BD-Video needs);
                                                --fixed-time (or SOURCE_DATE_EPOCH) gives byte-identical images;
                                                --sha256sums adds a root SHA256SUMS that `sha256sum -c` can check;
                                                --blake3sums adds a BLAKE3SUMS that `b3sum -c` can check
   burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <...>]
-             [--sha256sums] [--blake3sums]
+             [--sha256sums] [--blake3sums] [--udf-rev <...>]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
              [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]

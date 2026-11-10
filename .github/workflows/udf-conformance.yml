@@ -1,0 +1,84 @@
+name: UDF conformance
+
+# Builds one image per UDF revision on Windows, then checks each one on Linux with udftools' udfinfo and the kernel's
+# own UDF driver (read-only loop mount), comparing every file with the source folder. Independent of IgnisDisc's
+# own reader, so it catches structures our tests would accept by mistake.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/CdBurner.Core/Iso/**'
+      - 'scripts/ci/make-udf-test-tree.py'
+      - '.github/workflows/udf-conformance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: udf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-images:
+    name: Build images (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build the command-line tool
+        run: dotnet build src/CdBurner.Cli/CdBurner.Cli.csproj --configuration Release
+      - name: Make the test folder
+        run: python scripts/ci/make-udf-test-tree.py tree
+      - name: Build one image per revision
+        shell: pwsh
+        run: |
+          $cli = Get-ChildItem src/CdBurner.Cli/bin/Release -Recurse -Filter cdburner-cli.exe | Select-Object -First 1
+          New-Item -ItemType Directory images | Out-Null
+          foreach ($rev in '1.02', '1.50', '2.00', '2.01', '2.50', '2.60') {
+            & $cli.FullName build-iso --input tree --output "images/udf-$rev.iso" --udf-rev $rev --label "UDF$rev" --fixed-time 1767225600
+            if ($LASTEXITCODE -ne 0) { throw "build of $rev failed" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: udf-images
+          path: images/*.iso
+
+  check-on-linux:
+    name: Check with udftools and the Linux kernel
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: udf-images
+          path: images
+      - name: Install udftools
+        run: sudo apt-get update -q && sudo apt-get install -y -q udftools
+      - name: Check every image
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/make-udf-test-tree.py tree
+          sudo mkdir -p /mnt/udf
+          fail=0
+          for img in images/*.iso; do
+            rev=$(basename "$img" .iso); rev=${rev#udf-}
+            echo "::group::$img"
+            udfinfo "$img" | tee info.txt
+            grep -q "^udfrev=$rev$" info.txt || { echo "udfinfo reports a different revision (expected $rev)"; fail=1; }
+            sudo dmesg -C
+            sudo mount -t udf -o ro,loop "$img" /mnt/udf
+            if diff -r tree /mnt/udf; then echo "files match"; else echo "files differ"; fail=1; fi
+            sudo umount /mnt/udf
+            if sudo dmesg | grep -i "udf" | grep -iE "error|warn|fail|corrupt|bad"; then
+              echo "kernel UDF driver complained"; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
