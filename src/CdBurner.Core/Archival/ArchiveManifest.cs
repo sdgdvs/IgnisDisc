@@ -195,6 +195,9 @@ public static class ArchiveManifest
         string ps1Path = Path.Combine(discRoot, VerifyPowerShellFileName);
         if (!File.Exists(ps1Path))
         {
+            // The script hashes with .NET directly, not Get-FileHash: Windows PowerShell cannot find Get-FileHash
+            // when it is started from a PowerShell 7 session, because it inherits that session's module path.
+            // A file that cannot be read (a damaged disc) is reported and the remaining files are still checked.
             const string ps1Content = """
                 $ErrorActionPreference = 'Stop'
                 $manifest = Join-Path $PSScriptRoot 'IGNISDISC-MANIFEST.sha256'
@@ -226,7 +229,19 @@ public static class ArchiveManifest
                         $failed++
                         continue
                     }
-                    $actual = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    try {
+                        $stream = [System.IO.File]::OpenRead($fullPath)
+                        try {
+                            $sha = [System.Security.Cryptography.SHA256]::Create()
+                            try {
+                                $actual = ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+                            } finally { $sha.Dispose() }
+                        } finally { $stream.Dispose() }
+                    } catch {
+                        Write-Host "[UNREADABLE] $relPath" -ForegroundColor Red
+                        $failed++
+                        continue
+                    }
                     if ($actual -ne $expected) {
                         Write-Host "[CORRUPT] $relPath" -ForegroundColor Red
                         $failed++

@@ -186,7 +186,15 @@ public sealed class ArchiveDamageTests : IDisposable
         Assert.False(ArchiveManifest.TryParseManifestLine(line, out _, out _));
     }
 
-    private static (int ExitCode, string Output) RunVerifyScript(string disc)
+    /// <summary>
+    /// Module folder of PowerShell 7. A Windows PowerShell 5.1 process started from a PowerShell 7 session inherits
+    /// a PSModulePath with this folder in front, and then cannot find the script functions of its own utility
+    /// module (Get-FileHash among them). VERIFY.BAT started from such a terminal runs in exactly that state.
+    /// </summary>
+    private static readonly string PowerShell7Modules = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "Modules");
+
+    private static (int ExitCode, string Output) RunVerifyScript(string disc, bool startedFromPowerShell7 = false)
     {
         var psi = new ProcessStartInfo("powershell.exe")
         {
@@ -195,6 +203,11 @@ public sealed class ArchiveDamageTests : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        if (startedFromPowerShell7)
+        {
+            psi.Environment["PSModulePath"] =
+                PowerShell7Modules + Path.PathSeparator + Environment.GetEnvironmentVariable("PSModulePath");
+        }
         psi.ArgumentList.Add("-NoProfile");
         psi.ArgumentList.Add("-ExecutionPolicy");
         psi.ArgumentList.Add("Bypass");
@@ -207,12 +220,19 @@ public sealed class ArchiveDamageTests : IDisposable
         return (process.ExitCode, output);
     }
 
-    [Fact]
-    public async Task VerifyScript_PassesOnAnIntactDisc_IncludingALeadingSpaceName()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerifyScript_PassesOnAnIntactDisc_IncludingALeadingSpaceName(bool startedFromPowerShell7)
     {
+        if (startedFromPowerShell7 && !Directory.Exists(PowerShell7Modules))
+        {
+            return;
+        }
+
         string disc = await StageAsync((" leading.txt", "one"), ("plain.txt", "two"), ("docs/deep.txt", "three"));
 
-        var (exitCode, output) = RunVerifyScript(disc);
+        var (exitCode, output) = RunVerifyScript(disc, startedFromPowerShell7);
 
         Assert.True(exitCode == 0, output);
         Assert.Contains("PASSED (3 files intact)", output);
@@ -234,16 +254,24 @@ public sealed class ArchiveDamageTests : IDisposable
         Assert.DoesNotContain("PASSED", output);
     }
 
-    [Fact]
-    public async Task VerifyScript_FailsOnACorruptFile()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerifyScript_FailsOnACorruptFile(bool startedFromPowerShell7)
     {
+        if (startedFromPowerShell7 && !Directory.Exists(PowerShell7Modules))
+        {
+            return;
+        }
+
         string disc = await StageThreeFilesAsync();
         await File.WriteAllTextAsync(Path.Combine(disc, "alpha.txt"), "tampered");
 
-        var (exitCode, output) = RunVerifyScript(disc);
+        var (exitCode, output) = RunVerifyScript(disc, startedFromPowerShell7);
 
         Assert.Equal(1, exitCode);
         Assert.Contains("[CORRUPT] alpha.txt", output);
+        Assert.Contains("[OK]      beta.txt", output);
     }
 
     [Theory]
