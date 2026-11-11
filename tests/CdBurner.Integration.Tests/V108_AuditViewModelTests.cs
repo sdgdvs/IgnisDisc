@@ -95,7 +95,13 @@ public sealed class V108_AuditViewModelTests : IDisposable
         await vm.PreviewTrackAsync();
         Assert.True(vm.IsPreviewPlaying);
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        // The clip lasts 0.4 s; how soon the player reports its end depends on the machine (a loaded build runner
+        // took longer than 2 s once), so wait for the end instead of for a fixed time.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (vm.IsPreviewPlaying && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
 
         Assert.False(vm.IsPreviewPlaying);
         Assert.Equal("Preview finished.", vm.PreviewStatusText);
