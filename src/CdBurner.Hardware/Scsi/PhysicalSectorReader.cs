@@ -319,15 +319,17 @@ public static partial class PhysicalSectorReader
                     return Array.Empty<DiscTocTrack>();
                 }
 
-                var entries = new List<(int Number, int Lba, bool IsData)>();
+                var rawEntries = new List<(int Number, int Lba, bool IsData)>();
                 for (int i = 0; i <= last - first + 1; i++) // includes lead-out (track 0xAA)
                 {
                     int off = 4 + i * 8;
                     byte control = (byte)(toc[off + 1] & 0x0F);
                     int number = toc[off + 2];
                     int lba = (toc[off + 5] * 60 + toc[off + 6]) * 75 + toc[off + 7] - 150; // MSF address
-                    entries.Add((number, lba, (control & 0x04) != 0));
+                    rawEntries.Add((number, lba, (control & 0x04) != 0));
                 }
+
+                var entries = RepairTrackStarts(rawEntries, number => ReadTrackInformation(volumePath, number));
 
                 // CDROM_TOC_SESSION_DATA: Length[2], FirstCompleteSession, LastCompleteSession, TRACK_DATA (TrackNumber at byte 6).
                 int? firstTrackOfLastSession = null;
@@ -345,14 +347,14 @@ public static partial class PhysicalSectorReader
                 {
                     var cur = entries[i];
                     var next = entries[i + 1];
-                    int count = next.Lba - cur.Lba;
+                    int count = cur.Size ?? next.Lba - cur.Lba;
 
                     // Multi-session / Enhanced CD: a session ends ~11,400 sectors (lead-out + lead-in + pre-gap) before the
                     // track that opens the next session.
                     bool nextStartsNewSession = next.Number != 0xAA &&
                         ((firstTrackOfLastSession != null && next.Number == firstTrackOfLastSession) ||
                          (firstTrackOfLastSession == null && !cur.IsData && next.IsData));
-                    if (nextStartsNewSession && count > 11_400)
+                    if (cur.Size == null && nextStartsNewSession && count > 11_400)
                     {
                         count -= 11_400;
                     }
@@ -368,6 +370,69 @@ public static partial class PhysicalSectorReader
         }
 
         return TrimDataTrackRunOut(volumePath, parsedTracks);
+    }
+
+    /// <summary>
+    /// Corrects a table of contents that cannot be right. Straight after a session is added to a DVD-R, the GP60NB50
+    /// goes on answering READ TOC with the new track at the address of the one before it (measured: track 2 at LBA 0
+    /// instead of 131,152) until the disc is reloaded, while READ TRACK INFORMATION is correct at once. A track that
+    /// does not start after the previous one is the sign; every track is then placed by its track information.
+    /// A table of contents whose tracks are in order is returned as it is and the drive is not asked.
+    /// </summary>
+    /// <param name="entries">Tracks in order, the lead-out (0xAA) last.</param>
+    /// <param name="readTrackInformation">Start and size of a track by number, or null if the drive will not say.</param>
+    public static IReadOnlyList<(int Number, int Lba, bool IsData, int? Size)> RepairTrackStarts(
+        IReadOnlyList<(int Number, int Lba, bool IsData)> entries,
+        Func<int, (int Start, int Size)?> readTrackInformation)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(readTrackInformation);
+        var result = entries.Select(e => (e.Number, e.Lba, e.IsData, Size: (int?)null)).ToList();
+
+        bool outOfOrder = false;
+        for (int i = 1; i < entries.Count; i++)
+        {
+            if (entries[i].Number != 0xAA && entries[i].Lba <= entries[i - 1].Lba)
+            {
+                outOfOrder = true;
+            }
+        }
+        if (!outOfOrder)
+        {
+            return result;
+        }
+
+        for (int i = 0; i < result.Count; i++)
+        {
+            if (result[i].Number != 0xAA && readTrackInformation(result[i].Number) is { Start: >= 0, Size: > 0 } info)
+            {
+                result[i] = (result[i].Number, info.Start, result[i].IsData, info.Size);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>READ TRACK INFORMATION (0x52) by track number: where the track starts and how long it is.</summary>
+    private static (int Start, int Size)? ReadTrackInformation(string volumePath, int trackNumber)
+    {
+        using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+        if (handle == null)
+        {
+            return null;
+        }
+
+        using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+        byte[] data = new byte[36];
+        byte[] cdb = [0x52, 0x01, 0, 0, 0, (byte)trackNumber, 0, 0, (byte)data.Length, 0];
+        var r = transport.ExecuteCommand(cdb, data, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(10));
+        if (!r.IsSuccess || r.DataTransferLength < 28)
+        {
+            return null;
+        }
+
+        int start = (data[8] << 24) | (data[9] << 16) | (data[10] << 8) | data[11];
+        int size = (data[24] << 24) | (data[25] << 16) | (data[26] << 8) | data[27];
+        return (start, size);
     }
 
     private static IReadOnlyList<DiscTocTrack> TrimDataTrackRunOut(string volumePath, IReadOnlyList<DiscTocTrack> tracks)

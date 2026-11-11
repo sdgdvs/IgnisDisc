@@ -126,10 +126,27 @@ public class DataBurnService
             var result = await ExecuteBurnPipelineAsync(recorder, imageStream, burnOptions, requiredSectors, progress, cancellationToken);
             if (result.Success)
             {
-                result.Warning = DescribeShortenedNames(rootDirectory, buildOptions, sessionStartLba);
+                result.Warning = ComposeBurnWarning(
+                    DescribeShortenedNames(rootDirectory, buildOptions, sessionStartLba),
+                    sessionAdded: sessionStartLba > 0,
+                    virtualDrive: recorder.IsVirtual);
             }
             return result;
         }
+    }
+
+    /// <summary>
+    /// Shown after a session was added to a disc. A drive can keep reporting the disc as it was before the burn
+    /// until the disc is reloaded (measured on a DVD-R: Windows went on showing only the first session).
+    /// </summary>
+    public const string AddedSessionHint =
+        "If Windows still shows only the earlier files, take the disc out and put it back in: the new session is on the disc.";
+
+    /// <summary>What a successful burn still has to tell the user; null when there is nothing.</summary>
+    public static string? ComposeBurnWarning(string? shortenedNames, bool sessionAdded, bool virtualDrive)
+    {
+        string? reinsert = sessionAdded && !virtualDrive ? AddedSessionHint : null;
+        return shortenedNames != null && reinsert != null ? shortenedNames + " " + reinsert : shortenedNames ?? reinsert;
     }
 
     /// <summary>Joliet holds 64 UTF-16 characters per name.</summary>
