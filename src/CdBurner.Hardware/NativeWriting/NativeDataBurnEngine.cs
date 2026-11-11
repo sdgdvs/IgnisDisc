@@ -8,8 +8,9 @@ namespace CdBurner.Hardware.NativeWriting;
 
 /// <summary>
 /// Burns data images (ISO files, data discs) with IgnisDisc's own drive commands instead of Windows' burning service.
-/// Opt-in. Covers blank CD-R and CD-RW so far (<see cref="NativeTaoDataWriter"/>); any other disc, and a disc that
-/// already holds a session, is handed to the Windows writer (<see cref="LastFallbackReason"/> says so). Reading (the read-back check), erasing and audio go to the Windows
+/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW (sequential) and single-layer DVD+R so far
+/// (<see cref="NativeTaoDataWriter"/>); any other disc, and a disc that already holds a session, is handed to the Windows
+/// writer (<see cref="LastFallbackReason"/> says so). Reading (the read-back check), erasing and audio go to the Windows
 /// engine. Every direct run saves a full SCSI command log.
 /// </summary>
 public sealed class NativeDataBurnEngine : IBurnEngineBackend
@@ -42,7 +43,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
     /// <summary>One plain sentence on which writer burned the last disc and at what speed, for a status line.</summary>
     public string? LastSummary => LastFallbackReason
         ?? (LastResult is { DiscRecorded: true } r
-            ? "Written with direct drive commands" + (r.SpeedSetKiloBytesPerSecond is int kb ? $" at {kb / 176.4:F0}x." : ".")
+            ? "Written with direct drive commands" + (r.SpeedSetKiloBytesPerSecond is int kb ? $" at {kb / r.OneXKiloBytesPerSecond:0.#}x." : ".")
             : null);
 
     public async Task<BurnOperationResult> BurnDataStreamAsync(IDiscRecorderBackend recorder, Stream imageStream, DataBurnOptions options,
@@ -61,11 +62,13 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         var status = recorder.QueryMediaStatus();
         string? reason = !imageStream.CanSeek
             ? "the image is not a seekable file"
-            : status.MediaType is not (DiscMediaType.CdR or DiscMediaType.CdRw)
-                ? $"direct writing covers CD-R and CD-RW so far, and this disc is {status.MediaType.GetDisplayName()}"
-                : !status.IsBlank
-                    ? "the disc already holds data, and direct writing adds no sessions yet"
-                    : null;
+            : status.MediaType is DiscMediaType.DvdMinusRDualLayer or DiscMediaType.DvdPlusRDualLayer
+                ? "direct writing does not cover dual-layer DVDs yet, because IgnisDisc does not set the layer break on the drive yet"
+                : !IsCovered(status.MediaType)
+                    ? $"direct writing covers CD-R, CD-RW, DVD-R, DVD-RW and DVD+R so far, and this disc is {status.MediaType.GetDisplayName()}"
+                    : !status.IsBlank
+                        ? "the disc already holds data, and direct writing adds no sessions yet"
+                        : null;
         if (reason != null)
         {
             LastFallbackReason = $"Written with Windows' writer: {reason}.";
@@ -74,7 +77,10 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
 
         long start = imageStream.Position;
         long bytes = imageStream.Length - start;
-        int? speed = options.Speed is { Multiplier: > 0 } s ? (int)Math.Round(s.Multiplier * 176.4) : null;
+        // The drive counts speed in kB/s: 176.4 per 1x on CD (audio units), 1,385 per 1x on DVD.
+        int? speed = options.Speed is { Multiplier: > 0 } s
+            ? (int)Math.Round(s.Multiplier * WriteSpeedDescriptor.GetBaseRate(status.MediaType, isAudio: status.MediaType.IsCd()) / 1000.0)
+            : null;
         var request = new NativeDataWriteRequest(imageStream, start, bytes, TestWrite: options.Simulate, options.CloseDisc, speed);
 
         var result = await Task.Run(() => Run(recorder, request, progress, cancellationToken), CancellationToken.None).ConfigureAwait(false);
@@ -89,9 +95,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         imageStream.Position = start;
         if (result.Success)
         {
-            double seconds = result.WritingTime.TotalSeconds;
-            double multiplier = seconds > 0 ? (result.DataSectorsWritten + result.PaddingSectors) / seconds / Msf.FramesPerSecond : 0;
-            return BurnOperationResult.Succeeded(result.DataSectorsWritten, result.Elapsed, multiplier);
+            return BurnOperationResult.Succeeded(result.DataSectorsWritten, result.Elapsed, result.AverageWriteMultiplier);
         }
 
         string message = result.StoppedBeforeWriting ? $"{result.Message} Nothing was written to the disc." : result.Message;
@@ -130,7 +134,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
 
         using var log = new LoggingScsiTransport(device, ownsInner: true);
         string kind = request.TestWrite ? "test write only" : TestWriteFirst ? "test write, then real write" : "real write";
-        log.Note($"IgnisDisc native Track-at-Once data writer, {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
+        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
         log.Note($"Image: {request.ImageBytes:N0} bytes, close disc {request.CloseDisc}, speed asked {(request.WriteSpeedKiloBytesPerSecond?.ToString() ?? "fastest listed")}.");
 
         IDisposable? exclusive = null;
@@ -222,6 +226,10 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         medium.NextWritableLba = sectors;
         medium.UsedSectors = Math.Max(medium.UsedSectors, sectors);
     }
+
+    /// <summary>Discs the direct writer handles (blank, single layer).</summary>
+    private static bool IsCovered(DiscMediaType type) =>
+        type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR;
 
     private static NativeDataWriteResult Stopped(string message) =>
         new() { Success = false, StoppedBeforeWriting = true, Message = message };

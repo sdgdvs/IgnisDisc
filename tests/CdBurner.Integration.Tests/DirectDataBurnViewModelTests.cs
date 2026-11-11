@@ -73,9 +73,25 @@ public sealed class DirectDataBurnViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task DataScreen_WithADvd_UsesTheWindowsWriterAndSaysSo()
+    public async Task DataScreen_WithADvdMinusR_WritesItDirectlyAndReadsItBack()
     {
-        Insert(VirtualDiscMedium.CreateBlankDvdR47());
+        var medium = Insert(VirtualDiscMedium.CreateBlankDvdR47());
+        var vm = DataScreen();
+        vm.UseDirectDriveCommands = true;
+
+        var result = await vm.StartDataBurnAsync("VDRV-01");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified);
+        Assert.Contains("Written with direct drive commands", vm.StatusMessage);
+        Assert.True(vm.LastDirectBurnEngine!.LastResult!.IsDvd);
+        Assert.True(medium.IsFinalized);
+    }
+
+    [Fact]
+    public async Task DataScreen_WithADvdPlusRw_UsesTheWindowsWriterAndSaysSo()
+    {
+        Insert(VirtualDiscMedium.CreateBlankDvdPlusRw47());
         var vm = DataScreen();
         vm.UseDirectDriveCommands = true;
 

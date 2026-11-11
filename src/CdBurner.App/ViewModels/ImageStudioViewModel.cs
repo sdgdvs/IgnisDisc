@@ -228,7 +228,7 @@ public class ImageStudioViewModel : ObservableObject
 
     /// <summary>
     /// Burn with IgnisDisc's own drive commands instead of the Windows writer. Off by default, chosen per burn. Covers
-    /// blank CD-R and CD-RW so far; other discs are burned by the Windows writer as before. The speed comes from the
+    /// blank CD-R, CD-RW, DVD-R, DVD-RW and single-layer DVD+R so far; other discs are burned by the Windows writer as before. The speed comes from the
     /// drive's own list for the disc, and the disc is always read back afterwards.
     /// </summary>
     public bool UseDirectDriveCommands

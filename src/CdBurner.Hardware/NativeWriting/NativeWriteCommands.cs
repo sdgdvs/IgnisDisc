@@ -15,9 +15,60 @@ public static class NativeWriteCommands
     public const byte OpCodeSendCueSheet = 0x5D;
     public const byte OpCodeCloseTrackSession = 0x5B;
     public const byte OpCodeSetCdSpeed = 0xBB;
+    public const byte OpCodeReserveTrack = 0x53;
+    public const byte OpCodeSetStreaming = 0xB6;
+
+    /// <summary>Length of one SET STREAMING performance descriptor (type 0).</summary>
+    public const int PerformanceDescriptorLength = 28;
+
+    /// <summary>CLOSE TRACK/SESSION close function 001b: close the track (on DVD±R, the written fragment).</summary>
+    public const byte CloseFunctionTrack = 0x01;
 
     /// <summary>CLOSE TRACK/SESSION close function 010b: close the session (writes its lead-in and lead-out).</summary>
     public const byte CloseFunctionSession = 0x02;
+
+    /// <summary>CLOSE TRACK/SESSION close function 101b on DVD+R: close the session and finalize the disc with the
+    /// minimal radius, so nothing more can be added (libburn's cookbook; some drives refuse it).</summary>
+    public const byte CloseFunctionFinalizeDvdPlusR = 0x05;
+
+    /// <summary>
+    /// RESERVE TRACK (0x53) with ARSV = 0 and RMZ = 0: reserves <paramref name="sectors"/> 2,048-byte blocks for the
+    /// next track. DVD-R Disc-At-Once needs it; the size goes in CDB bytes 5–8.
+    /// </summary>
+    public static byte[] BuildReserveTrack(int sectors)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sectors);
+        byte[] cdb = new byte[10];
+        cdb[0] = OpCodeReserveTrack;
+        BinaryPrimitives.WriteInt32BigEndian(cdb.AsSpan(5, 4), sectors);
+        return cdb;
+    }
+
+    /// <summary>SET STREAMING (0xB6) with type 0 (one performance descriptor); the list length goes in bytes 9–10.</summary>
+    public static byte[] BuildSetStreaming()
+    {
+        byte[] cdb = new byte[12];
+        cdb[0] = OpCodeSetStreaming;
+        BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(9, 2), PerformanceDescriptorLength);
+        return cdb;
+    }
+
+    /// <summary>
+    /// The 28-byte performance descriptor for SET STREAMING: start LBA 0 (bytes 4–7), <paramref name="endLba"/>
+    /// (8–11), then read size and read time (12–15, 16–19) and write size and write time (20–23, 24–27). Sizes in kB
+    /// over 1,000 ms give the speed in kB/s; read and write both get <paramref name="kiloBytesPerSecond"/>, a speed
+    /// from the drive's own GET PERFORMANCE list.
+    /// </summary>
+    public static byte[] BuildPerformanceDescriptor(int endLba, int kiloBytesPerSecond)
+    {
+        byte[] d = new byte[PerformanceDescriptorLength];
+        BinaryPrimitives.WriteInt32BigEndian(d.AsSpan(8, 4), Math.Max(0, endLba));
+        BinaryPrimitives.WriteInt32BigEndian(d.AsSpan(12, 4), kiloBytesPerSecond);
+        BinaryPrimitives.WriteInt32BigEndian(d.AsSpan(16, 4), 1000);
+        BinaryPrimitives.WriteInt32BigEndian(d.AsSpan(20, 4), kiloBytesPerSecond);
+        BinaryPrimitives.WriteInt32BigEndian(d.AsSpan(24, 4), 1000);
+        return d;
+    }
 
     /// <summary>CLOSE TRACK/SESSION. With <paramref name="immediate"/> the drive answers at once and reports "not ready"
     /// until it has finished.</summary>

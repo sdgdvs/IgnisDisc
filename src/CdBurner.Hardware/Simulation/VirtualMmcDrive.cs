@@ -11,7 +11,9 @@ namespace CdBurner.Hardware.Simulation;
 /// CD-Text lead-in, 2,352 in the program area), nothing past the lead-out. Faults can be switched on to test the
 /// writer's error handling. A test write leaves the disc blank, as on a real drive. A real write leaves a recorded
 /// disc that answers READ TOC, CD-Text read-back and READ CD, shifted by a drive offset the way real hardware shifts
-/// audio, so the read-back check is tested against the same behaviour.
+/// audio, so the read-back check is tested against the same behaviour. With a DVD profile it also answers the data
+/// writer's DVD commands (RESERVE TRACK, SET STREAMING, CLOSE TRACK / SESSION / finalize) with the rules from libburn's
+/// cookbook: whole 32 KiB blocks per WRITE, a reservation before Disc-At-Once, no mode page for DVD+R.
 /// </summary>
 public sealed class VirtualMmcDrive : IScsiTransport
 {
@@ -37,6 +39,19 @@ public sealed class VirtualMmcDrive : IScsiTransport
     public bool OffersTestWrite { get; set; } = true;
     public bool OffersRwSubchannel { get; set; } = true;
     public bool OffersBufferUnderrunFree { get; set; } = true;
+
+    /// <summary>DVD-R/-RW: the drive offers incremental writing (feature 0x0021).</summary>
+    public bool OffersIncremental { get; set; } = true;
+
+    /// <summary>Capacity in sectors for discs whose addresses go past CD MSF times (DVD); null uses <see cref="LastLeadOutStart"/>.</summary>
+    public int? CapacitySectors { get; set; }
+
+    private int Capacity => CapacitySectors ?? LastLeadOutStart.ToLba();
+
+    /// <summary>True for every DVD profile.</summary>
+    public bool IsDvd => NativeTaoDataWriter.IsDvdProfile(Profile);
+
+    private bool IsDvdPlusR => Profile is NativeTaoDataWriter.ProfileDvdPlusR or NativeTaoDataWriter.ProfileDvdPlusRDualLayer;
 
     // ---- Faults ----
 
@@ -130,6 +145,29 @@ public sealed class VirtualMmcDrive : IScsiTransport
     private int _taoNextLba;       // next writable address of the open track
     private int _taoClosedSectors; // sectors of a track flushed with SYNCHRONIZE CACHE, waiting for CLOSE SESSION
     private bool _taoTestWrite;
+
+    // ---- DVD writing ----
+
+    /// <summary>RESERVE TRACK fails with 5/24/00.</summary>
+    public bool RejectsReserveTrack { get; set; }
+
+    /// <summary>SET STREAMING fails with 5/20/00, as on drives that only take SET CD SPEED.</summary>
+    public bool RejectsSetStreaming { get; set; }
+
+    /// <summary>The DVD+R finalize function (101b) fails with 5/24/00; libburn's cookbook reports drives that refuse it.</summary>
+    public bool RejectsDvdPlusRFinalize { get; set; }
+
+    /// <summary>CLOSE SESSION answers 2/04/07 (operation in progress) this many times first, as some drives do.</summary>
+    public int CloseSessionBusyResponses { get; set; }
+
+    /// <summary>Sectors reserved with RESERVE TRACK for a DVD-R Disc-At-Once track; 0 when none.</summary>
+    public int ReservedSectors { get; private set; }
+
+    /// <summary>The last SET STREAMING performance descriptor received (28 bytes).</summary>
+    public byte[]? LastPerformanceDescriptor { get; private set; }
+
+    private bool _dvdModeSet;     // MODE SELECT chose Disc-At-Once or incremental for a DVD-R/-RW
+    private bool _dvdTrackClosed; // CLOSE TRACK received for the flushed DVD track
 
     // ---- Data discs (READ (10)) ----
 
@@ -237,6 +275,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             0xBB => SetCdSpeed(cdb),
             MmcCommandBuilder.OpCodeReadTrackInformation => ReadTrackInformation(cdb, dataBuffer),
             NativeWriteCommands.OpCodeCloseTrackSession => CloseTrackSession(cdb),
+            NativeWriteCommands.OpCodeReserveTrack => ReserveTrack(cdb),
+            NativeWriteCommands.OpCodeSetStreaming => SetStreaming(cdb, dataBuffer),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
     }
@@ -285,12 +325,18 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
 
         bool cd = Profile is NativeSaoAudioWriter.ProfileCdR or NativeSaoAudioWriter.ProfileCdRw;
+        bool dvdMinus = Profile is NativeTaoDataWriter.ProfileDvdMinusR or NativeTaoDataWriter.ProfileDvdMinusRwSequential
+            or NativeTaoDataWriter.ProfileDvdMinusRDualLayer or NativeTaoDataWriter.ProfileDvdMinusRDualLayerJump;
+        Add(NativeTaoDataWriter.FeatureIncrementalStreaming, 0, dvdMinus && OffersIncremental);
         Add(MmcCommandBuilder.FeatureTrackAtOnce, (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | (OffersTestWrite ? 0x04 : 0)), cd);
         if (OffersSessionAtOnce)
         {
             byte flags = (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | 0x20 | (OffersTestWrite ? 0x04 : 0) | 0x02 | (OffersRwSubchannel ? 0x01 : 0));
             Add(MmcCommandBuilder.FeatureCdMastering, flags, cd);
         }
+        Add(MmcCommandBuilder.FeatureDvdRecordableWrite,
+            (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | (OffersTestWrite ? 0x04 : 0) | (Profile == NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x02 : 0)),
+            dvdMinus);
 
         int length = 8 + descriptors.Sum(d => d.Length);
         byte[] response = new byte[length];
@@ -309,7 +355,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
     {
         byte[] r = new byte[34];
         BinaryPrimitives.WriteUInt16BigEndian(r, 32);
-        r[2] = (byte)(DiscStatus & 0x03 | (Profile == NativeSaoAudioWriter.ProfileCdRw ? 0x10 : 0));
+        r[2] = (byte)(DiscStatus & 0x03 | (Profile is NativeSaoAudioWriter.ProfileCdRw or NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x10 : 0));
         r[3] = 1; r[4] = 1; r[5] = 1; r[6] = 1;
         r[17] = LeadInStart.Minute; r[18] = LeadInStart.Second; r[19] = LeadInStart.Frame;
         r[21] = LastLeadOutStart.Minute; r[22] = LastLeadOutStart.Second; r[23] = LastLeadOutStart.Frame;
@@ -343,6 +389,11 @@ public sealed class VirtualMmcDrive : IScsiTransport
         if (list.Length < 8 + 2)
         {
             return Sense(0x05, 0x1A, 0x00); // parameter list length error
+        }
+        if (IsDvdPlusR)
+        {
+            // libburn's cookbook: no mode page 05h is sent for DVD+R. Stricter than most drives, to catch one being sent.
+            return Sense(0x05, 0x26, 0x00);
         }
 
         int blockDescriptorLength = BinaryPrimitives.ReadUInt16BigEndian(list.Slice(6, 2));
@@ -379,6 +430,20 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x26, 0x00); // Mode 1 blocks need a data track mode
         }
+        if (IsDvd)
+        {
+            // DVD-R/-RW: Disc-At-Once (2) or incremental (0), track mode 5, data block type 8; fixed packets of 16
+            // blocks for incremental, none for Disc-At-Once (libburn's cookbook).
+            bool dao = writeType == WriteParametersPage.WriteTypeSessionAtOnce;
+            bool incremental = writeType == WriteParametersPage.WriteTypeIncremental;
+            bool fixedPackets = (page[3] & 0x20) != 0;
+            int packetSize = BinaryPrimitives.ReadInt32BigEndian(page.AsSpan(10, 4));
+            if (!(dao || incremental) || blockType != WriteParametersPage.DataBlockTypeMode1 || (page[3] & 0x0F) != WriteParametersPage.TrackModeDvd ||
+                (dao && fixedPackets) || (incremental && (!fixedPackets || packetSize != WriteParametersPage.DvdPacketBlocks || !OffersIncremental)))
+            {
+                return Sense(0x05, 0x26, 0x00);
+            }
+        }
 
         _testWriteRequested = (page[2] & 0x10) != 0;
         if (DropsTestWriteBit || RecordsDuringTestWrite)
@@ -387,6 +452,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
 
         _modePage05 = page;
+        _dvdModeSet = IsDvd;
+        ReservedSectors = 0;
         _cue = null; // new parameters need a new cue sheet
         _taoArmed = writeType == WriteParametersPage.WriteTypeTrackAtOnce;
         return Good(0);
@@ -430,6 +497,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
     private ScsiExecutionResult Write(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
         WriteCommandCount++;
+        if (_cue == null && IsDvd)
+        {
+            return WriteDvd(cdb, data);
+        }
         if (_cue == null && _taoArmed)
         {
             return WriteTrackAtOnce(cdb, data);
@@ -720,7 +791,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private ScsiExecutionResult SynchronizeCache()
     {
-        if (_taoArmed && _taoNextLba > 0 && _taoClosedSectors == 0)
+        if ((_taoArmed || IsDvd) && _taoNextLba > 0 && _taoClosedSectors == 0)
         {
             // The drive empties its buffer and writes the run-out; the track is complete.
             if (_taoTestWrite)
@@ -731,12 +802,18 @@ public sealed class VirtualMmcDrive : IScsiTransport
                 }
                 DataTrackWritten.SetLength(0);
             }
+            else if (IsDvd && ReservedSectors > 0)
+            {
+                // DVD-R Disc-At-Once: the drive closes the disc itself; a short track is padded to the reservation.
+                RecordDataDisc(Math.Max(_taoNextLba, ReservedSectors), runOutSectors: 0, discStatus: 2);
+            }
             else
             {
                 _taoClosedSectors = _taoNextLba;
                 DiscStatus = 1; // an open session until it is closed
                 DataDiscImage = DataTrackWritten.ToArray(); // the recorded track reads back even before the close
             }
+            ReservedSectors = 0;
             _taoNextLba = 0;
             _taoArmed = false;
             return Good(0);
@@ -795,7 +872,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x24, 0x00);
         }
-        if (lba + count > LastLeadOutStart.ToLba())
+        if (lba + count > Capacity)
         {
             return Sense(0x05, 0x21, 0x00);
         }
@@ -837,13 +914,13 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x05, 0x24, 0x00);
         }
 
-        int capacity = LastLeadOutStart.ToLba();
+        int capacity = Capacity;
         byte[] r = new byte[36];
         BinaryPrimitives.WriteUInt16BigEndian(r, 34);
         r[2] = 1; r[3] = 1; // track 1, session 1
         if (Recorded || _taoClosedSectors > 0 || DiscStatus != 0)
         {
-            int size = Recorded ? RecordedLeadOutLba : _taoClosedSectors + 2;
+            int size = Recorded ? RecordedLeadOutLba : _taoClosedSectors + (IsDvd ? 0 : 2);
             r[5] = 0x04; // data track
             r[6] = 0x01; // data mode 1, not blank, no next writable address
             BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), size);
@@ -872,12 +949,26 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x03, 0x0C, 0x00);
         }
+        if (IsDvd)
+        {
+            return CloseDvd(cdb, function);
+        }
         if (function != NativeWriteCommands.CloseFunctionSession || _taoClosedSectors == 0)
         {
             return Sense(0x05, 0x2C, 0x00); // command sequence error: nothing to close
         }
 
-        int sectors = _taoClosedSectors;
+        RecordDataDisc(_taoClosedSectors, runOutSectors: 2, discStatus: (_modePage05[3] >> 6) == 3 ? 1 : 2);
+        if ((cdb[1] & 0x01) != 0)
+        {
+            NotReadyResponses += CloseSessionBusyPolls;
+        }
+        return Good(0);
+    }
+
+    /// <summary>One data track from LBA 0 is now on the disc: READ (10) reads it and READ TOC lists it.</summary>
+    private void RecordDataDisc(int sectors, int runOutSectors, int discStatus)
+    {
         byte[] image = DataTrackWritten.ToArray();
         if (image.Length < sectors * 2048)
         {
@@ -887,14 +978,131 @@ public sealed class VirtualMmcDrive : IScsiTransport
         Recorded = true;
         _recordedTracks = new() { (1, 0, 0x40) };
         _recordedCdText = false;
-        RecordedLeadOutLba = sectors + 2; // two run-out blocks
-        DiscStatus = (_modePage05[3] >> 6) == 3 ? 1 : 2;
+        RecordedLeadOutLba = sectors + runOutSectors; // CD Track-at-Once ends with two run-out blocks; DVD with none
+        DiscStatus = discStatus;
         _taoClosedSectors = 0;
         SessionClosed = true;
+    }
+
+    /// <summary>
+    /// WRITE (10) on a DVD: DVD-R/-RW need write parameters first (and a reservation for Disc-At-Once, which the write
+    /// may not pass); DVD+R takes data without either. Every WRITE carries whole 16-block (32 KiB) packets.
+    /// </summary>
+    private ScsiExecutionResult WriteDvd(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
+    {
+        if (!IsDvdPlusR && !_dvdModeSet)
+        {
+            return Sense(0x05, 0x2C, 0x00);
+        }
+        bool dao = !IsDvdPlusR && (_modePage05[2] & 0x0F) == WriteParametersPage.WriteTypeSessionAtOnce;
+        if (dao && ReservedSectors == 0)
+        {
+            return Sense(0x05, 0x2C, 0x00); // Disc-At-Once needs RESERVE TRACK first
+        }
+        int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
+        int count = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(7, 2));
+        if (count % WriteParametersPage.DvdPacketBlocks != 0)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (dao && lba + count > ReservedSectors)
+        {
+            return Sense(0x05, 0x21, 0x00);
+        }
+        return WriteTrackAtOnce(cdb, data);
+    }
+
+    /// <summary>
+    /// CLOSE TRACK/SESSION on a DVD: close the flushed track (001b), then close the session (010b; appendable on DVD+R,
+    /// and on DVD-R with multi-session 11b) or, on DVD+R only, finalize (101b).
+    /// </summary>
+    private ScsiExecutionResult CloseDvd(ReadOnlySpan<byte> cdb, byte function)
+    {
+        if (function == NativeWriteCommands.CloseFunctionTrack)
+        {
+            int track = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(4, 2));
+            if (_taoClosedSectors == 0)
+            {
+                return Sense(0x05, 0x2C, 0x00);
+            }
+            if (track != 1)
+            {
+                return Sense(0x05, 0x24, 0x00);
+            }
+            _dvdTrackClosed = true;
+            return Good(0);
+        }
+
+        bool finalize = function == NativeWriteCommands.CloseFunctionFinalizeDvdPlusR;
+        if (function != NativeWriteCommands.CloseFunctionSession && !finalize)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (!_dvdTrackClosed)
+        {
+            return Sense(0x05, 0x2C, 0x00); // the track has to be closed first
+        }
+        if (finalize && (!IsDvdPlusR || RejectsDvdPlusRFinalize))
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (!finalize && CloseSessionBusyResponses > 0)
+        {
+            CloseSessionBusyResponses--;
+            return Sense(0x02, 0x04, 0x07);
+        }
+
+        int status = finalize ? 2 : IsDvdPlusR ? 1 : (_modePage05[3] >> 6) == 3 ? 1 : 2;
+        RecordDataDisc(_taoClosedSectors, runOutSectors: 0, discStatus: status);
+        _dvdTrackClosed = false;
         if ((cdb[1] & 0x01) != 0)
         {
             NotReadyResponses += CloseSessionBusyPolls;
         }
+        return Good(0);
+    }
+
+    /// <summary>RESERVE TRACK (ARSV 0, RMZ 0) on a blank DVD-R/-RW set to Disc-At-Once: the size in CDB bytes 5–8.</summary>
+    private ScsiExecutionResult ReserveTrack(ReadOnlySpan<byte> cdb)
+    {
+        if (RejectsReserveTrack)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        bool dao = IsDvd && _dvdModeSet && (_modePage05[2] & 0x0F) == WriteParametersPage.WriteTypeSessionAtOnce;
+        if (!dao || DiscStatus != 0 || ReservedSectors != 0 || _taoNextLba != 0)
+        {
+            return Sense(0x05, 0x2C, 0x00);
+        }
+        int size = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(5, 4));
+        if ((cdb[1] & 0x03) != 0 || size <= 0 || size > Capacity)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        ReservedSectors = size;
+        return Good(0);
+    }
+
+    /// <summary>SET STREAMING type 0: one 28-byte performance descriptor; the write speed is write size (kB) over time (ms).</summary>
+    private ScsiExecutionResult SetStreaming(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
+    {
+        if (RejectsSetStreaming)
+        {
+            return Sense(0x05, 0x20, 0x00);
+        }
+        int length = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(9, 2));
+        if (cdb[8] != 0 || length != NativeWriteCommands.PerformanceDescriptorLength || data.Length < length)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        int writeSize = BinaryPrimitives.ReadInt32BigEndian(data.Slice(20, 4));
+        int writeTime = BinaryPrimitives.ReadInt32BigEndian(data.Slice(24, 4));
+        if (writeSize <= 0 || writeTime <= 0)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        LastPerformanceDescriptor = data[..length].ToArray();
+        WriteSpeedSet = (int)((long)writeSize * 1000 / writeTime);
         return Good(0);
     }
 

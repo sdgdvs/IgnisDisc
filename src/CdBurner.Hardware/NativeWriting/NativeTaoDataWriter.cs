@@ -12,8 +12,8 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <param name="ImageBytes">Bytes of image from <paramref name="StartPosition"/>; the last sector is padded with zeros.</param>
 /// <param name="TestWrite">True: laser off, the disc stays blank.</param>
 /// <param name="CloseDisc">True: no more sessions can be added afterwards.</param>
-/// <param name="WriteSpeedKiloBytesPerSecond">Speed to set (176.4 kB/s per 1x), or null for the fastest the drive lists
-/// for this disc.</param>
+/// <param name="WriteSpeedKiloBytesPerSecond">Speed to set in kB/s (176.4 per 1x on CD, 1,385 per 1x on DVD), or null
+/// for the fastest the drive lists for this disc.</param>
 public sealed record NativeDataWriteRequest(
     Stream Image,
     long StartPosition,
@@ -31,7 +31,7 @@ public sealed record NativeDataWriteResult
     /// <summary>True when the writer stopped before the first WRITE command: the disc was not touched.</summary>
     public bool StoppedBeforeWriting { get; init; }
 
-    /// <summary>True when the disc is not a CD-R or CD-RW, which this writer does not handle yet.</summary>
+    /// <summary>True when the disc is one this writer does not handle yet (the message says which).</summary>
     public bool UnsupportedDisc { get; init; }
 
     public string Message { get; init; } = string.Empty;
@@ -39,7 +39,7 @@ public sealed record NativeDataWriteResult
     /// <summary>Image sectors sent (without the padding to the minimum track length).</summary>
     public int DataSectorsWritten { get; init; }
 
-    /// <summary>Zero sectors added after the image because a track must be at least 300 sectors long.</summary>
+    /// <summary>Zero sectors added after the image: a CD track is at least 300 sectors, a DVD track whole 16-sector blocks.</summary>
     public int PaddingSectors { get; init; }
 
     public TimeSpan Elapsed { get; init; }
@@ -58,6 +58,28 @@ public sealed record NativeDataWriteResult
 
     public bool TestWriteNotOffered { get; init; }
     public bool? DiscStillBlankAfterTestWrite { get; init; }
+
+    /// <summary>True when the disc was a DVD (speeds then count 1,385 kB/s per 1x).</summary>
+    public bool IsDvd { get; init; }
+
+    /// <summary>How the disc was written, for logs and JSON (for example "disc-at-once (DVD-R)").</summary>
+    public string WriteMode { get; init; } = "track-at-once, mode 1";
+
+    /// <summary>The drive's kB/s for 1x on this disc: 176.4 on CD (audio units, as drives count), 1,385 on DVD.</summary>
+    public double OneXKiloBytesPerSecond => IsDvd ? 1385.0 : 176.4;
+
+    /// <summary>Average speed while sending the data, as an "x" figure for this kind of disc.</summary>
+    public double AverageWriteMultiplier
+    {
+        get
+        {
+            double seconds = WritingTime.TotalSeconds;
+            if (seconds <= 0) return 0;
+            long sectors = DataSectorsWritten + (long)PaddingSectors;
+            // CD: data sectors per second over 75, the figure Windows' writer reports; DVD: bytes over 1,385,000.
+            return IsDvd ? sectors * 2048.0 / seconds / 1_385_000.0 : sectors / seconds / 75.0;
+        }
+    }
 }
 
 /// <summary>
@@ -68,7 +90,7 @@ public sealed record NativeDataWriteResult
 /// and a failure up to there leaves the disc untouched. The sector-by-sector read-back check is done afterwards by
 /// <see cref="CdBurner.Core.Burning.DataBurnService"/> (READ (10) with FUA), as for the Windows writer.
 /// </summary>
-public sealed class NativeTaoDataWriter
+public sealed partial class NativeTaoDataWriter
 {
     public const ushort SectorsPerWrite = 31;       // 63,488 bytes, under the common 64 KiB transfer limit
     public const int MinimumTrackSectors = 300;     // a CD track is at least 4 seconds
@@ -117,7 +139,9 @@ public sealed class NativeTaoDataWriter
                 DataSectorsWritten = Math.Min(state.SectorsSent, state.ImageSectors),
                 Elapsed = clock.Elapsed,
                 SpeedSetKiloBytesPerSecond = state.SpeedSet,
-                DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds
+                DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
+                IsDvd = state.IsDvd,
+                WriteMode = state.WriteMode
             };
         }
     }
@@ -134,20 +158,24 @@ public sealed class NativeTaoDataWriter
         }
         if (request.ImageBytes > (long)int.MaxValue * SectorSize)
         {
-            throw Stop("The image is too large for a CD.");
+            throw Stop("The image is too large for a disc.");
         }
 
         state.ImageSectors = (int)((request.ImageBytes + SectorSize - 1) / SectorSize);
         int trackSectors = Math.Max(state.ImageSectors, MinimumTrackSectors);
         Check(ct, state);
 
-        // 1. Drive ready, disc type, Track-at-Once support.
+        // 1. Drive ready, disc type, Track-at-Once support. A DVD goes its own way from here (NativeTaoDataWriter.Dvd.cs).
         WaitUntilReady(TimeSpan.FromSeconds(30), ct, state, "before writing");
         var tao = ReadTrackAtOnceFeature();
+        if (IsDvdProfile(tao.Profile))
+        {
+            return RunDvd(request, tao.Profile, progress, ct, clock, state);
+        }
         if (tao.Profile is not (NativeSaoAudioWriter.ProfileCdR or NativeSaoAudioWriter.ProfileCdRw))
         {
             state.UnsupportedDisc = true;
-            throw Stop($"Direct writing of data discs covers CD-R and CD-RW so far (the disc in the drive has profile 0x{tao.Profile:X4}).");
+            throw Stop($"Direct writing of data discs covers CD-R, CD-RW, DVD-R, DVD-RW and DVD+R so far (the disc in the drive has profile 0x{tao.Profile:X4}).");
         }
         if (!tao.Present || !tao.Current)
         {
@@ -218,7 +246,7 @@ public sealed class NativeTaoDataWriter
         request.Image.Position = request.StartPosition;
         var reporter = new ProgressReporter(this, progress, clock, trackSectors);
         var writing = Stopwatch.StartNew();
-        WriteTrack(request, startLba, trackSectors, state, reporter, ct);
+        WriteTrack(request, startLba, trackSectors, SectorsPerWrite, state, reporter, ct);
         writing.Stop();
 
         // 6. Flush: the drive empties its buffer and writes the run-out.
@@ -273,16 +301,17 @@ public sealed class NativeTaoDataWriter
         };
     }
 
-    private void WriteTrack(NativeDataWriteRequest request, int startLba, int trackSectors, RunState state, ProgressReporter reporter, CancellationToken ct)
+    private void WriteTrack(NativeDataWriteRequest request, int startLba, int trackSectors, int sectorsPerWrite, RunState state,
+        ProgressReporter reporter, CancellationToken ct)
     {
-        byte[] buffer = new byte[SectorsPerWrite * SectorSize];
+        byte[] buffer = new byte[sectorsPerWrite * SectorSize];
         long remainingImage = request.ImageBytes;
         int lba = startLba;
         int end = startLba + trackSectors;
         while (lba < end)
         {
             Check(ct, state);
-            int n = Math.Min(SectorsPerWrite, end - lba);
+            int n = Math.Min(sectorsPerWrite, end - lba);
             int bytes = n * SectorSize;
             int fromImage = (int)Math.Min(bytes, Math.Max(0, remainingImage));
             try
@@ -341,13 +370,16 @@ public sealed class NativeTaoDataWriter
     /// <summary>
     /// Asks the drive which write speeds it offers for this disc and sets the one wanted: the user's choice rounded down
     /// to a listed speed, or the fastest listed. A drive that lists nothing or refuses keeps its own speed (logged).
+    /// On CD the speed is set with SET CD SPEED; on DVD (<paramref name="streamingEndLba"/> given) with SET STREAMING,
+    /// then SET CD SPEED if the drive refuses that.
     /// </summary>
-    private void ChooseAndSetSpeed(int? requested, RunState state)
+    private void ChooseAndSetSpeed(int? requested, RunState state, int? streamingEndLba = null)
     {
+        double oneX = streamingEndLba.HasValue ? 1385.0 : 176.4;
         var report = MmcMediaReport.Query(_transport, ShortTimeout);
         state.DriveSpeeds = report.WriteSpeeds.Select(s => s.KilobytesPerSecond).Where(k => k > 0).Distinct().OrderByDescending(k => k).ToList();
         _note(state.DriveSpeeds.Count > 0
-            ? $"Drive's write speeds for this disc: {string.Join(", ", state.DriveSpeeds.Select(k => $"{k} kB/s ({k / 176.4:F0}x)"))}."
+            ? $"Drive's write speeds for this disc: {string.Join(", ", state.DriveSpeeds.Select(k => $"{k} kB/s ({k / oneX:F1}x)"))}."
             : "The drive listed no write speeds for this disc.");
 
         int? speed = requested is > 0 && state.DriveSpeeds.Count > 0
@@ -360,11 +392,24 @@ public sealed class NativeTaoDataWriter
             return;
         }
 
+        if (streamingEndLba is int endLba)
+        {
+            byte[] descriptor = NativeWriteCommands.BuildPerformanceDescriptor(endLba, kb);
+            var streaming = _transport.ExecuteCommand(NativeWriteCommands.BuildSetStreaming(), descriptor, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, ShortTimeout);
+            if (streaming.IsSuccess)
+            {
+                state.SpeedSet = kb;
+                _note($"Write speed set to {kb} kB/s ({kb / oneX:F1}x) with SET STREAMING.");
+                return;
+            }
+            _note($"SET STREAMING refused ({Describe(streaming)}); trying SET CD SPEED.");
+        }
+
         var r = _transport.ExecuteCommand(NativeWriteCommands.BuildSetCdSpeed(kb), Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, ShortTimeout);
         if (r.IsSuccess)
         {
             state.SpeedSet = kb;
-            _note($"Write speed set to {kb} kB/s ({kb / 176.4:F0}x).");
+            _note($"Write speed set to {kb} kB/s ({kb / oneX:F1}x).");
         }
         else
         {
@@ -433,7 +478,7 @@ public sealed class NativeTaoDataWriter
         return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[21], buffer[22], buffer[23]));
     }
 
-    internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank);
+    internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank, byte TrackMode = 0);
 
     private TrackInformation? ReadTrackInformation(int trackNumber)
     {
@@ -448,7 +493,8 @@ public sealed class NativeTaoDataWriter
             NextWritableAddressValid: (buffer[7] & 0x01) != 0,
             NextWritableAddress: BinaryPrimitives.ReadInt32BigEndian(buffer.AsSpan(12, 4)),
             FreeBlocks: BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(16, 4)),
-            Blank: (buffer[6] & 0x40) != 0);
+            Blank: (buffer[6] & 0x40) != 0,
+            TrackMode: (byte)(buffer[5] & 0x0F));
     }
 
     private bool SelectWriteParameters(WriteParametersPage page)
@@ -595,6 +641,8 @@ public sealed class NativeTaoDataWriter
         public int SectorsSent;
         public int? SpeedSet;
         public IReadOnlyList<int> DriveSpeeds = Array.Empty<int>();
+        public bool IsDvd;
+        public string WriteMode = "track-at-once, mode 1";
     }
 
     private sealed class WriteStop : Exception
@@ -609,15 +657,19 @@ public sealed class NativeTaoDataWriter
         private readonly IProgress<BurnProgressSnapshot>? _progress;
         private readonly Stopwatch _clock;
         private readonly int _total;
+        private readonly double _sectorsPerSecondAt1x;
         private TimeSpan? _lastBufferPoll;
         private double _buffer;
 
-        public ProgressReporter(NativeTaoDataWriter writer, IProgress<BurnProgressSnapshot>? progress, Stopwatch clock, int total)
+        /// <param name="sectorsPerSecondAt1x">75 on CD; 1,385,000 / 2,048 on DVD.</param>
+        public ProgressReporter(NativeTaoDataWriter writer, IProgress<BurnProgressSnapshot>? progress, Stopwatch clock, int total,
+            double sectorsPerSecondAt1x = Msf.FramesPerSecond)
         {
             _writer = writer;
             _progress = progress;
             _clock = clock;
             _total = total;
+            _sectorsPerSecondAt1x = sectorsPerSecondAt1x;
         }
 
         public void Report(int done, string action)
@@ -637,7 +689,7 @@ public sealed class NativeTaoDataWriter
                 ElapsedTime = _clock.Elapsed,
                 RemainingTime = rate > 0 ? TimeSpan.FromSeconds((_total - done) / rate) : TimeSpan.Zero,
                 BufferLevelPercent = _buffer,
-                CurrentSpeedMultiplier = rate / Msf.FramesPerSecond,
+                CurrentSpeedMultiplier = rate / _sectorsPerSecondAt1x,
                 CurrentBytesPerSecond = (long)(rate * SectorSize),
                 CurrentActionDescription = action
             });

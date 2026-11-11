@@ -164,8 +164,8 @@
     "featureHtml": "Burn CDs with direct drive commands (experimental, off by default)",
     "physical": "⚠️",
     "virtual": "✅",
-    "notesMarkdown": "Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or \"Direct drive commands\" in the app); the disc is always read back and compared. DVDs and Blu-ray discs still use the Windows writer. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW",
-    "notesHtml": "Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (<code>--native</code>, or \"Direct drive commands\" in the app); the disc is always read back and compared. DVDs and Blu-ray discs still use the Windows writer. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW"
+    "notesMarkdown": "Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or \"Direct drive commands\" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way, but only in the built-in drive simulator so far: no real DVD has been burned with it yet. Dual-layer DVDs, DVD+RW, DVD-RAM and Blu-ray discs still use the Windows writer",
+    "notesHtml": "Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (<code>--native</code>, or \"Direct drive commands\" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way, but only in the built-in drive simulator so far: no real DVD has been burned with it yet. Dual-layer DVDs, DVD+RW, DVD-RAM and Blu-ray discs still use the Windows writer"
   },
   {
     "featureMarkdown": "CD-Text / ISRC on burned audio CDs",
@@ -188,7 +188,7 @@
     "featureHtml": "Test write (simulation)",
     "physical": "⚠️",
     "virtual": "✅",
-    "notesMarkdown": "CDs only, with the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. The Windows writer has no test write",
-    "notesHtml": "CDs only, with the experimental direct writer (<code>--native --test-write</code>): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. The Windows writer has no test write"
+    "notesMarkdown": "With the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. DVD-R and DVD-RW have a test write too, so far only in the drive simulator; DVD+R discs have none. The Windows writer has no test write",
+    "notesHtml": "With the experimental direct writer (<code>--native --test-write</code>): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. DVD-R and DVD-RW have a test write too, so far only in the drive simulator; DVD+R discs have none. The Windows writer has no test write"
   }
 ]

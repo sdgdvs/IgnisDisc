@@ -8,6 +8,10 @@
   lead-in, ISRC and catalog codes, pre-emphasis and copy bits, audio in pre-gaps (INDEX 00) and in front of track 1.
   Reached through `ignisdisc-cli burn-audio --native` and the "Direct drive commands" option on the app's Audio CD
   screen; both are off by default.
+- data discs: one Mode 1 track Track-at-Once on a blank CD-R/CD-RW, and one data track on a blank single-layer
+  DVD-R, DVD-RW (sequential) or DVD+R (`NativeTaoDataWriter`, DVD half in `NativeTaoDataWriter.Dvd.cs`), through
+  `burn-iso` / `burn-data --native` and the Data Disc and Disc Image screens. The DVD path has run only against the
+  virtual drive.
 - Exclusive access opens the drive by its device interface path (`\\?\…{53f56308-…}`): the cdrom driver refuses
   the lock (ERROR_INVALID_HANDLE) on a handle opened by drive letter, because that handle belongs to the mounted
   file system.
@@ -120,8 +124,32 @@ from the track's own stream (its INDEX 00 area). Track 1's first 150 sectors (be
 audio after them and before INDEX 01 is hidden audio that players reach by rewinding. From a single-file `.cue`
 album the bytes on the disc stay in file order; only the track marks move.
 
-**DVD±R:** `RESERVE TRACK` (DVD-R DAO) or sequential writing (DVD+R) → `WRITE(10)` → `SYNCHRONIZE CACHE` →
-`CLOSE TRACK/SESSION`. Dual layer adds `SEND DISC STRUCTURE` with the layer-break address before writing.
+**Data DVD** (built 2026-11-11, simulator only so far). Sequences from libburn's cookbook (libburnia,
+`doc/cookbook.txt`); `SET STREAMING` layout from libburn's `mmc.c`. Every case starts with `GET CONFIGURATION`
+(current profile), `READ DISC INFORMATION` (status must be blank) and `READ TRACK INFORMATION` track 1 (next writable
+address must be 0, free blocks must hold the image). The image is padded with zeros to whole 16-sector (32 KiB) ECC
+blocks and sent 16 sectors per `WRITE (10)`. Speed: the drive's `GET PERFORMANCE` list for the disc, set with
+`SET STREAMING` (one 28-byte performance descriptor: end LBA = last sector of the disc, read and write size = the
+speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
+
+- *DVD-R / DVD-RW (sequential), disc closed: Disc-At-Once.* Feature 0x002F current (its test-write and BUFE bits are
+  used) → `MODE SELECT` page 0x05: write type 2, LS_V 0, link size 0, multi-session 00, FP 0, track mode 5, data block
+  type 8, packet size 0; read back → `SET STREAMING` → `RESERVE TRACK` (ARSV 0, RMZ 0, size in bytes 5–8 = padded
+  sectors) → `WRITE (10)` from LBA 0 → `SYNCHRONIZE CACHE`. No close command: the drive closes the disc. The
+  reservation is recorded on the disc, so from `RESERVE TRACK` on a failure is reported as a damaged disc, not as
+  untouched.
+- *DVD-R / DVD-RW, left open (`--no-close`): incremental.* Features 0x002F and 0x0021 current → page 0x05: write
+  type 0, LS_V 1, link size 16, multi-session 11b, FP 1, packet size 16, track mode from `READ TRACK INFORMATION`
+  byte 5 (normally 5), data block type 8 → `WRITE (10)` → `SYNCHRONIZE CACHE` → `CLOSE TRACK` (001b, last track in
+  last session from `READ DISC INFORMATION` bytes 6 and 11) → `CLOSE SESSION` (010b).
+- *DVD+R.* No mode page (the cookbook: none is sent for DVD+R) and no test write → `WRITE (10)` → `SYNCHRONIZE
+  CACHE` → `CLOSE TRACK` (001b) → finalize (101b, "minimal radius") for a closed disc, or `CLOSE SESSION` (010b) to
+  leave it appendable. The cookbook reports drives that refuse 101b; then the session is closed with 010b and the
+  result says the disc is still appendable.
+- A drive that answers 2/04/xx to a close command is waited out and asked again (up to three times), as growisofs
+  does for some drives.
+- Dual-layer DVD±R, DVD+RW, DVD-RAM and DVD-RW in restricted overwrite mode go to the Windows writer with a stated
+  reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
 
 ## Buffer and underrun handling
 
@@ -142,7 +170,8 @@ BURN-Free / buffer-underrun protection (BUFE bit in page 0x05) when the drive su
 
 - Virtual drive: each command is implemented in `VirtualDiscBackend`, including failure injection (sense codes at
   chosen LBAs), so the error paths are tested.
-- Real hardware, in order: test write on CD-RW (done), real write on CD-RW (done), then CD-R (done); DVD after CD.
+- Real hardware, in order: test write on CD-RW (done), real write on CD-RW (done), then CD-R (done); DVD after CD:
+  a DVD-R test write, then a real DVD-R, DVD+R and DVD-RW (not run yet).
 
 ## Test hardware
 

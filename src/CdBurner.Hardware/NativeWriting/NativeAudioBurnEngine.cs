@@ -52,10 +52,24 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
             {
                 DiscMediaType.CdR => NativeSaoAudioWriter.ProfileCdR,
                 DiscMediaType.CdRw => NativeSaoAudioWriter.ProfileCdRw,
-                _ => 0x0011
+                DiscMediaType.DvdMinusR => NativeTaoDataWriter.ProfileDvdMinusR,
+                DiscMediaType.DvdMinusRw => NativeTaoDataWriter.ProfileDvdMinusRwSequential,
+                DiscMediaType.DvdPlusR => NativeTaoDataWriter.ProfileDvdPlusR,
+                DiscMediaType.DvdMinusRDualLayer => NativeTaoDataWriter.ProfileDvdMinusRDualLayer,
+                DiscMediaType.DvdPlusRDualLayer => NativeTaoDataWriter.ProfileDvdPlusRDualLayer,
+                DiscMediaType.DvdPlusRw => 0x001A,
+                DiscMediaType.DvdRam => 0x0012,
+                _ => 0x0000
             };
             drive.DiscStatus = medium.IsBlank ? 0 : medium.IsFinalized ? 2 : 1;
-            drive.LastLeadOutStart = Msf.FromLba(Math.Max(0, medium.TotalCapacitySectors - 1));
+            if (medium.MediaType.IsCd())
+            {
+                drive.LastLeadOutStart = Msf.FromLba(Math.Max(0, medium.TotalCapacitySectors - 1));
+            }
+            else
+            {
+                drive.CapacitySectors = (int)Math.Min(int.MaxValue, medium.TotalCapacitySectors); // beyond CD MSF addresses
+            }
         }
         return drive;
     }

@@ -181,9 +181,9 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     }
 
     [Fact]
-    public void DvdInTheDrive_IsReportedAsNotCovered()
+    public void RewritableDvdInTheDrive_IsReportedAsNotCovered()
     {
-        var drive = BlankCd(profile: 0x0011);
+        var drive = BlankCd(profile: 0x001A); // DVD+RW: formatting and overwriting are not built yet
         var result = Write(drive, Image(400));
 
         Assert.True(result.StoppedBeforeWriting);
@@ -351,23 +351,23 @@ public sealed class NativeDataBurnEngineTests : IDisposable
         Assert.NotNull(drive());
         Assert.Equal(1764, engine.LastResult!.SpeedSetKiloBytesPerSecond);
         Assert.True(File.Exists(engine.LastLogPath));
-        Assert.Contains("Track-at-Once data writer", File.ReadAllText(engine.LastLogPath!));
+        Assert.Contains("native data writer", File.ReadAllText(engine.LastLogPath!));
         Assert.True(OnDisc(medium, 900).SequenceEqual(image));
         Assert.True(medium.IsFinalized);
     }
 
     [Fact]
-    public async Task Dvd_IsHandedToTheWindowsWriter()
+    public async Task DvdPlusRw_IsHandedToTheWindowsWriter()
     {
         var (engine, drive) = Engine();
-        using var medium = VirtualDiscMedium.CreateBlankDvdR47();
+        using var medium = VirtualDiscMedium.CreateBlankDvdPlusRw47();
         var recorder = Recorder(medium);
 
         var result = await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(Image(400)), new DataBurnOptions { VerifyAfterBurn = true });
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Verified);
-        Assert.Contains("CD-R and CD-RW so far", engine.LastFallbackReason);
+        Assert.Contains("DVD+R so far", engine.LastFallbackReason);
         Assert.Null(drive()); // the direct writer never opened the drive
     }
 

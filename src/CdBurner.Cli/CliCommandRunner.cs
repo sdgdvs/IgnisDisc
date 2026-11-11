@@ -834,7 +834,7 @@ public static class CliCommandRunner
             writer = engine.LastFallbackReason != null ? "windows" : "direct",
             fallbackReason = engine.LastFallbackReason,
             testWritePassedFirst = engine.LastTestWritePassed,
-            writeMode = "track-at-once, mode 1",
+            writeMode = r?.WriteMode,
             speedSetKiloBytesPerSecond = r?.SpeedSetKiloBytesPerSecond,
             driveSpeedsKiloBytesPerSecond = r?.DriveSpeedsKiloBytesPerSecond,
             dataSectors = r?.DataSectorsWritten,
@@ -858,14 +858,14 @@ public static class CliCommandRunner
             return;
         }
         var r = engine.LastResult;
-        output.WriteLine("  Writer:         direct drive commands (Track-at-Once, Mode 1)");
+        output.WriteLine($"  Writer:         direct drive commands ({r?.WriteMode ?? "not started"})");
         if (engine.TestWriteFirst) output.WriteLine($"  Test write:     {(engine.LastTestWritePassed ? "passed first" : "not passed")}");
         if (r != null)
         {
-            string speed = r.SpeedSetKiloBytesPerSecond is int kb ? $"{kb} kB/s ({kb / 176.4:F0}x)" : "drive's own";
-            output.WriteLine($"  Speed set:      {speed}; drive offers {(r.DriveSpeedsKiloBytesPerSecond.Count > 0 ? string.Join(", ", r.DriveSpeedsKiloBytesPerSecond.Select(k => $"{k / 176.4:F0}x")) : "no list")}");
-            double rate = r.WritingTime.TotalSeconds > 0 ? (r.DataSectorsWritten + r.PaddingSectors) / r.WritingTime.TotalSeconds / 75.0 : 0;
-            output.WriteLine($"  Writing time:   {r.WritingTime.TotalSeconds:F0} s for the data ({rate:F1}x average), {r.Elapsed.TotalSeconds:F0} s with closing");
+            double oneX = r.OneXKiloBytesPerSecond;
+            string speed = r.SpeedSetKiloBytesPerSecond is int kb ? $"{kb} kB/s ({kb / oneX:0.#}x)" : "drive's own";
+            output.WriteLine($"  Speed set:      {speed}; drive offers {(r.DriveSpeedsKiloBytesPerSecond.Count > 0 ? string.Join(", ", r.DriveSpeedsKiloBytesPerSecond.Select(k => $"{k / oneX:0.#}x")) : "no list")}");
+            output.WriteLine($"  Writing time:   {r.WritingTime.TotalSeconds:F0} s for the data ({r.AverageWriteMultiplier:F1}x average), {r.Elapsed.TotalSeconds:F0} s with closing");
             output.WriteLine($"  Drive reports:  {r.Message}");
         }
         if (engine.LastLogPath != null) output.WriteLine($"  Command log:    {engine.LastLogPath}");
