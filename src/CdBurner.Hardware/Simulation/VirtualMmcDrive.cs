@@ -608,6 +608,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x05, 0x24, 0x00);
         }
         byte[]? image = DataDiscImage;
+        if (image == null && IsDvd && DiscStatus == 2)
+        {
+            return Sense(0x03, 0x11, 0x00); // the simulated closed disc after a test write: nothing to read
+        }
         int sectors = image == null ? 0 : image.Length / 2048;
         if (image == null || lba < 0 || count == 0 || data.Length < count * 2048 || lba + count > sectors)
         {
@@ -798,7 +802,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
             {
                 if (ShowsSimulatedSessionAfterTestWrite)
                 {
-                    DiscStatus = 1;
+                    // The GP60NB50 shows an open session after a CD test write and a closed disc after a DVD-R
+                    // Disc-At-Once one, whose sectors then fail with 3/11/00 (measured 2026-11-11).
+                    DiscStatus = IsDvd && ReservedSectors > 0 ? 2 : 1;
                 }
                 DataTrackWritten.SetLength(0);
             }

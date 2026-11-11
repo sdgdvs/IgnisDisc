@@ -197,9 +197,51 @@ public sealed class NativeDvdDataWriterTests : IDisposable
         Assert.True(result.Success, result.Message);
         Assert.True(result.DiscStillBlankAfterTestWrite);
         Assert.False(result.DiscRecorded);
-        Assert.Equal(40, drive.WriteCommandCount); // 640 sectors, 16 per WRITE
+        Assert.Equal(20, drive.WriteCommandCount); // 640 sectors, 32 per WRITE
         Assert.Null(drive.DataDiscImage);
         Assert.True(WriteParametersPage.FromPageBytes(drive.CurrentModePage05).TestWrite);
+        Assert.Equal(2, drive.DiscStatus); // the simulated closed disc, until a reload
+        Assert.Contains("reload", result.Message);
+    }
+
+    [Fact]
+    public void TestWrite_OnADriveThatForgetsIt_LeavesTheDiscBlank()
+    {
+        var drive = BlankDvd();
+        drive.ShowsSimulatedSessionAfterTestWrite = false;
+
+        var result = Write(drive, Image(320), testWrite: true);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(0, drive.DiscStatus);
+        Assert.DoesNotContain("reload", result.Message);
+    }
+
+    [Fact]
+    public void TestWrite_OnADriveThatRecordsAnyway_IsReported()
+    {
+        var drive = BlankDvd();
+        drive.RecordsDuringTestWrite = true;
+
+        var result = Write(drive, Image(320), testWrite: true);
+
+        Assert.False(result.Success);
+        Assert.Equal(false, result.DiscStillBlankAfterTestWrite);
+        Assert.Contains("did not honour", result.Message);
+    }
+
+    [Fact]
+    public void AdapterThatRefuses64KiB_GetsOneBlockPerWrite()
+    {
+        var drive = BlankDvd(NativeTaoDataWriter.ProfileDvdPlusR);
+        drive.MaxTransferBytesOverride = 32 * 1024;
+        byte[] image = Image(640);
+
+        var result = Write(drive, image);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(40, drive.WriteCommandCount);
+        AssertRecorded(drive, image, 640);
     }
 
     [Fact]

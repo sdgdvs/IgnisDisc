@@ -98,6 +98,9 @@ public sealed partial class NativeTaoDataWriter
     public const int SectorSize = 2048;
 
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Windows refuses a pass-through whose transfer is larger than the adapter allows with this code.</summary>
+    private const int ErrorInvalidParameter = 87;
     private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan FlushTimeout = TimeSpan.FromMinutes(10);
 
@@ -301,9 +304,12 @@ public sealed partial class NativeTaoDataWriter
         };
     }
 
+    /// <param name="minimumSectorsPerWrite">When larger than this, a WRITE the adapter refuses as too large (Win32 error
+    /// 87, before it reaches the drive) is sent again in halves, down to this size.</param>
     private void WriteTrack(NativeDataWriteRequest request, int startLba, int trackSectors, int sectorsPerWrite, RunState state,
-        ProgressReporter reporter, CancellationToken ct)
+        ProgressReporter reporter, CancellationToken ct, int? minimumSectorsPerWrite = null)
     {
+        int minimum = minimumSectorsPerWrite ?? sectorsPerWrite;
         byte[] buffer = new byte[sectorsPerWrite * SectorSize];
         long remainingImage = request.ImageBytes;
         int lba = startLba;
@@ -325,7 +331,14 @@ public sealed partial class NativeTaoDataWriter
             Array.Clear(buffer, fromImage, bytes - fromImage);
             remainingImage -= fromImage;
 
-            WriteBlocks(lba, (ushort)n, buffer.AsSpan(0, bytes), state);
+            if (!WriteBlocks(lba, (ushort)n, buffer.AsSpan(0, bytes), state, canShrink: sectorsPerWrite > minimum))
+            {
+                request.Image.Position -= fromImage;
+                remainingImage += fromImage;
+                sectorsPerWrite = Math.Max(minimum, sectorsPerWrite / 2);
+                _note($"The adapter refused {n} sectors in one WRITE; sending {sectorsPerWrite} per WRITE from LBA {lba}.");
+                continue;
+            }
             lba += n;
             state.SectorsSent += n;
             reporter.Report(state.SectorsSent, "Writing data");
@@ -346,7 +359,8 @@ public sealed partial class NativeTaoDataWriter
         }
     }
 
-    private void WriteBlocks(int lba, ushort count, Span<byte> data, RunState state)
+    /// <returns>False only when <paramref name="canShrink"/> is set and the adapter refused the transfer as too large.</returns>
+    private bool WriteBlocks(int lba, ushort count, Span<byte> data, RunState state, bool canShrink = false)
     {
         byte[] cdb = NativeWriteCommands.BuildWrite10(lba, count);
         var deadline = Stopwatch.StartNew();
@@ -356,7 +370,11 @@ public sealed partial class NativeTaoDataWriter
             var r = _transport.ExecuteCommand(cdb, data, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, WriteTimeout);
             if (r.IsSuccess)
             {
-                return;
+                return true;
+            }
+            if (canShrink && r.SenseInfo == null && r.Win32Error == ErrorInvalidParameter)
+            {
+                return false;
             }
             if (r.SenseInfo is { SenseKey: 0x02, Asc: 0x04, Ascq: 0x07 or 0x08 } && deadline.Elapsed < WriteTimeout)
             {
@@ -536,20 +554,27 @@ public sealed partial class NativeTaoDataWriter
         {
             return true;
         }
-        if (after.Value.Status != 1)
+        if (after.Value.Status is not (1 or 2))
         {
             _note($"Disc status {after.Value.Status} after the test write.");
             return false;
         }
 
-        byte[] sector = new byte[SectorSize];
-        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildRead10Cdb(0, 1, forceUnitAccess: true), sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
-        if (r.IsSuccess && r.DataTransferLength > 0)
+        // The GP60NB50 keeps showing the simulated session until the disc is reloaded: an open session (status 1)
+        // after a CD test write, a closed disc (status 2) after a DVD-R Disc-At-Once one (measured 2026-11-11). The
+        // sectors decide: a recorded disc returns them, an unwritten one cannot.
+        ScsiExecutionResult r = default!;
+        foreach (int lba in new[] { 0, 16 })
         {
-            _note("WARNING: sector 0 could be read back after the test write.");
-            return false;
+            byte[] sector = new byte[SectorSize];
+            r = _transport.ExecuteCommand(MmcCommandBuilder.BuildRead10Cdb(lba, 1, forceUnitAccess: true), sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+            if (r.IsSuccess && r.DataTransferLength > 0)
+            {
+                _note($"WARNING: sector {lba} could be read back after the test write (disc status {after.Value.Status}).");
+                return false;
+            }
         }
-        _note($"The drive reports the simulated session until the disc is reloaded; sector 0 is unreadable ({Describe(r)}), so nothing was written.");
+        _note($"The drive reports a simulated {(after.Value.Status == 2 ? "closed disc" : "session")} until the disc is reloaded; sectors 0 and 16 are unreadable ({Describe(r)}), so nothing was written.");
         extra = " The drive still shows the simulated session: eject and reload the disc before writing to it.";
         return true;
     }

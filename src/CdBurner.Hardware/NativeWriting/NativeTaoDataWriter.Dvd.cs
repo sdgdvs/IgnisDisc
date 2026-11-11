@@ -16,7 +16,8 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <item>DVD+R: no mode page; WRITE (10); SYNCHRONIZE CACHE; CLOSE TRACK; then CLOSE SESSION (left open) or the
 /// finalize function 101b (disc closed), falling back to CLOSE SESSION if the drive refuses to finalize.</item>
 /// </list>
-/// Data goes out in whole 32 KiB ECC blocks (16 sectors per WRITE); the last block is padded with zeros. Speed is set
+/// Data goes out in whole 32 KiB ECC blocks, two per WRITE (one if the adapter refuses 64 KiB); the last block is padded
+/// with zeros. Speed is set
 /// with SET STREAMING from the drive's GET PERFORMANCE list. Only DVD-R/-RW have a test write. Dual-layer discs are left
 /// to the Windows writer until IgnisDisc sets the layer break itself.
 /// </summary>
@@ -32,8 +33,15 @@ public sealed partial class NativeTaoDataWriter
     /// <summary>GET CONFIGURATION feature 0x0021, Incremental Streaming Writable.</summary>
     public const ushort FeatureIncrementalStreaming = 0x0021;
 
-    /// <summary>Sectors per WRITE on DVD: one 32 KiB ECC block, as libburn and growisofs send.</summary>
-    public const ushort DvdSectorsPerWrite = 16;
+    /// <summary>
+    /// Sectors per WRITE on DVD: two 32 KiB ECC blocks (64 KiB). Over the GP60NB50's USB bridge each WRITE took about
+    /// 6.7 ms whatever the disc speed, so 16-sector WRITEs capped an 8x DVD-R test write at 2.5x (2026-11-11). 64 KiB
+    /// is the most that bridge passes; an adapter that refuses it gets <see cref="DvdMinimumSectorsPerWrite"/>.
+    /// </summary>
+    public const ushort DvdSectorsPerWrite = 32;
+
+    /// <summary>One 32 KiB ECC block, as libburn and growisofs send.</summary>
+    public const ushort DvdMinimumSectorsPerWrite = 16;
 
     /// <summary>Sectors a second at DVD 1x (1,385,000 bytes / 2,048).</summary>
     private const double DvdSectorsPerSecondAt1x = 1_385_000.0 / SectorSize;
@@ -190,7 +198,7 @@ public sealed partial class NativeTaoDataWriter
         request.Image.Position = request.StartPosition;
         var reporter = new ProgressReporter(this, progress, clock, trackSectors, DvdSectorsPerSecondAt1x);
         var writing = Stopwatch.StartNew();
-        WriteTrack(request, startLba, trackSectors, DvdSectorsPerWrite, state, reporter, ct);
+        WriteTrack(request, startLba, trackSectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite);
         writing.Stop();
 
         reporter.Report(trackSectors, "Finishing the track");
