@@ -53,11 +53,13 @@ public class VerifyReadBackTests
 
         public Task<RipOperationResult> ReadSectorsAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount, bool raw2352Mode,
             Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken) =>
-            PhysicalSectorReader.ReadDataSectorsAsync(drive, startLba, sectorCount, forceUnitAccess: false, sectorConsumer, progress, cancellationToken);
+            PhysicalSectorReader.ReadDataSectorsAsync(drive, startLba, sectorCount, DriveCacheBypass.None, sectorConsumer, progress, cancellationToken);
 
         public Task<RipOperationResult> ReadSectorsForVerifyAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount,
-            Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken) =>
-            PhysicalSectorReader.ReadDataSectorsAsync(drive, startLba, sectorCount, forceUnitAccess: true, sectorConsumer, progress, cancellationToken);
+            Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken,
+            bool strict = false) =>
+            PhysicalSectorReader.ReadDataSectorsAsync(drive, startLba, sectorCount,
+                strict ? DriveCacheBypass.EveryRead : DriveCacheBypass.RecentlyWritten, sectorConsumer, progress, cancellationToken);
 
         public Task<BurnOperationResult> BurnAudioTracksAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks, AudioBurnOptions options,
             IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -90,12 +92,138 @@ public class VerifyReadBackTests
         return reader.FindFile(path)!.StartLba;
     }
 
-    private static async Task<DataBurnResult> BurnAndVerify(MmcDataEngine engine, byte[] image)
+    private static async Task<DataBurnResult> BurnAndVerify(MmcDataEngine engine, byte[] image, bool strict = false)
     {
         using var recorder = new VirtualDiscRecorder();
         using var medium = VirtualDiscMedium.CreateBlankCdR700();
         recorder.InsertMedia(medium);
-        return await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(image), new DataBurnOptions { VerifyAfterBurn = true });
+        return await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(image),
+            new DataBurnOptions { VerifyAfterBurn = true, StrictVerify = strict });
+    }
+
+    // ---- Fast (default) and strict verify on an image larger than the drive's memory ----
+
+    /// <summary>The drive reports a 1 MiB buffer, so 1,024 sectors at each end of the disc are read with FUA.</summary>
+    private const int Guard = 1024;
+
+    private static VirtualMmcDrive SmallBufferDrive() => new() { BufferCapacityBytes = 1024 * 1024 };
+
+    /// <summary>About 6 MB: three times the two guarded stretches, so most of it lies between them.</summary>
+    private static byte[] BuildLargeImage()
+    {
+        var rng = new Random(11);
+        var root = CompilationDirectory.CreateRoot();
+        foreach (string name in new[] { "1-start.bin", "2-middle.bin", "3-end.bin" })
+        {
+            byte[] data = new byte[2_000_000];
+            rng.NextBytes(data);
+            root.AddFile(name, data);
+        }
+        return IsoUdfImageBuilder.BuildToMemoryStream(root, new IsoBuildOptions()).ToArray();
+    }
+
+    /// <summary>What a drive really holds after a burn: the last stretch it was sent, no more than its buffer.</summary>
+    private static Func<int, bool> LastWritten(byte[] image, int sectors) => lba => lba >= image.Length / 2048 - sectors;
+
+    /// <summary>The one pass over the whole disc (the file system is read first, in small pieces).</summary>
+    private static List<(int Lba, int Count, bool Fua)> FullPass(VirtualMmcDrive drive)
+    {
+        int start = drive.Read10Log.FindLastIndex(r => r.Lba == 0);
+        return drive.Read10Log.Skip(start).ToList();
+    }
+
+    [Fact]
+    public async Task FastVerify_ForcesDiscReadsAtBothEnds_AndReadsTheMiddleNormally()
+    {
+        byte[] image = BuildLargeImage();
+        int sectors = image.Length / 2048;
+        Assert.True(sectors > 2 * Guard + 500);
+        var drive = SmallBufferDrive();
+
+        var result = await BurnAndVerify(new MmcDataEngine(drive) { KeepInDriveMemory = LastWritten(image, 512) }, image);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified);
+        var pass = FullPass(drive);
+        Assert.Equal(sectors, pass.Sum(r => r.Count));
+        Assert.All(pass.Where(r => r.Lba < Guard), r => Assert.True(r.Fua, $"start, LBA {r.Lba}"));
+        Assert.All(pass.Where(r => r.Lba + r.Count > sectors - Guard), r => Assert.True(r.Fua, $"end, LBA {r.Lba}"));
+        var middle = pass.Where(r => r.Lba >= Guard && r.Lba + r.Count <= sectors - Guard).ToList();
+        Assert.NotEmpty(middle);
+        Assert.All(middle, r => Assert.False(r.Fua, $"middle, LBA {r.Lba}"));
+        Assert.All(pass.Take(pass.Count - 1), r => Assert.Equal(32, r.Count)); // 64 KiB per command
+    }
+
+    [Fact]
+    public async Task FastVerify_DamageInTheLastSectorsWritten_HiddenByDriveMemory_IsCaught()
+    {
+        byte[] image = BuildLargeImage();
+        int bad = FirstLbaOf(image, "/3-end.bin") + 900; // inside the last megabyte written
+        Assert.True(bad >= image.Length / 2048 - 512);
+        var engine = new MmcDataEngine(SmallBufferDrive()) { DamageLba = bad, KeepInDriveMemory = LastWritten(image, 512) };
+
+        var result = await BurnAndVerify(engine, image);
+
+        Assert.False(result.Success);
+        Assert.Contains("/3-end.bin", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task FastVerify_DamageInTheMiddle_IsCaughtByTheNormalRead()
+    {
+        byte[] image = BuildLargeImage();
+        int bad = FirstLbaOf(image, "/2-middle.bin") + 300;
+        Assert.InRange(bad, Guard, image.Length / 2048 - Guard - 1);
+        var engine = new MmcDataEngine(SmallBufferDrive()) { DamageLba = bad, KeepInDriveMemory = LastWritten(image, 512) };
+
+        var result = await BurnAndVerify(engine, image);
+
+        Assert.False(result.Success);
+        Assert.Contains("/2-middle.bin", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task StrictVerify_ForcesEveryRead_AndCatchesWhatOnlyAnOversizedDriveMemoryCouldHide()
+    {
+        // A drive that still holds a sector from the middle of a 6 MB burn would need far more memory than the
+        // 1 MiB it reports. Fast verify relies on that; strict verify does not.
+        byte[] image = BuildLargeImage();
+        int bad = FirstLbaOf(image, "/2-middle.bin") + 300;
+
+        var fastDrive = SmallBufferDrive();
+        var fast = await BurnAndVerify(new MmcDataEngine(fastDrive) { DamageLba = bad, KeepInDriveMemory = lba => lba == bad }, image);
+        Assert.True(fast.Success, "fast verify reads the middle normally, so this impossible-in-practice case gets past it");
+
+        var strictDrive = SmallBufferDrive();
+        var strict = await BurnAndVerify(new MmcDataEngine(strictDrive) { DamageLba = bad, KeepInDriveMemory = lba => lba == bad }, image, strict: true);
+        Assert.False(strict.Success);
+        Assert.Contains("/2-middle.bin", strict.ErrorMessage);
+        Assert.All(strictDrive.Read10Log, r => Assert.True(r.Fua, $"READ (10) of LBA {r.Lba} had no FUA"));
+    }
+
+    [Fact]
+    public async Task DriveThatDoesNotReportItsBuffer_GetsAWiderGuard()
+    {
+        byte[] image = BuildLargeImage(); // smaller than two 8 MiB guards: everything is forced
+        var drive = new VirtualMmcDrive { BufferCapacityBytes = 0 };
+
+        var result = await BurnAndVerify(new MmcDataEngine(drive), image);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.All(drive.Read10Log, r => Assert.True(r.Fua));
+    }
+
+    [Fact]
+    public async Task AdapterThatPassesLessThan64KiB_IsReadInSmallerPieces()
+    {
+        byte[] image = BuildImage();
+        var drive = new VirtualMmcDrive { MaxTransferBytesOverride = 40_000 };
+
+        var result = await BurnAndVerify(new MmcDataEngine(drive), image);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified);
+        Assert.Contains(drive.Read10Log, r => r.Count == 16);
     }
 
     [Fact]
@@ -117,7 +245,7 @@ public class VerifyReadBackTests
         async Task<byte[]> ReadSector(bool fua)
         {
             byte[] copy = Array.Empty<byte>();
-            await PhysicalSectorReader.ReadDataSectorsAsync(drive, bad, 1, fua, (_, d) => { copy = d.ToArray(); return ValueTask.CompletedTask; }, null, default);
+            await PhysicalSectorReader.ReadDataSectorsAsync(drive, bad, 1, fua ? DriveCacheBypass.EveryRead : DriveCacheBypass.None, (_, d) => { copy = d.ToArray(); return ValueTask.CompletedTask; }, null, default);
             return copy;
         }
 
@@ -222,14 +350,14 @@ public class VerifyReadBackTests
         string? Read(int lba, int count, byte[] buffer)
         {
             int n = 0;
-            var r = PhysicalSectorReader.ReadDataSectorsAsync(drive, lba, count, true,
+            var r = PhysicalSectorReader.ReadDataSectorsAsync(drive, lba, count, DriveCacheBypass.EveryRead,
                 (_, d) => { d.Span.CopyTo(buffer.AsSpan(n++ * 2048)); return ValueTask.CompletedTask; }, null, default).GetAwaiter().GetResult();
             return r.Success ? null : r.ErrorMessage;
         }
 
         using var reader = IsoImageReader.FromStream(new SectorReadStream(Read, sectors));
         var check = DiscManifestCheck.Prepare(reader)!;
-        await PhysicalSectorReader.ReadDataSectorsAsync(drive, 0, sectors, true,
+        await PhysicalSectorReader.ReadDataSectorsAsync(drive, 0, sectors, DriveCacheBypass.EveryRead,
             (lba, d) => { check.AddSector(lba, d.Span); return ValueTask.CompletedTask; }, null, default);
         var result = check.Finish();
 

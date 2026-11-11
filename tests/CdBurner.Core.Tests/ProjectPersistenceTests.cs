@@ -525,6 +525,7 @@ public class ProjectPersistenceTests : IDisposable
         {
             DefaultWriteSpeedMultiplier = 24,
             VerifyAfterBurnByDefault = false,
+            StrictVerify = true,
             EjectAfterBurnByDefault = true,
             EnableBurnFreeByDefault = false,
             TempStagingDirectory = @"D:\FastScratch\CdBurner",
@@ -547,6 +548,9 @@ public class ProjectPersistenceTests : IDisposable
         var loaded = service2.CurrentSettings;
         Assert.Equal(24, loaded.DefaultWriteSpeedMultiplier);
         Assert.False(loaded.VerifyAfterBurnByDefault);
+        Assert.True(loaded.StrictVerify);
+        Assert.True(loaded.Clone().StrictVerify);
+        Assert.False(new AppSettings().StrictVerify);
         Assert.True(loaded.EjectAfterBurnByDefault);
         Assert.False(loaded.EnableBurnFreeByDefault);
         Assert.Equal(@"D:\FastScratch\CdBurner", loaded.TempStagingDirectory);

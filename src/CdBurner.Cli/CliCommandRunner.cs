@@ -48,7 +48,7 @@ public static class CliCommandRunner
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
         "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only",
-        "overwrite"
+        "overwrite", "strict-verify"
     };
 
     private static void WriteJsonResult(TextWriter stdout, object payload)
@@ -587,7 +587,8 @@ public static class CliCommandRunner
         string isoPath = cmd.GetRequiredOption("iso", "--iso <file.iso>");
         string? speedStr = cmd.GetOption("speed");
         var (nativeEngine, testWrite) = ResolveNativeDataEngine(cmd, burnEngine);
-        bool verify = cmd.HasFlag("verify") || (nativeEngine != null && !testWrite); // a direct burn is always read back
+        bool strictVerify = cmd.HasFlag("strict-verify"); // every read forced from the disc; implies --verify
+        bool verify = cmd.HasFlag("verify") || strictVerify || (nativeEngine != null && !testWrite); // a direct burn is always read back
         bool closeDisc = !cmd.HasFlag("no-close");
         bool overwrite = cmd.HasFlag("overwrite");
 
@@ -606,6 +607,7 @@ public static class CliCommandRunner
             Speed = speedDesc,
             Simulate = testWrite,
             VerifyAfterBurn = verify,
+            StrictVerify = strictVerify,
             CloseDisc = closeDisc,
             OverwriteExistingData = overwrite
         };
@@ -676,7 +678,8 @@ public static class CliCommandRunner
         string? bootBiosPath = cmd.GetOption("boot-bios");
         string? bootUefiPath = cmd.GetOption("boot-uefi");
         var (nativeEngine, testWrite) = ResolveNativeDataEngine(cmd, burnEngine);
-        bool verify = cmd.HasFlag("verify") || (nativeEngine != null && !testWrite); // a direct burn is always read back
+        bool strictVerify = cmd.HasFlag("strict-verify"); // every read forced from the disc; implies --verify
+        bool verify = cmd.HasFlag("verify") || strictVerify || (nativeEngine != null && !testWrite); // a direct burn is always read back
         bool closeDisc = !cmd.HasFlag("no-close");
         bool overwrite = cmd.HasFlag("overwrite");
 
@@ -731,6 +734,7 @@ public static class CliCommandRunner
             Speed = speedDesc,
             Simulate = testWrite,
             VerifyAfterBurn = verify,
+            StrictVerify = strictVerify,
             CloseDisc = closeDisc,
             OverwriteExistingData = overwrite
         };
@@ -2394,9 +2398,9 @@ public static class CliCommandRunner
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
         stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
-        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
+        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--speed <X>] [--verify | --strict-verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
-        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--json]");
+        stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
         stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");

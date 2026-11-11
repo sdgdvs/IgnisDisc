@@ -74,10 +74,10 @@ ignisdisc-cli <command> [options]
                                                --fixed-time (or SOURCE_DATE_EPOCH) gives byte-identical images;
                                                --sha256sums adds a root SHA256SUMS that `sha256sum -c` can check;
                                                --blake3sums adds a BLAKE3SUMS that `b3sum -c` can check
-  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite]
+  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify | --strict-verify] [--no-close] [--overwrite]
              [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
-             [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <...>]
+             [--boot-bios <img>] [--boot-uefi <img>] [--verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <...>]
              [--sha256sums] [--blake3sums] [--udf-rev <...>] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
              [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
@@ -103,6 +103,13 @@ shown by `drives`.
 
 `--udf` / `--joliet`: by default an image contains ISO 9660, Joliet and UDF. Passing either flag limits the image to
 ISO 9660 plus the file systems you name.
+
+`--verify`: after the burn every sector is read back and compared with the image. A drive can answer a read from
+its own memory instead of the disc, so the check tells it to read the disc itself (the FUA bit) wherever burn data
+can still be in that memory: the last part written and the start of the disc, each twice the size of the buffer the
+drive reports. The rest is read normally. `--strict-verify` sets that bit on every read instead; it leaves nothing
+to the drive's buffer size, and is several times slower (measured on one USB DVD writer: 1.2 MB/s against 3.5 MB/s).
+The app has the same choice under Settings ("Strict verify").
 
 `--overwrite`: a used DVD+RW or DVD-RAM is rewritten from the start, so a burn replaces every file on it. Burns refuse
 to do that unless you pass `--overwrite`. Sequential rewritable discs (CD-RW, sequential DVD-RW) cannot be overwritten

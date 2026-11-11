@@ -254,6 +254,7 @@ public class DataBurnService
             Simulate = burnOptions.Simulate,
             EjectWhenDone = verifyRequested ? false : ejectRequested,
             VerifyAfterBurn = false,
+            StrictVerify = burnOptions.StrictVerify,
             CloseDisc = burnOptions.CloseDisc,
             VolumeLabel = burnOptions.VolumeLabel,
             OverwriteExistingData = burnOptions.OverwriteExistingData
@@ -290,6 +291,7 @@ public class DataBurnService
                 sectorsWritten,
                 initialStreamPosition,
                 burnStartLba,
+                burnOptions.StrictVerify,
                 progress,
                 cancellationToken);
             verificationNote = verifyResult.Note;
@@ -335,6 +337,7 @@ public class DataBurnService
         int sectorCount,
         long initialStreamPosition,
         int startLba,
+        bool strict,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken)
     {
@@ -342,7 +345,7 @@ public class DataBurnService
 
         // 1. The file system and hash lists, read from the disc's own sectors (small random reads, off this thread).
         var (fileMap, manifestCheck, manifestError) = await Task.Run(
-            () => ReadDiscLayout(recorder, startLba, sectorCount, cancellationToken), cancellationToken).ConfigureAwait(false);
+            () => ReadDiscLayout(recorder, startLba, sectorCount, strict, cancellationToken), cancellationToken).ConfigureAwait(false);
         if (manifestError != null)
         {
             return (false, manifestError, null);
@@ -374,7 +377,8 @@ public class DataBurnService
                 manifestCheck?.AddSector(lba, sectorData.Span);
             },
             progress,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            strict).ConfigureAwait(false);
 
         if (ripResult.Note != null)
         {
@@ -418,7 +422,7 @@ public class DataBurnService
     /// be parsed (e.g. a non-ISO image) is still verified sector by sector, just without file names.
     /// </summary>
     private (IReadOnlyList<LbaFileExtentMap>? FileMap, DiscManifestCheck? Check, string? Error) ReadDiscLayout(
-        IDiscRecorderBackend recorder, int startLba, int sectorCount, CancellationToken cancellationToken)
+        IDiscRecorderBackend recorder, int startLba, int sectorCount, bool strict, CancellationToken cancellationToken)
     {
         string? ReadSectors(int lba, int count, byte[] buffer)
         {
@@ -429,7 +433,7 @@ public class DataBurnService
                 data.Span.CopyTo(buffer.AsSpan(filled * OpticalConstants.DataSectorSize));
                 filled++;
                 return ValueTask.CompletedTask;
-            }, null, cancellationToken).GetAwaiter().GetResult();
+            }, null, cancellationToken, strict).GetAwaiter().GetResult();
             return result.Success && filled == count ? null : result.ErrorMessage ?? "read failed";
         }
 

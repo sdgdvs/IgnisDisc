@@ -28,6 +28,12 @@ public class AppSettings
     public bool VerifyAfterBurnByDefault { get; set; } = true;
 
     /// <summary>
+    /// Verify with every read forced from the disc itself. Off (the default): only the parts of the disc that can
+    /// still be in the drive's memory after a burn are forced, which is several times faster.
+    /// </summary>
+    public bool StrictVerify { get; set; }
+
+    /// <summary>
     /// Whether to eject the optical drive tray after a burn operation completes.
     /// </summary>
     public bool EjectAfterBurnByDefault { get; set; } = false;
@@ -97,6 +103,7 @@ public class AppSettings
         {
             DefaultWriteSpeedMultiplier = DefaultWriteSpeedMultiplier,
             VerifyAfterBurnByDefault = VerifyAfterBurnByDefault,
+            StrictVerify = StrictVerify,
             EjectAfterBurnByDefault = EjectAfterBurnByDefault,
             EnableBurnFreeByDefault = EnableBurnFreeByDefault,
             TempStagingDirectory = TempStagingDirectory,

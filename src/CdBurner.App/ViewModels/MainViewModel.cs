@@ -570,6 +570,9 @@ public class MainViewModel : ObservableObject, IDisposable
     {
         if (_settings == null) return;
 
+        // Every burn path builds its own options; this default reaches all of them.
+        CdBurner.Core.Abstractions.VerifyPreferences.StrictByDefault = _settings.StrictVerify;
+
         if (_settings.SelectedRecorder != null && AvailableRecorders.Contains(_settings.SelectedRecorder))
         {
             SelectedRecorder = _settings.SelectedRecorder;

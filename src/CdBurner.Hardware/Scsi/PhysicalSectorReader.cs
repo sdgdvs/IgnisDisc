@@ -8,6 +8,22 @@ using Microsoft.Win32.SafeHandles;
 
 namespace CdBurner.Hardware.Scsi;
 
+/// <summary>How far a read goes to make the drive read the disc itself and not answer from its own memory.</summary>
+public enum DriveCacheBypass
+{
+    /// <summary>Ordinary reads.</summary>
+    None,
+
+    /// <summary>
+    /// FUA on the stretches that can still be in the drive's memory after a burn: the end of the range (the last
+    /// sectors written) and its start. The rest is read normally. The default for a check after a burn.
+    /// </summary>
+    RecentlyWritten,
+
+    /// <summary>FUA on every read: nothing is ever answered from the drive's memory. Several times slower.</summary>
+    EveryRead
+}
+
 /// <summary>
 /// Reads sectors from a physical optical drive.
 /// <para>
@@ -22,6 +38,13 @@ namespace CdBurner.Hardware.Scsi;
 public static partial class PhysicalSectorReader
 {
     private const int ChunkSectors = 16; // 32 KiB data / 37,632 B raw per command: below common 64 KiB transfer limits
+
+    /// <summary>
+    /// Data sectors per READ (10): 64 KiB, the most a common USB bridge passes in one command. A drive that is told
+    /// to read the disc itself (FUA) pays a fixed delay per command (about 45 ms on the GP60NB50), so fewer, larger
+    /// commands matter. An adapter that refuses this size is read in <see cref="ChunkSectors"/> pieces instead.
+    /// </summary>
+    private const int DataChunkSectors = 32;
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
 
     private const uint IOCTL_CDROM_READ_TOC = 0x00024000;
@@ -43,9 +66,10 @@ public static partial class PhysicalSectorReader
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken,
-        bool forceUnitAccess = false)
+        DriveCacheBypass cacheBypass = DriveCacheBypass.None)
     {
         ArgumentNullException.ThrowIfNull(sectorConsumer);
+        bool forceUnitAccess = cacheBypass != DriveCacheBypass.None;
 
         if (!OperatingSystem.IsWindows())
         {
@@ -72,7 +96,7 @@ public static partial class PhysicalSectorReader
             }
             if (forceUnitAccess && !raw2352Mode && source is SptiSource spti)
             {
-                spti.EnableForceUnitAccess(startLba, sectorCount);
+                spti.EnableForceUnitAccess(startLba, sectorCount, cacheBypass == DriveCacheBypass.EveryRead);
             }
 
             var result = await ReadCoreAsync(source, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken).ConfigureAwait(false);
@@ -85,15 +109,15 @@ public static partial class PhysicalSectorReader
     }
 
     /// <summary>
-    /// Reads 2,048-byte data sectors through <paramref name="transport"/> with READ (10). With
-    /// <paramref name="forceUnitAccess"/>, every read has FUA set so the drive reads the disc, not its cache; a drive
-    /// that refuses FUA gets its cache flushed instead (see <see cref="RipOperationResult.Note"/>).
+    /// Reads 2,048-byte data sectors through <paramref name="transport"/> with READ (10). <paramref name="cacheBypass"/>
+    /// says which reads have FUA set so the drive reads the disc, not its cache (see <see cref="DriveCacheBypass"/>);
+    /// a drive that refuses FUA gets its cache flushed instead (see <see cref="RipOperationResult.Note"/>).
     /// </summary>
     public static Task<RipOperationResult> ReadDataSectorsAsync(
         IScsiTransport transport,
         int startLba,
         int sectorCount,
-        bool forceUnitAccess,
+        DriveCacheBypass cacheBypass,
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken)
@@ -106,9 +130,9 @@ public static partial class PhysicalSectorReader
         }
 
         var source = new SptiSource(transport, ownedHandle: null, raw: false);
-        if (forceUnitAccess)
+        if (cacheBypass != DriveCacheBypass.None)
         {
-            source.EnableForceUnitAccess(startLba, sectorCount);
+            source.EnableForceUnitAccess(startLba, sectorCount, cacheBypass == DriveCacheBypass.EveryRead);
         }
         return ReadCoreAsync(source, startLba, sectorCount, false, sectorConsumer, progress, cancellationToken);
     }
@@ -180,8 +204,9 @@ public static partial class PhysicalSectorReader
     {
         var sw = Stopwatch.StartNew();
         int sectorSize = raw2352Mode ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
+        int chunkSectors = raw2352Mode ? ChunkSectors : DataChunkSectors;
 
-        byte[] buffer = new byte[ChunkSectors * sectorSize];
+        byte[] buffer = new byte[chunkSectors * sectorSize];
         int readCount = 0;
         long bytesRead = 0;
 
@@ -189,7 +214,7 @@ public static partial class PhysicalSectorReader
         {
             cancellationToken.ThrowIfCancellationRequested();
             int lba = startLba + readCount;
-            int chunk = Math.Min(ChunkSectors, sectorCount - readCount);
+            int chunk = Math.Min(chunkSectors, sectorCount - readCount);
 
             string? error = source.Read(lba, chunk, buffer);
             if (error != null)
@@ -1166,7 +1191,16 @@ public static partial class PhysicalSectorReader
         private readonly bool _ownsTransport;
         private readonly bool _raw;
         private bool _fua;
+        private bool _fuaEveryRead = true;
         private int _rangeStart;
+        private int _rangeEnd;
+        private int _guardSectors;
+        private int _maxSectorsPerCommand = int.MaxValue;
+
+        /// <summary>Fewest sectors kept under FUA at each end of a range, and the range size below which all are.</summary>
+        internal const int MinGuardSectors = 1024;   // 2 MiB
+        private const int MaxGuardSectors = 32768;   // 64 MiB
+        private const int DefaultGuardSectors = 4096; // 8 MiB, when the drive does not report its buffer
 
         /// <summary>
         /// Drives (by volume path, or by transport object) that refused FUA in this session, with the note to show.
@@ -1197,17 +1231,52 @@ public static partial class PhysicalSectorReader
         /// <summary>
         /// Data reads from <paramref name="rangeStart"/> on set FUA so the drive reads the disc rather than whatever
         /// its memory still holds from the burn. A drive already known to refuse FUA is read without it.
+        /// <para>
+        /// With <paramref name="everyRead"/> off, FUA is set only where burn data can still be in the drive's memory:
+        /// the end of the range (the last sectors written) and its start, each twice the size of the buffer the drive
+        /// reports. The sectors between were written longer ago than the buffer can hold and are read normally,
+        /// which is several times faster. A range no larger than those two stretches is read with FUA throughout.
+        /// </para>
         /// </summary>
-        public void EnableForceUnitAccess(int rangeStart, int rangeCount)
+        public void EnableForceUnitAccess(int rangeStart, int rangeCount, bool everyRead = true)
         {
             _rangeStart = rangeStart;
+            _rangeEnd = rangeStart + rangeCount;
+            _fuaEveryRead = everyRead || rangeCount <= 2 * MinGuardSectors;
             if (FuaRefusedDrives.TryGetValue(_driveKey, out string? note))
             {
                 Note = note;
                 return;
             }
             _fua = !_raw;
+            if (_fua && !_fuaEveryRead)
+            {
+                _guardSectors = ReadGuardSectors();
+                _fuaEveryRead = rangeCount <= 2 * _guardSectors;
+            }
         }
+
+        /// <summary>Twice the drive's buffer (READ BUFFER CAPACITY), in sectors, within sensible bounds.</summary>
+        private int ReadGuardSectors()
+        {
+            byte[] data = new byte[12];
+            byte[] cdb = [0x5C, 0, 0, 0, 0, 0, 0, 0, (byte)data.Length, 0];
+            var r = _transport.ExecuteCommand(cdb, data, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
+            if (!r.IsSuccess || r.DataTransferLength < 8)
+            {
+                return DefaultGuardSectors;
+            }
+
+            long bufferBytes = ((long)data[4] << 24) | ((long)data[5] << 16) | ((long)data[6] << 8) | data[7];
+            if (bufferBytes <= 0)
+            {
+                return DefaultGuardSectors;
+            }
+            return (int)Math.Clamp(2 * bufferBytes / OpticalConstants.DataSectorSize, MinGuardSectors, MaxGuardSectors);
+        }
+
+        private bool WantsFua(int lba, int count) =>
+            _fua && (_fuaEveryRead || lba < _rangeStart + _guardSectors || lba + count > _rangeEnd - _guardSectors);
 
         /// <summary>5/24/00 Invalid Field in CDB: the drive does not accept the FUA bit.</summary>
         private static bool RejectsFua(ScsiExecutionResult result) =>
@@ -1252,20 +1321,47 @@ public static partial class PhysicalSectorReader
         public string? Read(int lba, int count, byte[] buffer)
         {
             int sectorSize = _raw ? OpticalConstants.RawSectorSize : OpticalConstants.DataSectorSize;
-            var span = buffer.AsSpan(0, count * sectorSize);
+            int done = 0;
+            while (done < count)
+            {
+                int n = Math.Min(count - done, _maxSectorsPerCommand);
+                string? error = ReadOnce(lba + done, n, buffer.AsSpan(done * sectorSize, n * sectorSize), out bool tooLargeForAdapter);
+                if (tooLargeForAdapter && n > ChunkSectors)
+                {
+                    // The adapter passes less than 64 KiB per command: use the smaller size from here on.
+                    _maxSectorsPerCommand = ChunkSectors;
+                    continue;
+                }
+                if (error != null)
+                {
+                    return error;
+                }
+                done += n;
+            }
+            return null;
+        }
 
+        private string? ReadOnce(int lba, int count, Span<byte> span, out bool tooLargeForAdapter)
+        {
+            tooLargeForAdapter = false;
             ScsiExecutionResult result = default!;
             for (int attempt = 0; attempt < 2; attempt++)
             {
+                bool fua = WantsFua(lba, count);
                 byte[] cdb = _raw
                     ? MmcCommandBuilder.BuildReadCdCdb(lba, count, expectedSectorType: 0, mainChannelSelectionBits: 0xF8)
-                    : MmcCommandBuilder.BuildRead10Cdb(lba, count, _fua);
+                    : MmcCommandBuilder.BuildRead10Cdb(lba, count, fua);
                 result = _transport.ExecuteCommand(cdb, span, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, CommandTimeout);
                 if (result.IsSuccess && result.DataTransferLength >= span.Length)
                 {
                     return null;
                 }
-                if (_fua && RejectsFua(result))
+                if (!result.IsSuccess && result.SenseInfo == null && result.Win32Error == ErrorInvalidParameter)
+                {
+                    tooLargeForAdapter = true;
+                    break;
+                }
+                if (fua && RejectsFua(result))
                 {
                     // Fall back once for the whole read; this attempt does not count against the retry.
                     _fua = false;
@@ -1278,6 +1374,9 @@ public static partial class PhysicalSectorReader
                 ? $"short transfer ({result.DataTransferLength} of {span.Length} bytes)"
                 : result.ErrorMessage ?? "read failed";
         }
+
+        /// <summary>Windows refuses a pass-through whose transfer is larger than the adapter allows with this code.</summary>
+        private const int ErrorInvalidParameter = 87;
 
         public void Dispose()
         {

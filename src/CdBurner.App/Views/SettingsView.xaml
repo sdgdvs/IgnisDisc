@@ -103,6 +103,13 @@
                               IsChecked="{Binding VerifyAfterBurnByDefault}"
                               Margin="0,0,0,8" />
 
+                    <!-- Strict verify -->
+                    <CheckBox Content="Strict verify: force every read from the disc (several times slower)"
+                              AutomationProperties.Name="Strict verify: force every read from the disc (several times slower)"
+                              ToolTip="Off: the check forces the drive to read the disc itself only where its memory could still hold burn data (the start and the last part written) and reads the rest at normal speed. On: every read is forced."
+                              IsChecked="{Binding StrictVerify}"
+                              Margin="0,0,0,8" />
+
                     <!-- Eject After Burn -->
                     <CheckBox Content="Eject optical drive tray when burn completes"
                               AutomationProperties.Name="Eject optical drive tray when burn completes"

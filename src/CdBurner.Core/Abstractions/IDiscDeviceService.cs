@@ -80,7 +80,9 @@ public interface IBurnEngineBackend
 
     /// <summary>
     /// Reads 2,048-byte data sectors for verification: a real drive is told to read the disc itself (READ (10) with
-    /// FUA), not a copy of the sectors left in its memory by the burn. Backends without a drive cache read normally.
+    /// FUA), not a copy of the sectors left in its memory by the burn. By default that is done for the stretches
+    /// that can still be in its memory (the last sectors written, and the start); with <paramref name="strict"/> for
+    /// every read, which is several times slower. Backends without a drive cache read normally.
     /// </summary>
     Task<RipOperationResult> ReadSectorsForVerifyAsync(
         IDiscRecorderBackend recorder,
@@ -88,7 +90,8 @@ public interface IBurnEngineBackend
         int sectorCount,
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        bool strict = false) =>
         ReadSectorsAsync(recorder, startLba, sectorCount, raw2352Mode: false, sectorConsumer, progress, cancellationToken);
 }
 
@@ -302,6 +305,13 @@ public class RipOperationResult
 /// <summary>
 /// Configuration options for data disc burning.
 /// </summary>
+/// <summary>The user's standing choice for how a burn is checked; set once from the app's settings.</summary>
+public static class VerifyPreferences
+{
+    /// <summary>New <see cref="DataBurnOptions"/> ask for a strict verify (every read forced from the disc).</summary>
+    public static bool StrictByDefault { get; set; }
+}
+
 public class DataBurnOptions
 {
     public WriteSpeedDescriptor? Speed { get; init; }
@@ -309,6 +319,13 @@ public class DataBurnOptions
     public bool EjectWhenDone { get; init; }
     public bool EjectAfterBurn { get => EjectWhenDone; init => EjectWhenDone = value; }
     public bool VerifyAfterBurn { get; init; }
+
+    /// <summary>
+    /// Verify with every read forced from the disc. Off: only the stretches that can still be in the drive's memory
+    /// after the burn are forced, and the rest is read at normal speed. Starts from
+    /// <see cref="VerifyPreferences.StrictByDefault"/>, so the app's setting reaches every burn path.
+    /// </summary>
+    public bool StrictVerify { get; init; } = VerifyPreferences.StrictByDefault;
     public bool CloseDisc { get; init; } = true;
     public string? VolumeLabel { get; init; }
 

@@ -453,6 +453,29 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task BurnIso_StrictVerify_ImpliesVerify_AndTheBurnIsChecked()
+    {
+        string inputFolder = CreateSampleDataFolder("StrictVerifySource");
+        string outputIso = Path.Combine(_tempDir, "strict.iso");
+        Assert.Equal(0, await CliCommandRunner.RunAsync(
+            new[] { "build-iso", "--input", inputFolder, "--output", outputIso, "--label", "STRICT", "--json" },
+            new StringWriter(), new StringWriter(), _deviceService, _burnEngine));
+
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+
+        var (burnOut, burnErr) = CreateStringWriters();
+        int burnCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-iso", "--drive", "VDRV-01", "--iso", outputIso, "--strict-verify", "--json" },
+            burnOut, burnErr, _deviceService, _burnEngine);
+
+        Assert.Equal(0, burnCode);
+        using var doc = ParseJsonOutput(burnOut);
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("verified").GetBoolean());
+    }
+
+    [Fact]
     public async Task BurnIso_Native_WritesDirectly_ReadsBack_AndReportsTheWriter()
     {
         string inputFolder = CreateSampleDataFolder("NativeIsoSource");

@@ -340,6 +340,8 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
             // Act 1: Modify settings and save
             vm.DefaultWriteSpeedMultiplier = 24;
             vm.VerifyAfterBurnByDefault = false;
+            Assert.False(vm.StrictVerify);
+            vm.StrictVerify = true;
             vm.ThemeMode = ThemeMode.Dark;
             vm.SaveSettingsCommand.Execute(null);
 
@@ -348,6 +350,7 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
             reloadedService.Load();
             Assert.Equal(24, reloadedService.CurrentSettings.DefaultWriteSpeedMultiplier);
             Assert.False(reloadedService.CurrentSettings.VerifyAfterBurnByDefault);
+            Assert.True(reloadedService.CurrentSettings.StrictVerify);
             Assert.Equal(ThemeMode.Dark, reloadedService.CurrentSettings.ThemeMode);
 
             // Act 2: Reset to defaults
@@ -356,6 +359,7 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
             // Assert 2: Reset back to defaults
             Assert.Equal(16, vm.DefaultWriteSpeedMultiplier);
             Assert.True(vm.VerifyAfterBurnByDefault);
+            Assert.False(vm.StrictVerify);
             Assert.Equal(ThemeMode.System, vm.ThemeMode);
         }
         finally

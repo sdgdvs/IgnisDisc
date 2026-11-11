@@ -21,6 +21,7 @@ public class SettingsViewModel : ObservableObject
 
     private int _defaultWriteSpeedMultiplier;
     private bool _verifyAfterBurnByDefault;
+    private bool _strictVerify;
     private bool _ejectAfterBurnByDefault;
     private bool _enableBurnFreeByDefault;
     private string _tempStagingDirectory = string.Empty;
@@ -83,6 +84,16 @@ public class SettingsViewModel : ObservableObject
     {
         get => _verifyAfterBurnByDefault;
         set => SetProperty(ref _verifyAfterBurnByDefault, value);
+    }
+
+    /// <summary>
+    /// Verify with every read forced from the disc itself (several times slower). Off: only the parts that can
+    /// still be in the drive's memory after a burn are forced.
+    /// </summary>
+    public bool StrictVerify
+    {
+        get => _strictVerify;
+        set => SetProperty(ref _strictVerify, value);
     }
 
     /// <summary>
@@ -340,6 +351,7 @@ public class SettingsViewModel : ObservableObject
         var settings = _settingsService.CurrentSettings;
         DefaultWriteSpeedMultiplier = settings.DefaultWriteSpeedMultiplier;
         VerifyAfterBurnByDefault = settings.VerifyAfterBurnByDefault;
+        StrictVerify = settings.StrictVerify;
         EjectAfterBurnByDefault = settings.EjectAfterBurnByDefault;
         EnableBurnFreeByDefault = settings.EnableBurnFreeByDefault;
         TempStagingDirectory = settings.TempStagingDirectory;
@@ -363,6 +375,7 @@ public class SettingsViewModel : ObservableObject
         var settings = _settingsService.CurrentSettings.Clone();
         settings.DefaultWriteSpeedMultiplier = DefaultWriteSpeedMultiplier;
         settings.VerifyAfterBurnByDefault = VerifyAfterBurnByDefault;
+        settings.StrictVerify = StrictVerify;
         settings.EjectAfterBurnByDefault = EjectAfterBurnByDefault;
         settings.EnableBurnFreeByDefault = EnableBurnFreeByDefault;
         settings.TempStagingDirectory = TempStagingDirectory;

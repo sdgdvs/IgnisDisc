@@ -152,6 +152,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>How many other sectors must be read before <see cref="StaleReadCache"/> is pushed out.</summary>
     public int ReadCacheCapacitySectors { get; set; } = 1024;
 
+    /// <summary>An adapter that passes less per command than the usual 64 KiB.</summary>
+    public int? MaxTransferBytesOverride { get; set; }
+
+    /// <summary>The buffer size the drive reports with READ BUFFER CAPACITY.</summary>
+    public int BufferCapacityBytes { get; set; } = 4 * 1024 * 1024;
+
     /// <summary>Every READ (10) received: start, count and whether FUA was set.</summary>
     public List<(int Lba, int Count, bool Fua)> Read10Log { get; } = new();
 
@@ -200,7 +206,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         byte op = cdb[0];
         CommandsReceived.Add(op);
 
-        if (dataBuffer.Length > MaxTransferBytes)
+        if (dataBuffer.Length > (MaxTransferBytesOverride ?? MaxTransferBytes))
         {
             return ScsiExecutionResult.Failed(87, "The parameter is incorrect (transfer larger than the adapter allows).");
         }
@@ -707,7 +713,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
     {
         byte[] r = new byte[12];
         BinaryPrimitives.WriteUInt16BigEndian(r, 10);
-        BinaryPrimitives.WriteUInt32BigEndian(r.AsSpan(4), 4 * 1024 * 1024);
+        BinaryPrimitives.WriteUInt32BigEndian(r.AsSpan(4), (uint)BufferCapacityBytes);
         BinaryPrimitives.WriteUInt32BigEndian(r.AsSpan(8), 512 * 1024);
         return CopyOut(r, data);
     }
