@@ -16,6 +16,36 @@ public static class NativeWriteCommands
     public const byte OpCodeCloseTrackSession = 0x5B;
     public const byte OpCodeSetCdSpeed = 0xBB;
     public const byte OpCodeReserveTrack = 0x53;
+    public const byte OpCodeFormatUnit = 0x04;
+
+    /// <summary>FORMAT UNIT format type 26h: DVD+RW full format, run by the drive in the background.</summary>
+    public const byte FormatTypeDvdPlusRw = 0x26;
+
+    /// <summary>FORMAT UNIT (0x04) with FmtData = 1 and format code 001b: a parameter list of 12 bytes follows.</summary>
+    public static byte[] BuildFormatUnit()
+    {
+        byte[] cdb = new byte[6];
+        cdb[0] = OpCodeFormatUnit;
+        cdb[1] = 0x11;
+        return cdb;
+    }
+
+    /// <summary>
+    /// FORMAT UNIT parameter list for a DVD+RW (layout from libburn's mmc_format_unit): header byte 1 = FOV | Immed
+    /// (0x82), byte 3 = descriptor length 8; descriptor bytes 4–7 = number of blocks 0xFFFFFFFF (the most the disc
+    /// takes, which type 26h allows), byte 8 = type 26h &lt;&lt; 2, byte 11 = the restart bit for a partly formatted
+    /// disc.
+    /// </summary>
+    public static byte[] BuildDvdPlusRwFormatParameters(bool restart)
+    {
+        byte[] list = new byte[12];
+        list[1] = 0x82;
+        list[3] = 8;
+        BinaryPrimitives.WriteUInt32BigEndian(list.AsSpan(4, 4), 0xFFFFFFFF);
+        list[8] = FormatTypeDvdPlusRw << 2;
+        list[11] = (byte)(restart ? 1 : 0);
+        return list;
+    }
     public const byte OpCodeSetStreaming = 0xB6;
 
     /// <summary>Length of one SET STREAMING performance descriptor (type 0).</summary>

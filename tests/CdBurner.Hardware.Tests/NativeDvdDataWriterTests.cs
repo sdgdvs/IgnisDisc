@@ -402,7 +402,6 @@ public sealed class NativeDvdDataWriterTests : IDisposable
     [Theory]
     [InlineData((ushort)0x0012)] // DVD-RAM
     [InlineData((ushort)0x0013)] // DVD-RW, restricted overwrite
-    [InlineData((ushort)0x001A)] // DVD+RW
     public void OverwritableDvd_IsReportedAsNotCovered(ushort profile)
     {
         var drive = BlankDvd(profile);

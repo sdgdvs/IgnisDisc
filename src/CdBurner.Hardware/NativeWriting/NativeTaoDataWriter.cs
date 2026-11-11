@@ -14,13 +14,16 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <param name="CloseDisc">True: no more sessions can be added afterwards.</param>
 /// <param name="WriteSpeedKiloBytesPerSecond">Speed to set in kB/s (176.4 per 1x on CD, 1,385 per 1x on DVD), or null
 /// for the fastest the drive lists for this disc.</param>
+/// <param name="OverwriteExistingData">True: the user allowed replacing what is on an overwritable disc (DVD+RW). Without
+/// it, a DVD+RW that holds a file system is left alone.</param>
 public sealed record NativeDataWriteRequest(
     Stream Image,
     long StartPosition,
     long ImageBytes,
     bool TestWrite,
     bool CloseDisc = true,
-    int? WriteSpeedKiloBytesPerSecond = null);
+    int? WriteSpeedKiloBytesPerSecond = null,
+    bool OverwriteExistingData = false);
 
 /// <summary>Outcome of a native Track-at-Once data write.</summary>
 public sealed record NativeDataWriteResult
@@ -391,10 +394,10 @@ public sealed partial class NativeTaoDataWriter
     /// On CD the speed is set with SET CD SPEED; on DVD (<paramref name="streamingEndLba"/> given) with SET STREAMING,
     /// then SET CD SPEED if the drive refuses that.
     /// </summary>
-    private void ChooseAndSetSpeed(int? requested, RunState state, int? streamingEndLba = null)
+    private void ChooseAndSetSpeed(int? requested, RunState state, int? streamingEndLba = null, DriveMediaReport? report = null)
     {
         double oneX = streamingEndLba.HasValue ? 1385.0 : 176.4;
-        var report = MmcMediaReport.Query(_transport, ShortTimeout);
+        report ??= MmcMediaReport.Query(_transport, ShortTimeout);
         state.DriveSpeeds = report.WriteSpeeds.Select(s => s.KilobytesPerSecond).Where(k => k > 0).Distinct().OrderByDescending(k => k).ToList();
         _note(state.DriveSpeeds.Count > 0
             ? $"Drive's write speeds for this disc: {string.Join(", ", state.DriveSpeeds.Select(k => $"{k} kB/s ({k / oneX:F1}x)"))}."
@@ -483,7 +486,9 @@ public sealed partial class NativeTaoDataWriter
         return new TrackAtOnceFeature(profile, true, (buffer[10] & 0x01) != 0, TestWrite: (flags & 0x04) != 0, BufferUnderrunFree: (flags & 0x40) != 0);
     }
 
-    internal readonly record struct DiscInformation(int Status, Msf LastLeadOutStart);
+    /// <param name="BackgroundFormat">READ DISC INFORMATION byte 7 bits 0–1 (DVD+RW): 0 not formatted, 1 partly
+    /// formatted (stopped), 2 formatting, 3 fully formatted.</param>
+    internal readonly record struct DiscInformation(int Status, Msf LastLeadOutStart, int BackgroundFormat = 0);
 
     private DiscInformation? ReadDiscInformation()
     {
@@ -493,10 +498,11 @@ public sealed partial class NativeTaoDataWriter
         {
             return null;
         }
-        return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[21], buffer[22], buffer[23]));
+        return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[21], buffer[22], buffer[23]), buffer[7] & 0x03);
     }
 
-    internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank, byte TrackMode = 0);
+    internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank,
+        byte TrackMode = 0, long TrackSize = 0);
 
     private TrackInformation? ReadTrackInformation(int trackNumber)
     {
@@ -512,7 +518,8 @@ public sealed partial class NativeTaoDataWriter
             NextWritableAddress: BinaryPrimitives.ReadInt32BigEndian(buffer.AsSpan(12, 4)),
             FreeBlocks: BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(16, 4)),
             Blank: (buffer[6] & 0x40) != 0,
-            TrackMode: (byte)(buffer[5] & 0x0F));
+            TrackMode: (byte)(buffer[5] & 0x0F),
+            TrackSize: r.DataTransferLength >= 28 ? BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(24, 4)) : 0);
     }
 
     private bool SelectWriteParameters(WriteParametersPage page)

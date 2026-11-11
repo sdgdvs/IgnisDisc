@@ -166,6 +166,38 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>The last SET STREAMING performance descriptor received (28 bytes).</summary>
     public byte[]? LastPerformanceDescriptor { get; private set; }
 
+    // ---- DVD+RW ----
+
+    /// <summary>READ DISC INFORMATION byte 7 for a DVD+RW: 0 never formatted, 1 partly (stopped), 2 formatting, 3 formatted.</summary>
+    public int BackgroundFormatStatus { get; set; } = 3;
+
+    /// <summary>FORMAT UNIT fails with 5/24/00.</summary>
+    public bool RejectsFormatUnit { get; set; }
+
+    /// <summary>FORMAT UNIT commands accepted.</summary>
+    public int FormatUnitCount { get; private set; }
+
+    /// <summary>The last FORMAT UNIT parameter list accepted (12 bytes).</summary>
+    public byte[]? LastFormatParameters { get; private set; }
+
+    private bool IsDvdPlusRw => Profile == NativeTaoDataWriter.ProfileDvdPlusRw;
+
+    /// <summary>
+    /// A READ FORMAT CAPACITIES reply for a DVD+RW: the current/maximum descriptor (formatted or not, 2,048-byte
+    /// blocks) and one formattable descriptor of type 26h.
+    /// </summary>
+    public static byte[] BuildDvdPlusRwFormatCapacities(int blocks, bool formatted)
+    {
+        byte[] r = new byte[4 + 16];
+        r[3] = 16;
+        BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(4), blocks);
+        r[8] = (byte)(formatted ? 2 : 1);
+        r[10] = 0x08; // block length 2,048
+        BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(12), blocks);
+        r[16] = NativeWriteCommands.FormatTypeDvdPlusRw << 2;
+        return r;
+    }
+
     private bool _dvdModeSet;     // MODE SELECT chose Disc-At-Once or incremental for a DVD-R/-RW
     private bool _dvdTrackClosed; // CLOSE TRACK received for the flushed DVD track
 
@@ -276,6 +308,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             MmcCommandBuilder.OpCodeReadTrackInformation => ReadTrackInformation(cdb, dataBuffer),
             NativeWriteCommands.OpCodeCloseTrackSession => CloseTrackSession(cdb),
             NativeWriteCommands.OpCodeReserveTrack => ReserveTrack(cdb),
+            NativeWriteCommands.OpCodeFormatUnit => FormatUnit(cdb, dataBuffer),
             NativeWriteCommands.OpCodeSetStreaming => SetStreaming(cdb, dataBuffer),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
@@ -357,6 +390,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
         BinaryPrimitives.WriteUInt16BigEndian(r, 32);
         r[2] = (byte)(DiscStatus & 0x03 | (Profile is NativeSaoAudioWriter.ProfileCdRw or NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x10 : 0));
         r[3] = 1; r[4] = 1; r[5] = 1; r[6] = 1;
+        if (IsDvdPlusRw)
+        {
+            r[7] = (byte)(BackgroundFormatStatus & 0x03);
+        }
         r[17] = LeadInStart.Minute; r[18] = LeadInStart.Second; r[19] = LeadInStart.Frame;
         r[21] = LastLeadOutStart.Minute; r[22] = LastLeadOutStart.Second; r[23] = LastLeadOutStart.Frame;
         return CopyOut(r, data);
@@ -390,9 +427,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x1A, 0x00); // parameter list length error
         }
-        if (IsDvdPlusR)
+        if (IsDvdPlusR || IsDvdPlusRw)
         {
-            // libburn's cookbook: no mode page 05h is sent for DVD+R. Stricter than most drives, to catch one being sent.
+            // libburn's cookbook: no mode page 05h is sent for DVD+R (nor needed for DVD+RW). Stricter than most
+            // drives, to catch one being sent.
             return Sense(0x05, 0x26, 0x00);
         }
 
@@ -497,6 +535,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
     private ScsiExecutionResult Write(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
         WriteCommandCount++;
+        if (_cue == null && IsDvdPlusRw)
+        {
+            return WriteOverwrite(cdb, data);
+        }
         if (_cue == null && IsDvd)
         {
             return WriteDvd(cdb, data);
@@ -1024,6 +1066,21 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult CloseDvd(ReadOnlySpan<byte> cdb, byte function)
     {
+        if (IsDvdPlusRw)
+        {
+            // CLOSE SESSION on a DVD+RW stops a background format (libburn's cookbook); nothing else is accepted.
+            if (function != NativeWriteCommands.CloseFunctionSession)
+            {
+                return Sense(0x05, 0x24, 0x00);
+            }
+            if (BackgroundFormatStatus == 2)
+            {
+                BackgroundFormatStatus = 1;
+            }
+            SessionClosed = true;
+            return Good(0);
+        }
+
         if (function == NativeWriteCommands.CloseFunctionTrack)
         {
             int track = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(4, 2));
@@ -1064,6 +1121,92 @@ public sealed class VirtualMmcDrive : IScsiTransport
         if ((cdb[1] & 0x01) != 0)
         {
             NotReadyResponses += CloseSessionBusyPolls;
+        }
+        return Good(0);
+    }
+
+    /// <summary>
+    /// WRITE (10) on a DVD+RW: anywhere on the formatted disc, 2 KiB aligned; refused (5/30/10, medium not formatted)
+    /// on a disc that was never formatted. What is written replaces what was there and reads back at once.
+    /// </summary>
+    private ScsiExecutionResult WriteOverwrite(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
+    {
+        if (BackgroundFormatStatus == 0)
+        {
+            return Sense(0x05, 0x30, 0x10);
+        }
+        int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
+        int count = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(7, 2));
+        if (count == 0)
+        {
+            return Good(0);
+        }
+        if (data.Length != count * 2048)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (lba < 0 || lba + count > Capacity)
+        {
+            return Sense(0x05, 0x21, 0x00);
+        }
+        if (BufferFullEveryNWrites > 0 && ++_writesSinceBufferFull >= BufferFullEveryNWrites)
+        {
+            _writesSinceBufferFull = 0;
+            WriteCommandCount--;
+            return Sense(0x02, 0x04, 0x08);
+        }
+        if (WriteErrorAtLba is int bad && bad >= lba && bad < lba + count)
+        {
+            return Sense(0x03, 0x0C, 0x00);
+        }
+
+        if (CaptureWrites)
+        {
+            byte[] image = DataDiscImage ?? Array.Empty<byte>();
+            int end = (lba + count) * 2048;
+            if (image.Length < end)
+            {
+                Array.Resize(ref image, end);
+            }
+            data.CopyTo(image.AsSpan(lba * 2048));
+            DataDiscImage = image;
+        }
+        Recorded = true;
+        _recordedTracks = new() { (1, 0, 0x40) };
+        _recordedCdText = false;
+        RecordedLeadOutLba = Math.Max(RecordedLeadOutLba, lba + count);
+        return Good((uint)data.Length);
+    }
+
+    /// <summary>
+    /// FORMAT UNIT on a DVD+RW: format type 26h with the libburn layout (CDB byte 1 0x11, list byte 3 = 8, type in
+    /// byte 8 bits 7–2). Starts a background format; with Immed the drive is briefly not ready.
+    /// </summary>
+    private ScsiExecutionResult FormatUnit(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> list)
+    {
+        if (!IsDvdPlusRw)
+        {
+            return Sense(0x05, 0x20, 0x00); // only DVD+RW formatting is simulated
+        }
+        if (RejectsFormatUnit)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (cdb[1] != 0x11 || list.Length < 12 || list[3] != 8 || (list[8] >> 2) != NativeWriteCommands.FormatTypeDvdPlusRw)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        uint blocks = BinaryPrimitives.ReadUInt32BigEndian(list.Slice(4, 4));
+        if (blocks != 0xFFFFFFFF && blocks > (uint)Capacity)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        FormatUnitCount++;
+        LastFormatParameters = list[..12].ToArray();
+        BackgroundFormatStatus = 2;
+        if ((list[1] & 0x02) != 0)
+        {
+            NotReadyResponses += 1;
         }
         return Good(0);
     }

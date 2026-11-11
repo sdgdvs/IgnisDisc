@@ -148,7 +148,17 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   result says the disc is still appendable.
 - A drive that answers 2/04/xx to a close command is waited out and asked again (up to three times), as growisofs
   does for some drives.
-- Dual-layer DVD±R, DVD+RW, DVD-RAM and DVD-RW in restricted overwrite mode go to the Windows writer with a stated
+- *DVD+RW* (built 2026-11-11, simulator only so far; `NativeTaoDataWriter.DvdPlusRw.cs`). No mode page, no test
+  write, nothing to reserve. `READ DISC INFORMATION` byte 7 bits 0–1 give the background format status. A disc never
+  formatted (0) gets `FORMAT UNIT` (CDB byte 1 0x11; list: byte 1 FOV | Immed = 0x82, byte 3 = 8, blocks
+  0xFFFFFFFF, byte 8 = 26h << 2; libburn's `mmc_format_unit`) and is written while the drive formats in the
+  background. Size from `READ FORMAT CAPACITIES`. A disc with a volume descriptor at sector 16 (`CD001`, `BEA01`,
+  `NSR02/03`) is left alone unless the user allowed replacing its data. `WRITE (10)` from LBA 0, 64 KiB at a time
+  (2 KiB alignment is enough here) → `SYNCHRONIZE CACHE` → `CLOSE SESSION` (010b), which stops a background format
+  and makes the disc readable elsewhere; a refusal is logged, not fatal. Sectors past a shorter new image keep their
+  old contents, as with any overwrite; the new file system ends before them. `DataBurnService` now verifies from
+  sector 0 whenever an overwrite-only disc's data is replaced.
+- Dual-layer DVD±R, DVD-RAM and DVD-RW in restricted overwrite mode go to the Windows writer with a stated
   reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
 
 ## Buffer and underrun handling

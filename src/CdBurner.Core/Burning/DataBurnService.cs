@@ -313,7 +313,10 @@ public class DataBurnService
             return DataBurnResult.Failed(ReplaceExistingDataMessage);
         }
 
-        int burnStartLba = (!preBurnStatus.IsBlank && preBurnStatus.IsAppendable && preBurnStatus.NextWritableLba > 0)
+        // Replacing the data of an overwrite-only disc (DVD+RW, DVD-RAM) writes from sector 0, whatever the disc says
+        // about appending: Windows' writer forces the overwrite and the direct writer starts at 0.
+        bool replacesFromStart = preBurnStatus.IsOverwriteOnly && burnOptions.OverwriteExistingData;
+        int burnStartLba = (!replacesFromStart && !preBurnStatus.IsBlank && preBurnStatus.IsAppendable && preBurnStatus.NextWritableLba > 0)
             ? preBurnStatus.NextWritableLba
             : 0;
 

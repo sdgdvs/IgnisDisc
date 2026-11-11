@@ -8,7 +8,8 @@ namespace CdBurner.Hardware.NativeWriting;
 
 /// <summary>
 /// Burns data images (ISO files, data discs) with IgnisDisc's own drive commands instead of Windows' burning service.
-/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW (sequential) and single-layer DVD+R so far
+/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW (sequential) and single-layer DVD+R, and DVD+RW (blank, or written
+/// over when the user allowed replacing its data), so far
 /// (<see cref="NativeTaoDataWriter"/>); any other disc, and a disc that already holds a session, is handed to the Windows
 /// writer (<see cref="LastFallbackReason"/> says so). Reading (the read-back check), erasing and audio go to the Windows
 /// engine. Every direct run saves a full SCSI command log.
@@ -65,8 +66,8 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
             : status.MediaType is DiscMediaType.DvdMinusRDualLayer or DiscMediaType.DvdPlusRDualLayer
                 ? "direct writing does not cover dual-layer DVDs yet, because IgnisDisc does not set the layer break on the drive yet"
                 : !IsCovered(status.MediaType)
-                    ? $"direct writing covers CD-R, CD-RW, DVD-R, DVD-RW and DVD+R so far, and this disc is {status.MediaType.GetDisplayName()}"
-                    : !status.IsBlank
+                    ? $"direct writing covers CD-R, CD-RW, DVD-R, DVD-RW, DVD+R and DVD+RW so far, and this disc is {status.MediaType.GetDisplayName()}"
+                    : !status.IsBlank && !(status.MediaType == DiscMediaType.DvdPlusRw && options.OverwriteExistingData)
                         ? "the disc already holds data, and direct writing adds no sessions yet"
                         : null;
         if (reason != null)
@@ -81,7 +82,8 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         int? speed = options.Speed is { Multiplier: > 0 } s
             ? (int)Math.Round(s.Multiplier * WriteSpeedDescriptor.GetBaseRate(status.MediaType, isAudio: status.MediaType.IsCd()) / 1000.0)
             : null;
-        var request = new NativeDataWriteRequest(imageStream, start, bytes, TestWrite: options.Simulate, options.CloseDisc, speed);
+        var request = new NativeDataWriteRequest(imageStream, start, bytes, TestWrite: options.Simulate, options.CloseDisc, speed,
+            OverwriteExistingData: options.OverwriteExistingData);
 
         var result = await Task.Run(() => Run(recorder, request, progress, cancellationToken), CancellationToken.None).ConfigureAwait(false);
         if (result is { UnsupportedDisc: true, StoppedBeforeWriting: true })
@@ -212,6 +214,11 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
     private static void CommitToVirtualMedium(VirtualDiscMedium medium, byte[] image, bool closeDisc)
     {
         medium.Raw2352Mode = false;
+        bool overwriteOnly = medium.MediaType == DiscMediaType.DvdPlusRw;
+        if (overwriteOnly)
+        {
+            medium.Sessions.Clear(); // written over from sector 0: one volume, no session history
+        }
         int sectors = image.Length / NativeTaoDataWriter.SectorSize;
         for (int lba = 0; lba < sectors; lba++)
         {
@@ -222,14 +229,15 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         session.Tracks.Add(new VirtualTrack { TrackNumber = 1, StartLba = 0, SectorCount = sectors, IsAudio = false });
         medium.Sessions.Add(session);
         medium.IsBlank = false;
-        medium.IsFinalized = closeDisc;
+        medium.IsFinalized = closeDisc && !overwriteOnly;
         medium.NextWritableLba = sectors;
         medium.UsedSectors = Math.Max(medium.UsedSectors, sectors);
     }
 
     /// <summary>Discs the direct writer handles (blank, single layer).</summary>
     private static bool IsCovered(DiscMediaType type) =>
-        type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR;
+        type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR
+            or DiscMediaType.DvdPlusRw;
 
     private static NativeDataWriteResult Stopped(string message) =>
         new() { Success = false, StoppedBeforeWriting = true, Message = message };

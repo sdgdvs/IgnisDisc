@@ -53,7 +53,8 @@ public class VirtualBurnEngine : IBurnEngineBackend, ISecureAudioReader
             return BurnOperationResult.Failed("No media present in recorder.");
         }
 
-        if (medium.IsFinalized)
+        bool overwriteOnly = medium.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam;
+        if (medium.IsFinalized && !(overwriteOnly && options.OverwriteExistingData))
         {
             return BurnOperationResult.Failed("Mounted virtual medium is finalized and cannot be written.");
         }
@@ -106,7 +107,9 @@ public class VirtualBurnEngine : IBurnEngineBackend, ISecureAudioReader
         ReportSnapshot(0, estimatedSectors, "WritingLeadIn");
         cancellationToken.ThrowIfCancellationRequested();
 
-        int startLba = medium.IsBlank ? 0 : (medium.NextWritableLba > 0 ? medium.NextWritableLba : medium.UsedSectors);
+        // Like IMAPI's ForceOverwrite: replacing an overwrite-only disc's data writes from sector 0.
+        bool replacesFromStart = options.OverwriteExistingData && overwriteOnly;
+        int startLba = medium.IsBlank || replacesFromStart ? 0 : (medium.NextWritableLba > 0 ? medium.NextWritableLba : medium.UsedSectors);
         byte[] sectorBuffer = new byte[OpticalConstants.DataSectorSize];
         int sectorsWritten = 0;
 
@@ -154,6 +157,10 @@ public class VirtualBurnEngine : IBurnEngineBackend, ISecureAudioReader
 
         if (!options.Simulate && sectorsWritten > 0)
         {
+            if (replacesFromStart)
+            {
+                medium.Sessions.Clear(); // written over from sector 0: the old volume is gone
+            }
             var session = new VirtualSession
             {
                 SessionNumber = medium.Sessions.Count + 1,
@@ -169,7 +176,7 @@ public class VirtualBurnEngine : IBurnEngineBackend, ISecureAudioReader
             });
             medium.Sessions.Add(session);
 
-            if (options.CloseDisc)
+            if (options.CloseDisc && !overwriteOnly) // a DVD+RW or DVD-RAM can always be written over
             {
                 medium.IsFinalized = true;
             }

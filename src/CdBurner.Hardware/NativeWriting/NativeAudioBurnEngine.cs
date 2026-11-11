@@ -70,6 +70,12 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
             {
                 drive.CapacitySectors = (int)Math.Min(int.MaxValue, medium.TotalCapacitySectors); // beyond CD MSF addresses
             }
+            if (medium.MediaType == DiscMediaType.DvdPlusRw)
+            {
+                // A blank virtual DVD+RW is a new, never-formatted disc; one with data has been formatted.
+                drive.BackgroundFormatStatus = medium.IsBlank ? 0 : 3;
+                drive.FormatCapacitiesResponse = VirtualMmcDrive.BuildDvdPlusRwFormatCapacities(drive.CapacitySectors ?? 0, formatted: !medium.IsBlank);
+            }
         }
         return drive;
     }
