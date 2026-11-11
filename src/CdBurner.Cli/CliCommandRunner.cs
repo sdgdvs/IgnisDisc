@@ -1030,9 +1030,10 @@ public static class CliCommandRunner
                 trackComposer = meta.Composer;
                 trackIsrc = meta.Isrc;
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // Fall back to filename metadata if probe fails here (BurnAsync will report detailed decode errors)
+                // The burn itself reports decode errors in detail; here only the titles are lost, so say so.
+                stderr.WriteLine($"Warning: could not read tags from '{Path.GetFileName(trackPath)}' ({ex.Message}); its CD-Text title will be the file name.");
             }
 
             int nextTrackNum = compilation.TrackCount + 1;
@@ -1047,6 +1048,11 @@ public static class CliCommandRunner
                 Songwriter = trackSongwriter,
                 Composer = trackComposer
             });
+        }
+
+        if (!compilation.IncludeCdText)
+        {
+            stderr.WriteLine("Note: no titles or artists were found in the tracks' tags and none were given (--title, --artist), so the disc gets no CD-Text.");
         }
 
         var result = await audioBurnService.BurnAsync(

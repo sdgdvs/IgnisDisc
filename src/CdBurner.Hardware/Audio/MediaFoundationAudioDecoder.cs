@@ -439,6 +439,10 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             long totalRedBookBytes = redBookFrames * OpticalConstants.CdAudioBytesPerSample;
             long estimatedPcmBytes = (long)Math.Round(duration.TotalSeconds * sampleRate) * channels * (bitsPerSample / 8);
 
+            // Media Foundation's source reader gives no tags. MP3 tags are parsed directly (ID3v2/ID3v1); anything
+            // still missing, and other formats such as M4A and WMA, come from Windows' own property handlers.
+            AudioTags tags = (Id3TagReader.TryRead(filePath) ?? new AudioTags()).FillFrom(ShellAudioTagReader.TryRead(filePath));
+
             return new AudioFormatMetadata
             {
                 FilePath = filePath,
@@ -448,7 +452,14 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
                 BitsPerSample = bitsPerSample,
                 Duration = duration,
                 TotalPcmBytes = estimatedPcmBytes,
-                TotalRedBookBytes = totalRedBookBytes
+                TotalRedBookBytes = totalRedBookBytes,
+                Title = tags.Title,
+                Artist = tags.Artist,
+                Album = tags.Album,
+                AlbumArtist = tags.AlbumArtist,
+                Composer = tags.Composer,
+                Songwriter = tags.Songwriter,
+                Isrc = tags.Isrc
             };
         }
         finally
