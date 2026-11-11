@@ -346,7 +346,7 @@ public sealed class NativeDvdDataWriterTests : IDisposable
     public void FinalizeRefused_ClosesTheSessionInstead_AndSaysSo()
     {
         var drive = BlankDvd(NativeTaoDataWriter.ProfileDvdPlusR);
-        drive.RejectsDvdPlusRFinalize = true;
+        drive.RejectsFinalize = true;
 
         var result = Write(drive, Image(320));
 

@@ -284,7 +284,8 @@ public sealed partial class NativeTaoDataWriter
         WritingTime = writing.Elapsed,
         SpeedSetKiloBytesPerSecond = state.SpeedSet,
         DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
-        IsDvd = true,
+        IsDvd = !state.IsBluRay,
+        IsBluRay = state.IsBluRay,
         WriteMode = state.WriteMode
     };
 

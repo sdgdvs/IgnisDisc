@@ -28,7 +28,7 @@ public sealed partial class NativeTaoDataWriter
     public const ushort ProfileDvdMinusRwRestricted = 0x0013;
     public const ushort ProfileDvdPlusRw = 0x001A;
 
-    private enum OverwritableKind { DvdPlusRw, DvdMinusRwRestricted, DvdRam }
+    private enum OverwritableKind { DvdPlusRw, DvdMinusRwRestricted, DvdRam, BdRe }
 
     private static OverwritableKind? OverwritableKindOf(ushort profile) => profile switch
     {
@@ -41,10 +41,15 @@ public sealed partial class NativeTaoDataWriter
     private NativeDataWriteResult RunOverwritable(NativeDataWriteRequest request, OverwritableKind kind, IProgress<BurnProgressSnapshot>? progress,
         CancellationToken ct, Stopwatch clock, RunState state)
     {
+        if (kind != OverwritableKind.BdRe)
+        {
+            state.IsDvd = true;
+        }
         string name = kind switch
         {
             OverwritableKind.DvdPlusRw => "DVD+RW",
             OverwritableKind.DvdMinusRwRestricted => "DVD-RW",
+            OverwritableKind.BdRe => "BD-RE",
             _ => "DVD-RAM"
         };
         state.WriteMode = kind == OverwritableKind.DvdMinusRwRestricted ? "restricted overwrite (DVD-RW)" : $"overwrite ({name})";
@@ -59,6 +64,7 @@ public sealed partial class NativeTaoDataWriter
         var report = MmcMediaReport.Query(_transport, ShortTimeout);
         var formats = report.FormattedCapacity;
         byte? formatType = null;          // the format to start before writing, if any
+        uint formatBlocks = 0;            // BD-RE: the blocks the drive offered for format 00h
         bool mayHoldData = true;
         switch (kind)
         {
@@ -89,6 +95,25 @@ public sealed partial class NativeTaoDataWriter
                 }
                 break;
             }
+            case OverwritableKind.BdRe:
+                // Cookbook: BD-RE is sold unformatted and must be formatted first; type 00h is the fast default.
+                if (formats is not { State: FormattedCapacityState.Formatted })
+                {
+                    var offer = formats?.Formats.FirstOrDefault(f => f.FormatType == NativeWriteCommands.FormatTypeDefault && f.Blocks > 0);
+                    if (offer is null)
+                    {
+                        throw Stop("This BD-RE is not formatted, and the drive offers no default format for it.");
+                    }
+                    formatType = NativeWriteCommands.FormatTypeDefault;
+                    formatBlocks = (uint)Math.Min(uint.MaxValue, offer.Blocks);
+                    mayHoldData = false;
+                    _note($"Not formatted; format 00h offered with {offer.Blocks} blocks.");
+                }
+                else
+                {
+                    _note($"Formatted ({formats.Blocks} blocks).");
+                }
+                break;
             default:
                 if (formats is not { State: FormattedCapacityState.Formatted })
                 {
@@ -143,9 +168,12 @@ public sealed partial class NativeTaoDataWriter
         // 5. Format first where needed. From here the disc changes.
         if (formatType is byte type)
         {
-            byte[] parameters = type == NativeWriteCommands.FormatTypeDvdPlusRw
-                ? NativeWriteCommands.BuildDvdPlusRwFormatParameters(restart: false)
-                : NativeWriteCommands.BuildDvdMinusRwExpandParameters();
+            byte[] parameters = kind switch
+            {
+                OverwritableKind.DvdPlusRw => NativeWriteCommands.BuildDvdPlusRwFormatParameters(restart: false),
+                OverwritableKind.BdRe => NativeWriteCommands.BuildBdReDefaultFormatParameters(formatBlocks),
+                _ => NativeWriteCommands.BuildDvdMinusRwExpandParameters()
+            };
             var format = _transport.ExecuteCommand(NativeWriteCommands.BuildFormatUnit(), parameters, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, ShortTimeout);
             if (!format.IsSuccess)
             {
@@ -158,7 +186,7 @@ public sealed partial class NativeTaoDataWriter
 
         // 6. The data, in 64 KiB WRITEs from LBA 0.
         request.Image.Position = request.StartPosition;
-        var reporter = new ProgressReporter(this, progress, clock, sectors, DvdSectorsPerSecondAt1x);
+        var reporter = new ProgressReporter(this, progress, clock, sectors, state.IsBluRay ? BdSectorsPerSecondAt1x : DvdSectorsPerSecondAt1x);
         var writing = Stopwatch.StartNew();
         WriteTrack(request, 0, sectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite);
         writing.Stop();
@@ -167,9 +195,9 @@ public sealed partial class NativeTaoDataWriter
         Flush("after the data");
         WaitUntilReady(FlushTimeout, CancellationToken.None, state, "after writing");
 
-        // 7. DVD+RW and DVD-RW: CLOSE SESSION. DVD-RAM: nothing to close.
+        // 7. DVD+RW and DVD-RW: CLOSE SESSION. DVD-RAM and BD-RE: nothing to close.
         string closeNote = string.Empty;
-        if (kind != OverwritableKind.DvdRam)
+        if (kind is OverwritableKind.DvdPlusRw or OverwritableKind.DvdMinusRwRestricted)
         {
             reporter.Report(sectors, "Closing");
             var close = Close(NativeWriteCommands.CloseFunctionSession, 0, state);
@@ -183,7 +211,7 @@ public sealed partial class NativeTaoDataWriter
         reporter.Report(sectors, "Done");
         string written = formatType is null
             ? $"The data was written over the {name} from sector 0."
-            : $"The {name} was {(kind == OverwritableKind.DvdPlusRw ? "formatted" : "expanded")} and the data written from sector 0.";
+            : $"The {name} was {(kind == OverwritableKind.DvdMinusRwRestricted ? "expanded" : "formatted")} and the data written from sector 0.";
         return DvdResult(state, clock, writing, sectors) with
         {
             Success = true,

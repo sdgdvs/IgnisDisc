@@ -65,11 +65,15 @@ public sealed record NativeDataWriteResult
     /// <summary>True when the disc was a DVD (speeds then count 1,385 kB/s per 1x).</summary>
     public bool IsDvd { get; init; }
 
+    /// <summary>True when the disc was a Blu-ray disc (speeds then count 4,495.5 kB/s per 1x).</summary>
+    public bool IsBluRay { get; init; }
+
     /// <summary>How the disc was written, for logs and JSON (for example "disc-at-once (DVD-R)").</summary>
     public string WriteMode { get; init; } = "track-at-once, mode 1";
 
-    /// <summary>The drive's kB/s for 1x on this disc: 176.4 on CD (audio units, as drives count), 1,385 on DVD.</summary>
-    public double OneXKiloBytesPerSecond => IsDvd ? 1385.0 : 176.4;
+    /// <summary>The drive's kB/s for 1x on this disc: 176.4 on CD (audio units, as drives count), 1,385 on DVD, 4,495.5 on
+    /// Blu-ray.</summary>
+    public double OneXKiloBytesPerSecond => IsBluRay ? 4495.5 : IsDvd ? 1385.0 : 176.4;
 
     /// <summary>Average speed while sending the data, as an "x" figure for this kind of disc.</summary>
     public double AverageWriteMultiplier
@@ -79,8 +83,8 @@ public sealed record NativeDataWriteResult
             double seconds = WritingTime.TotalSeconds;
             if (seconds <= 0) return 0;
             long sectors = DataSectorsWritten + (long)PaddingSectors;
-            // CD: data sectors per second over 75, the figure Windows' writer reports; DVD: bytes over 1,385,000.
-            return IsDvd ? sectors * 2048.0 / seconds / 1_385_000.0 : sectors / seconds / 75.0;
+            // CD: data sectors per second over 75, the figure Windows' writer reports; DVD and Blu-ray: bytes over 1x.
+            return IsDvd || IsBluRay ? sectors * 2048.0 / seconds / (OneXKiloBytesPerSecond * 1000.0) : sectors / seconds / 75.0;
         }
     }
 }
@@ -147,6 +151,7 @@ public sealed partial class NativeTaoDataWriter
                 SpeedSetKiloBytesPerSecond = state.SpeedSet,
                 DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
                 IsDvd = state.IsDvd,
+                IsBluRay = state.IsBluRay,
                 WriteMode = state.WriteMode
             };
         }
@@ -177,6 +182,10 @@ public sealed partial class NativeTaoDataWriter
         if (IsDvdProfile(tao.Profile))
         {
             return RunDvd(request, tao.Profile, progress, ct, clock, state);
+        }
+        if (IsBluRayProfile(tao.Profile))
+        {
+            return RunBluRay(request, tao.Profile, progress, ct, clock, state);
         }
         if (tao.Profile is not (NativeSaoAudioWriter.ProfileCdR or NativeSaoAudioWriter.ProfileCdRw))
         {
@@ -396,7 +405,7 @@ public sealed partial class NativeTaoDataWriter
     /// </summary>
     private void ChooseAndSetSpeed(int? requested, RunState state, int? streamingEndLba = null, DriveMediaReport? report = null)
     {
-        double oneX = streamingEndLba.HasValue ? 1385.0 : 176.4;
+        double oneX = state.IsBluRay ? 4495.5 : streamingEndLba.HasValue ? 1385.0 : 176.4;
         report ??= MmcMediaReport.Query(_transport, ShortTimeout);
         state.DriveSpeeds = report.WriteSpeeds.Select(s => s.KilobytesPerSecond).Where(k => k > 0).Distinct().OrderByDescending(k => k).ToList();
         _note(state.DriveSpeeds.Count > 0
@@ -674,6 +683,7 @@ public sealed partial class NativeTaoDataWriter
         public int? SpeedSet;
         public IReadOnlyList<int> DriveSpeeds = Array.Empty<int>();
         public bool IsDvd;
+        public bool IsBluRay;
         public string WriteMode = "track-at-once, mode 1";
     }
 

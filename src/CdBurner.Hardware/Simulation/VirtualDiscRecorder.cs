@@ -256,7 +256,7 @@ public class VirtualDiscRecorder : IDiscRecorderBackend, IDriveMediaReportProvid
                 IsBlank = m.IsBlank,
                 IsRewritable = m.IsRewritable,
                 // DVD+RW and DVD-RAM are rewritten in place (no erase), as the IMAPI recorder reports them.
-                IsOverwriteOnly = m.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam,
+                IsOverwriteOnly = m.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam or DiscMediaType.BdRe,
                 IsAppendable = !m.IsFinalized && m.FreeSectors > 0,
                 TotalSectors = m.TotalCapacitySectors,
                 FreeSectors = m.FreeSectors,

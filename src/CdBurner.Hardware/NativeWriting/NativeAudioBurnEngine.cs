@@ -59,6 +59,8 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
                 DiscMediaType.DvdPlusRDualLayer => NativeTaoDataWriter.ProfileDvdPlusRDualLayer,
                 DiscMediaType.DvdPlusRw => 0x001A,
                 DiscMediaType.DvdRam => 0x0012,
+                DiscMediaType.BdR => NativeTaoDataWriter.ProfileBdR,
+                DiscMediaType.BdRe => NativeTaoDataWriter.ProfileBdRe,
                 _ => 0x0000
             };
             drive.DiscStatus = medium.IsBlank ? 0 : medium.IsFinalized ? 2 : 1;
@@ -69,6 +71,13 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
             else
             {
                 drive.CapacitySectors = (int)Math.Min(int.MaxValue, medium.TotalCapacitySectors); // beyond CD MSF addresses
+            }
+            if (medium.MediaType == DiscMediaType.BdRe)
+            {
+                // A blank virtual BD-RE is new and unformatted, offering format 00h; one with data has been formatted.
+                drive.BdReFormatted = !medium.IsBlank;
+                drive.FormatCapacitiesResponse = VirtualMmcDrive.BuildFormatCapacities(drive.CapacitySectors ?? 0, formatted: !medium.IsBlank,
+                    (NativeWriteCommands.FormatTypeDefault, drive.CapacitySectors ?? 0));
             }
             if (medium.MediaType == DiscMediaType.DvdRam)
             {

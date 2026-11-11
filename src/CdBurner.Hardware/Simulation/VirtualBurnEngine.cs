@@ -53,7 +53,7 @@ public class VirtualBurnEngine : IBurnEngineBackend, ISecureAudioReader
             return BurnOperationResult.Failed("No media present in recorder.");
         }
 
-        bool overwriteOnly = medium.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam;
+        bool overwriteOnly = medium.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam or DiscMediaType.BdRe;
         if (medium.IsFinalized && !(overwriteOnly && options.OverwriteExistingData))
         {
             return BurnOperationResult.Failed("Mounted virtual medium is finalized and cannot be written.");

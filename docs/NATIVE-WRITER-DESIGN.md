@@ -167,6 +167,15 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   state. DVD-RAM: must be formatted (an unformatted one is refused rather than formatted with defect management
   here); 2 KiB alignment; no close command. Both: no test write, same leave-to-replace rule. The size is the format
   capacity; the track size is used only when the drive reports no format information.
+- *Blu-ray* (built 2026-11-11, simulator only; `NativeTaoDataWriter.BluRay.cs`). Both need the BD Write feature
+  (0x0041) current: a drive that only reads Blu-ray still reports the disc's profile. BD-R in sequential recording
+  mode (profile 41h) goes the DVD+R way (cookbook: "very similar to DVD+R"): no mode page, no test write (MMC has
+  none for Blu-ray), the image padded to whole 64 KiB clusters, `WRITE (10)` from the next writable address,
+  `SYNCHRONIZE CACHE`, `CLOSE TRACK` (001b), then `CLOSE SESSION` (010b) or finalize with close function 110b
+  (DVD+R uses 101b), falling back to 010b if refused. BD-RE (43h) is in the overwritable path: an unformatted disc
+  gets `FORMAT UNIT` type 00h with the block count the drive offered for it in `READ FORMAT CAPACITIES` and the
+  block length 2,048 in bytes 9–11 (libburn's `mmc_format_unit`); 2 KiB alignment; no close command. Random
+  recording BD-R (42h) and BD-ROM are refused; multi-layer Blu-ray goes to the Windows writer.
 - Dual-layer DVD±R goes to the Windows writer with a stated reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
 
 ## Buffer and underrun handling

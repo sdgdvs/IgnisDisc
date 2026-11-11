@@ -53,6 +53,23 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private bool IsDvdPlusR => Profile is NativeTaoDataWriter.ProfileDvdPlusR or NativeTaoDataWriter.ProfileDvdPlusRDualLayer;
 
+    /// <summary>True for every Blu-ray profile (40h–43h).</summary>
+    public bool IsBluRay => NativeTaoDataWriter.IsBluRayProfile(Profile);
+
+    private bool IsBdR => Profile == NativeTaoDataWriter.ProfileBdR;
+
+    /// <summary>DVD+R and BD-R: written in sequence with no mode page, then CLOSE TRACK and close or finalize.</summary>
+    private bool IsPlusRLike => IsDvdPlusR || IsBdR;
+
+    /// <summary>DVD and Blu-ray discs share the data-disc write, flush and close handling here.</summary>
+    private bool WritesLikeDvd => IsDvd || IsBluRay;
+
+    /// <summary>Blu-ray: the drive offers BD writing (feature 0x0041). False makes it a drive that only reads Blu-ray.</summary>
+    public bool OffersBdWrite { get; set; } = true;
+
+    /// <summary>BD-RE: false makes it a new, unformatted disc that refuses writes until FORMAT UNIT type 00h.</summary>
+    public bool BdReFormatted { get; set; } = true;
+
     // ---- Faults ----
 
     /// <summary>TEST UNIT READY answers 2/04/01 (becoming ready) this many times first.</summary>
@@ -154,8 +171,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>SET STREAMING fails with 5/20/00, as on drives that only take SET CD SPEED.</summary>
     public bool RejectsSetStreaming { get; set; }
 
-    /// <summary>The DVD+R finalize function (101b) fails with 5/24/00; libburn's cookbook reports drives that refuse it.</summary>
-    public bool RejectsDvdPlusRFinalize { get; set; }
+    /// <summary>The finalize function (101b on DVD+R, 110b on BD-R) fails with 5/24/00; libburn's cookbook reports drives that refuse it.</summary>
+    public bool RejectsFinalize { get; set; }
 
     /// <summary>CLOSE SESSION answers 2/04/07 (operation in progress) this many times first, as some drives do.</summary>
     public int CloseSessionBusyResponses { get; set; }
@@ -184,7 +201,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     /// <summary>DVD+RW, DVD-RW in restricted overwrite mode and DVD-RAM: written anywhere, no sessions.</summary>
     private bool IsOverwritable => Profile is NativeTaoDataWriter.ProfileDvdPlusRw or NativeTaoDataWriter.ProfileDvdMinusRwRestricted
-        or NativeTaoDataWriter.ProfileDvdRam;
+        or NativeTaoDataWriter.ProfileDvdRam or NativeTaoDataWriter.ProfileBdRe;
 
     /// <summary>State of a DVD-RW in restricted overwrite mode (libburn's cookbook).</summary>
     public enum RestrictedOverwriteState { Formatted, PartlyFormatted, Intermediate }
@@ -399,6 +416,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             byte flags = (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | 0x20 | (OffersTestWrite ? 0x04 : 0) | 0x02 | (OffersRwSubchannel ? 0x01 : 0));
             Add(MmcCommandBuilder.FeatureCdMastering, flags, cd);
         }
+        Add(MmcCommandBuilder.FeatureBdWrite, 0, IsBluRay && OffersBdWrite && Profile != NativeTaoDataWriter.ProfileBdRom);
         Add(MmcCommandBuilder.FeatureDvdRecordableWrite,
             (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | (OffersTestWrite ? 0x04 : 0) | (Profile == NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x02 : 0)),
             dvdMinus);
@@ -459,7 +477,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x1A, 0x00); // parameter list length error
         }
-        if (IsDvdPlusR || IsOverwritable)
+        if (IsPlusRLike || IsOverwritable)
         {
             // libburn's cookbook: no mode page 05h is sent for DVD+R (nor needed for DVD+RW). Stricter than most
             // drives, to catch one being sent.
@@ -571,7 +589,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return WriteOverwrite(cdb, data);
         }
-        if (_cue == null && IsDvd)
+        if (_cue == null && WritesLikeDvd)
         {
             return WriteDvd(cdb, data);
         }
@@ -869,7 +887,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private ScsiExecutionResult SynchronizeCache()
     {
-        if ((_taoArmed || IsDvd) && _taoNextLba > 0 && _taoClosedSectors == 0)
+        if ((_taoArmed || WritesLikeDvd) && _taoNextLba > 0 && _taoClosedSectors == 0)
         {
             // The drive empties its buffer and writes the run-out; the track is complete.
             if (_taoTestWrite)
@@ -1000,7 +1018,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         r[2] = 1; r[3] = 1; // track 1, session 1
         if (Recorded || _taoClosedSectors > 0 || DiscStatus != 0)
         {
-            int size = Recorded ? RecordedLeadOutLba : _taoClosedSectors + (IsDvd ? 0 : 2);
+            int size = Recorded ? RecordedLeadOutLba : _taoClosedSectors + (WritesLikeDvd ? 0 : 2);
             r[5] = 0x04; // data track
             r[6] = 0x01; // data mode 1, not blank, no next writable address
             BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), size);
@@ -1029,7 +1047,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x03, 0x0C, 0x00);
         }
-        if (IsDvd)
+        if (WritesLikeDvd)
         {
             return CloseDvd(cdb, function);
         }
@@ -1070,11 +1088,11 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult WriteDvd(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
-        if (!IsDvdPlusR && !_dvdModeSet)
+        if (!IsPlusRLike && !_dvdModeSet)
         {
             return Sense(0x05, 0x2C, 0x00);
         }
-        bool dao = !IsDvdPlusR && (_modePage05[2] & 0x0F) == WriteParametersPage.WriteTypeSessionAtOnce;
+        bool dao = !IsPlusRLike && (_modePage05[2] & 0x0F) == WriteParametersPage.WriteTypeSessionAtOnce;
         if (dao && ReservedSectors == 0)
         {
             return Sense(0x05, 0x2C, 0x00); // Disc-At-Once needs RESERVE TRACK first
@@ -1098,9 +1116,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult CloseDvd(ReadOnlySpan<byte> cdb, byte function)
     {
-        if (Profile == NativeTaoDataWriter.ProfileDvdRam)
+        if (Profile is NativeTaoDataWriter.ProfileDvdRam or NativeTaoDataWriter.ProfileBdRe)
         {
-            return Sense(0x05, 0x2C, 0x00); // nothing to close on DVD-RAM
+            return Sense(0x05, 0x2C, 0x00); // nothing to close on DVD-RAM or BD-RE
         }
         if (Profile == NativeTaoDataWriter.ProfileDvdMinusRwRestricted)
         {
@@ -1146,7 +1164,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Good(0);
         }
 
-        bool finalize = function == NativeWriteCommands.CloseFunctionFinalizeDvdPlusR;
+        bool finalize = function == (IsBdR ? NativeWriteCommands.CloseFunctionFinalizeBdR : NativeWriteCommands.CloseFunctionFinalizeDvdPlusR);
         if (function != NativeWriteCommands.CloseFunctionSession && !finalize)
         {
             return Sense(0x05, 0x24, 0x00);
@@ -1155,7 +1173,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x2C, 0x00); // the track has to be closed first
         }
-        if (finalize && (!IsDvdPlusR || RejectsDvdPlusRFinalize))
+        if (finalize && (!IsPlusRLike || RejectsFinalize))
         {
             return Sense(0x05, 0x24, 0x00);
         }
@@ -1165,7 +1183,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x02, 0x04, 0x07);
         }
 
-        int status = finalize ? 2 : IsDvdPlusR ? 1 : (_modePage05[3] >> 6) == 3 ? 1 : 2;
+        int status = finalize ? 2 : IsPlusRLike ? 1 : (_modePage05[3] >> 6) == 3 ? 1 : 2;
         RecordDataDisc(_taoClosedSectors, runOutSectors: 0, discStatus: status);
         _dvdTrackClosed = false;
         if ((cdb[1] & 0x01) != 0)
@@ -1181,7 +1199,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult WriteOverwrite(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
-        if ((IsDvdPlusRw && BackgroundFormatStatus == 0) || (Profile == NativeTaoDataWriter.ProfileDvdRam && !RamFormatted))
+        if ((IsDvdPlusRw && BackgroundFormatStatus == 0) || (Profile == NativeTaoDataWriter.ProfileDvdRam && !RamFormatted) ||
+            (Profile == NativeTaoDataWriter.ProfileBdRe && !BdReFormatted))
         {
             return Sense(0x05, 0x30, 0x10);
         }
@@ -1254,6 +1273,24 @@ public sealed class VirtualMmcDrive : IScsiTransport
         if (RejectsFormatUnit)
         {
             return Sense(0x05, 0x24, 0x00);
+        }
+        if (Profile == NativeTaoDataWriter.ProfileBdRe)
+        {
+            // Format 00h (the default) with the block length 2,048 in the type parameter, as libburn sends it.
+            uint bdBlocks = BinaryPrimitives.ReadUInt32BigEndian(list.Slice(4, 4));
+            if (cdb[1] != 0x11 || list.Length < 12 || list[3] != 8 || (list[8] >> 2) != NativeWriteCommands.FormatTypeDefault ||
+                list[9] != 0 || list[10] != 0x08 || list[11] != 0 || bdBlocks == 0 || bdBlocks > (uint)Capacity)
+            {
+                return Sense(0x05, 0x26, 0x00);
+            }
+            FormatUnitCount++;
+            LastFormatParameters = list[..12].ToArray();
+            BdReFormatted = true;
+            if ((list[1] & 0x02) != 0)
+            {
+                NotReadyResponses += 1;
+            }
+            return Good(0);
         }
         if (Profile == NativeTaoDataWriter.ProfileDvdMinusRwRestricted)
         {

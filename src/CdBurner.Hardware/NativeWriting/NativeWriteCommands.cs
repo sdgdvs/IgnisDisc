@@ -79,6 +79,28 @@ public static class NativeWriteCommands
     /// minimal radius, so nothing more can be added (libburn's cookbook; some drives refuse it).</summary>
     public const byte CloseFunctionFinalizeDvdPlusR = 0x05;
 
+    /// <summary>CLOSE TRACK/SESSION close function 110b on BD-R: finalize the disc (libburn's cookbook; DVD+R uses 101b).</summary>
+    public const byte CloseFunctionFinalizeBdR = 0x06;
+
+    /// <summary>FORMAT UNIT format type 00h: the drive's default size (on BD-RE, quick formatting with spare areas).</summary>
+    public const byte FormatTypeDefault = 0x00;
+
+    /// <summary>
+    /// FORMAT UNIT parameter list for a BD-RE with format type 00h: FOV | Immed (0x82), descriptor length 8, the number
+    /// of blocks the drive offered for type 00h in READ FORMAT CAPACITIES, type 00h in byte 8, and the block length
+    /// 2,048 (0x000800) in bytes 9–11, as libburn's mmc_format_unit sets for types 00h, 01h and 31h.
+    /// </summary>
+    public static byte[] BuildBdReDefaultFormatParameters(uint blocks)
+    {
+        byte[] list = new byte[12];
+        list[1] = 0x82;
+        list[3] = 8;
+        BinaryPrimitives.WriteUInt32BigEndian(list.AsSpan(4, 4), blocks);
+        list[8] = FormatTypeDefault << 2;
+        list[10] = 0x08;
+        return list;
+    }
+
     /// <summary>
     /// RESERVE TRACK (0x53) with ARSV = 0 and RMZ = 0: reserves <paramref name="sectors"/> 2,048-byte blocks for the
     /// next track. DVD-R Disc-At-Once needs it; the size goes in CDB bytes 5–8.

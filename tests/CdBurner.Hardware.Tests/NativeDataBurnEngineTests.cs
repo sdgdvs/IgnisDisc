@@ -181,9 +181,9 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     }
 
     [Fact]
-    public void RewritableDvdInTheDrive_IsReportedAsNotCovered()
+    public void UncoveredDiscInTheDrive_IsReportedAsNotCovered()
     {
-        var drive = BlankCd(profile: 0x0041); // BD-R: not built yet
+        var drive = BlankCd(profile: 0x0042); // BD-R in random recording mode: not covered
         var result = Write(drive, Image(400));
 
         Assert.True(result.StoppedBeforeWriting);
