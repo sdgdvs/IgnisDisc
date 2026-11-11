@@ -34,9 +34,11 @@ public sealed partial class NativeTaoDataWriter
     public const ushort FeatureIncrementalStreaming = 0x0021;
 
     /// <summary>
-    /// Sectors per WRITE on DVD: two 32 KiB ECC blocks (64 KiB). Over the GP60NB50's USB bridge each WRITE took about
-    /// 6.7 ms whatever the disc speed, so 16-sector WRITEs capped an 8x DVD-R test write at 2.5x (2026-11-11). 64 KiB
-    /// is the most that bridge passes; an adapter that refuses it gets <see cref="DvdMinimumSectorsPerWrite"/>.
+    /// Sectors per WRITE on DVD: two 32 KiB ECC blocks (64 KiB, the most the GP60NB50's USB bridge passes), which
+    /// halves the number of commands. It does not change the speed: on that drive a WRITE takes as long as the disc
+    /// needs to take its data (6.3 ms per 32 KiB, 12.7 ms per 64 KiB, about 5 MB/s at the start of an "8x" DVD-R,
+    /// rising with the radius; measured 2026-11-11). An adapter that refuses 64 KiB gets
+    /// <see cref="DvdMinimumSectorsPerWrite"/>.
     /// </summary>
     public const ushort DvdSectorsPerWrite = 32;
 

@@ -41,7 +41,7 @@ pipeline can be tested without hardware or blank media.
 | Burn CDs with direct drive commands (experimental, off by default) | ⚠️ | ✅ | Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or "Direct drive commands" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way, but only in the built-in drive simulator so far: no real DVD has been burned with it yet. Dual-layer DVDs, DVD+RW, DVD-RAM and Blu-ray discs still use the Windows writer |
 | CD-Text / ISRC on burned audio CDs | ⚠️ | ✅ | The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
-| Test-write / simulation | ⚠️ | ✅ | With the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. DVD-R and DVD-RW have a test write too, so far only in the drive simulator; DVD+R discs have none. The Windows writer has no test write |
+| Test-write / simulation | ⚠️ | ✅ | With the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. DVD-R has passed a test write on the same drive (a Verbatim DVD-R, still blank after a reload); DVD-RW only in the drive simulator so far; DVD+R discs have none. The Windows writer has no test write |
 <!-- SUPPORT-TABLE-END -->
 
 ✅ supported · ⚠️ works but needs more real-hardware testing · ❌ not available on physical drives yet
@@ -140,7 +140,8 @@ Track-at-Once, at a speed picked from the drive's own list for that disc (the fa
 rounded down to one the drive offers), never left to Windows. The disc is always read back sector by sector from the
 disc itself afterwards, `--verify` or not. A blank single-layer DVD-R or DVD-RW is written Disc-At-Once (or in
 packets when `--no-close` leaves it open) and a DVD+R in sequence, then closed or finalized; this DVD path has only
-run in the built-in drive simulator so far. Any other disc (dual-layer DVD, DVD+RW, DVD-RAM, Blu-ray) and a disc
+run in the built-in drive simulator so far, apart from one test write on a real DVD-R (laser off; the disc
+stayed blank). Any other disc (dual-layer DVD, DVD+RW, DVD-RAM, Blu-ray) and a disc
 that already holds a session are burned by the Windows writer as before, and the result says so. `--test-write` and
 `--test-first` work as for audio (DVD+R has no test write). On real hardware it has run on one drive and one CD-RW
 so far; CD-R, DVDs and other drives are still to be tried.
