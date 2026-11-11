@@ -1,3 +1,7 @@
+using CdBurner.Core.Compilation;
+using CdBurner.Core.Iso;
+using CdBurner.Core.Primitives;
+
 namespace CdBurner.Core.Archival;
 
 /// <summary>
@@ -23,6 +27,22 @@ public static class ArchiveStager
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        var staged = await StageDiscsAsync(plan, stagingRoot, par2Path, progress, cancellationToken).ConfigureAwait(false);
+        return staged.Select(d => d.DiscRoot).ToList();
+    }
+
+    /// <summary>
+    /// Stages the plan like <see cref="StageAsync"/> and reports, per disc, the recovery settings used and the
+    /// sectors taken. With <see cref="ArchivePlan.FillFreeSpace"/>, each disc's recovery data is sized to fill it up
+    /// to <see cref="ArchivePlan.EffectiveCeilingSectors"/>; the redundancy percentage is then a minimum.
+    /// </summary>
+    public static async Task<IReadOnlyList<ArchiveStagedDisc>> StageDiscsAsync(
+        ArchivePlan plan,
+        string stagingRoot,
+        string? par2Path,
+        IProgress<string>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrWhiteSpace(stagingRoot);
 
@@ -42,7 +62,7 @@ public static class ArchiveStager
             }
         }
 
-        var stagedDiscs = new List<string>(plan.Discs.Count);
+        var stagedDiscs = new List<ArchiveStagedDisc>(plan.Discs.Count);
 
         for (int d = 0; d < plan.Discs.Count; d++)
         {
@@ -76,13 +96,33 @@ public static class ArchiveStager
             progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: writing manifest...");
             await ArchiveManifest.WriteAsync(discRoot, plan, disc, cancellationToken).ConfigureAwait(false);
 
+            Par2RecoveryLayout? layout = null;
+            long budget = 0;
             if (plan.RedundancyPercent > 0)
             {
                 string scratchDir = Path.Combine(stagingRoot, ".par2-scratch", discFolderName);
                 try
                 {
-                    progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: generating PAR2 recovery data...");
-                    await Par2Runner.CreateAsync(par2Path!, discRoot, plan.RedundancyPercent, scratchDir, cancellationToken).ConfigureAwait(false);
+                    if (plan.FillFreeSpace)
+                    {
+                        var sources = ListSourceFiles(discRoot);
+                        budget = RecoveryBudgetSectors(plan.EffectiveCeilingSectors, discRoot);
+                        layout = Par2RecoverySizer.Plan(sources, budget);
+                    }
+
+                    if (layout != null)
+                    {
+                        progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: generating PAR2 recovery data " +
+                                         $"to fill the disc ({layout.RecoveryBlocks:N0} blocks of {layout.BlockSize / 1024.0:N0} KB, " +
+                                         $"{layout.RedundancyPercent:N0} %)...");
+                        layout = await CreateFittingAsync(par2Path!, discRoot, layout, plan.EffectiveCeilingSectors, scratchDir, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: generating PAR2 recovery data...");
+                        await Par2Runner.CreateAsync(par2Path!, discRoot, plan.RedundancyPercent, scratchDir, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {
@@ -99,7 +139,8 @@ public static class ArchiveStager
                 }
             }
 
-            stagedDiscs.Add(discRoot);
+            int recoverySectors = SectorsUnder(Path.Combine(discRoot, ArchiveManifest.RecoveryFolderName));
+            stagedDiscs.Add(new ArchiveStagedDisc(discRoot, layout, recoverySectors, SectorsUnder(discRoot), layout != null ? budget : 0));
         }
 
         try
@@ -116,4 +157,78 @@ public static class ArchiveStager
 
         return stagedDiscs;
     }
+
+    /// <summary>Files par2 will protect: everything on the disc so far (data and manifests).</summary>
+    internal static List<Par2SourceFile> ListSourceFiles(string discRoot) =>
+        Directory.EnumerateFiles(discRoot, "*", SearchOption.AllDirectories)
+            .Select(path => new Par2SourceFile(Path.GetRelativePath(discRoot, path).Replace('\\', '/'), new FileInfo(path).Length))
+            .OrderBy(f => f.RelativePath, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// Room for recovery data: the ceiling minus the image the disc makes with the recovery files in it, minus
+    /// those files. The image size comes from the image builder's own layout (ISO 9660 + Joliet + UDF, as
+    /// <c>burn-data --udf</c> writes it), so the file system's share is exact rather than estimated.
+    /// </summary>
+    public static long RecoveryBudgetSectors(int ceilingSectors, string discRoot)
+    {
+        // The two files par2 will write, at a size near what they will have: the layout barely depends on it.
+        long room = Math.Max(0, ceilingSectors - SectorsUnder(discRoot)) * (long)OpticalConstants.DataSectorSize;
+        var placeholders = new[] { ("recovery.par2", 4096L), ("recovery.vol00000+32768.par2", Math.Max(0, room - 4096)) };
+        long placeholderSectors = placeholders.Sum(p => (p.Item2 + OpticalConstants.DataSectorSize - 1) / OpticalConstants.DataSectorSize);
+        long fileSystem = ImageSectors(discRoot, placeholders) - SectorsUnder(discRoot) - placeholderSectors;
+        return ceilingSectors - SectorsUnder(discRoot) - fileSystem;
+    }
+
+    /// <summary>Sectors the disc folder's image takes (plus optional extra RECOVERY files), from the builder's layout.</summary>
+    public static int ImageSectors(string discRoot, IReadOnlyList<(string Name, long Size)>? extraRecoveryFiles = null)
+    {
+        var root = CompilationDirectory.CreateRoot();
+        CompilationFolderImporter.Import(root, discRoot, strict: false);
+        if (extraRecoveryFiles != null)
+        {
+            var recovery = root.AddDirectory(ArchiveManifest.RecoveryFolderName);
+            foreach (var (name, size) in extraRecoveryFiles)
+            {
+                recovery.AddFile(new CompilationFile(name, string.Empty, size));
+            }
+        }
+        return IsoUdfImageBuilder.CalculateTotalSectors(root);
+    }
+
+    /// <summary>
+    /// Creates the recovery data and checks the disc's image fits the ceiling. The size formula is exact for
+    /// par2cmdline 1.4.0; should another version write more, the excess blocks are dropped and it is created again.
+    /// </summary>
+    private static async Task<Par2RecoveryLayout> CreateFittingAsync(
+        string par2Path, string discRoot, Par2RecoveryLayout layout, int ceilingSectors, string scratchDir, CancellationToken ct)
+    {
+        string recoveryFolder = Path.Combine(discRoot, ArchiveManifest.RecoveryFolderName);
+        for (int attempt = 0; ; attempt++)
+        {
+            await Par2Runner.CreateAsync(par2Path, discRoot, layout, scratchDir, ct).ConfigureAwait(false);
+            int image = ImageSectors(discRoot);
+            if (image <= ceilingSectors)
+            {
+                return layout with { RecoverySectors = SectorsUnder(recoveryFolder) };
+            }
+
+            long excessBytes = (image - ceilingSectors) * (long)OpticalConstants.DataSectorSize;
+            int fewer = (int)(excessBytes / layout.BlockSize) + 2;
+            if (attempt == 2 || layout.RecoveryBlocks <= fewer)
+            {
+                throw new InvalidOperationException(
+                    $"The disc image would take {image:N0} sectors with its recovery data, more than the {ceilingSectors:N0} allowed.");
+            }
+
+            Directory.Delete(recoveryFolder, recursive: true);
+            layout = layout with { RecoveryBlocks = layout.RecoveryBlocks - fewer };
+        }
+    }
+
+    private static int SectorsUnder(string folder) =>
+        !Directory.Exists(folder)
+            ? 0
+            : (int)Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                .Sum(f => (new FileInfo(f).Length + OpticalConstants.DataSectorSize - 1) / OpticalConstants.DataSectorSize);
 }

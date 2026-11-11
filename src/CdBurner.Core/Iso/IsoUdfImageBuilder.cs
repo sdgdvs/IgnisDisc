@@ -116,6 +116,16 @@ public static class IsoUdfImageBuilder
         await WriteImageSectors(context, outputStream, progress, cancellationToken, isAsync: true).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Sectors the image of <paramref name="root"/> will take, from the same layout the build uses, without reading
+    /// or writing any file data.
+    /// </summary>
+    public static int CalculateTotalSectors(CompilationDirectory root, IsoBuildOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        return LayoutContext.Create(root, options ?? new IsoBuildOptions()).TotalSectors;
+    }
+
     /// <summary>Name of the root hash list written when <see cref="IsoBuildOptions.WriteSha256Manifest"/> is set.</summary>
     public const string Sha256ManifestFileName = "SHA256SUMS";
 

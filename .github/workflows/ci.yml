@@ -35,6 +35,17 @@ jobs:
       - name: Build
         run: dotnet build CdBurner.sln --configuration Release -warnaserror
 
+      # The archive recovery tests run real par2 (the same release the app's optional download installs).
+      - name: Install par2cmdline
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'par2'
+          Invoke-WebRequest https://github.com/Parchive/par2cmdline/releases/download/v1.4.0/par2cmdline-1.4.0-win-x64.zip -OutFile "$dir.zip"
+          Expand-Archive "$dir.zip" -DestinationPath $dir
+          $exe = Get-ChildItem $dir -Recurse -Filter par2.exe | Select-Object -First 1
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & $exe.FullName -V
+
       # Every test runs against the built-in virtual drive; no optical hardware is needed.
       - name: Test
         run: dotnet test CdBurner.sln --configuration Release --no-build --logger "trx" --results-directory TestResults

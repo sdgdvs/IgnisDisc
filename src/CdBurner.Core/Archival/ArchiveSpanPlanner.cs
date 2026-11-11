@@ -26,16 +26,26 @@ public static class ArchiveSpanPlanner
                 "Redundancy percent must be between 0 and 100.");
         }
 
+        return UsableSectorsUnder(CalculateCeilingSectors(mediaType), redundancyPercent);
+    }
+
+    /// <summary>
+    /// Most sectors a disc of this type should hold in all: its nominal capacity minus a safety reserve of 2 % (at
+    /// least 8 MB) for the file system and media that come up a little short.
+    /// </summary>
+    public static int CalculateCeilingSectors(DiscMediaType mediaType)
+    {
         int nominal = mediaType.GetNominalCapacitySectors();
         if (nominal <= 0)
         {
             throw new ArgumentException($"Media type {mediaType} has no nominal sector capacity.", nameof(mediaType));
         }
 
-        int reserve = Math.Max(4096, nominal / 50);
-        int usable = (int)((nominal - reserve) / (1.0 + redundancyPercent / 100.0));
-        return usable;
+        return nominal - Math.Max(4096, nominal / 50);
     }
+
+    private static int UsableSectorsUnder(int ceilingSectors, int redundancyPercent) =>
+        (int)(ceilingSectors / (1.0 + redundancyPercent / 100.0));
 
     /// <summary>
     /// Recursively enumerates a source folder and creates an archival spanning plan.
@@ -50,7 +60,9 @@ public static class ArchiveSpanPlanner
         string sourceFolder,
         DiscMediaType mediaType,
         int redundancyPercent,
-        string? setId = null)
+        string? setId = null,
+        bool fillFreeSpace = true,
+        int? ceilingSectorsOverride = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceFolder);
         if (!Directory.Exists(sourceFolder))
@@ -68,7 +80,7 @@ public static class ArchiveSpanPlanner
             files.Add(new ArchiveSourceFile(fullPath, relative, size));
         }
 
-        return Plan(files, mediaType, redundancyPercent, setId);
+        return Plan(files, mediaType, redundancyPercent, setId, fillFreeSpace, ceilingSectorsOverride);
     }
 
     /// <summary>
@@ -79,15 +91,24 @@ public static class ArchiveSpanPlanner
     /// <param name="redundancyPercent">PAR2 redundancy percentage (0..100).</param>
     /// <param name="setId">Optional archive set identifier. Generated if null.</param>
     /// <returns>The calculated spanning plan.</returns>
+    /// <param name="fillFreeSpace">Grow recovery data to fill each disc (redundancy is then the minimum).</param>
+    /// <param name="ceilingSectorsOverride">Sectors per disc in all, instead of the media type's (tests, odd media).</param>
     public static ArchivePlan Plan(
         IReadOnlyList<ArchiveSourceFile> files,
         DiscMediaType mediaType,
         int redundancyPercent,
-        string? setId = null)
+        string? setId = null,
+        bool fillFreeSpace = true,
+        int? ceilingSectorsOverride = null)
     {
         ArgumentNullException.ThrowIfNull(files);
+        if (redundancyPercent < 0 || redundancyPercent > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(redundancyPercent), redundancyPercent, "Redundancy percent must be between 0 and 100.");
+        }
 
-        int usableSectors = CalculateUsableSectors(mediaType, redundancyPercent);
+        int ceilingSectors = ceilingSectorsOverride is > 0 ? ceilingSectorsOverride.Value : CalculateCeilingSectors(mediaType);
+        int usableSectors = UsableSectorsUnder(ceilingSectors, redundancyPercent);
         string effectiveSetId = string.IsNullOrWhiteSpace(setId)
             ? Guid.NewGuid().ToString("N")[..12]
             : setId;
@@ -101,7 +122,9 @@ public static class ArchiveSpanPlanner
                 RedundancyPercent: redundancyPercent,
                 UsableSectorsPerDisc: usableSectors,
                 Discs: Array.Empty<ArchiveDiscPlan>(),
-                TotalBytes: 0L);
+                TotalBytes: 0L,
+                CeilingSectorsPerDisc: ceilingSectors,
+                FillFreeSpace: fillFreeSpace);
         }
 
         var discs = new List<ArchiveDiscPlan>();
@@ -155,6 +178,8 @@ public static class ArchiveSpanPlanner
             RedundancyPercent: redundancyPercent,
             UsableSectorsPerDisc: usableSectors,
             Discs: discs,
-            TotalBytes: totalBytes);
+            TotalBytes: totalBytes,
+            CeilingSectorsPerDisc: ceilingSectors,
+            FillFreeSpace: fillFreeSpace);
     }
 }

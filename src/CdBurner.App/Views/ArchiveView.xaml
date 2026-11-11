@@ -107,7 +107,8 @@
                                    FontWeight="SemiBold"
                                    Margin="0,0,10,0" />
                         <Slider Grid.Column="4"
-                                AutomationProperties.Name="Recovery Data Redundancy"
+                                AutomationProperties.Name="Minimum recovery data"
+                                ToolTip="The least recovery data each disc gets. Free space left on a disc is filled with more, so it survives more damage."
                                 Minimum="0"
                                 Maximum="30"
                                 Value="{Binding RedundancyPercent}"
@@ -118,7 +119,7 @@
                                 TickFrequency="5"
                                 VerticalAlignment="Center" />
                         <TextBlock Grid.Column="5"
-                                   Text="{Binding RedundancyPercent, StringFormat='{}{0}% PAR2'}"
+                                   Text="{Binding RedundancyPercent, StringFormat='min {0}% PAR2'}"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    FontWeight="SemiBold"

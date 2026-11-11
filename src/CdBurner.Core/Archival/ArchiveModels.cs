@@ -28,13 +28,33 @@ public sealed record ArchiveDiscPlan(int DiscNumber, IReadOnlyList<ArchiveSource
 /// <param name="UsableSectorsPerDisc">Usable 2048-byte data sectors per disc.</param>
 /// <param name="Discs">List of planned discs.</param>
 /// <param name="TotalBytes">Total data bytes across all planned discs.</param>
+/// <param name="CeilingSectorsPerDisc">Most sectors a disc may hold in all (files, recovery data, file system);
+/// 0 means the media type's capacity minus the safety reserve.</param>
+/// <param name="FillFreeSpace">When true, recovery data grows past <paramref name="RedundancyPercent"/> (then a
+/// minimum) to fill each disc up to the ceiling.</param>
 public sealed record ArchivePlan(
     string SetId,
     DiscMediaType MediaType,
     int RedundancyPercent,
     int UsableSectorsPerDisc,
     IReadOnlyList<ArchiveDiscPlan> Discs,
-    long TotalBytes);
+    long TotalBytes,
+    int CeilingSectorsPerDisc = 0,
+    bool FillFreeSpace = true)
+{
+    /// <summary>The ceiling in effect: <see cref="CeilingSectorsPerDisc"/> or the media type's.</summary>
+    public int EffectiveCeilingSectors =>
+        CeilingSectorsPerDisc > 0 ? CeilingSectorsPerDisc : ArchiveSpanPlanner.CalculateCeilingSectors(MediaType);
+}
+
+/// <summary>What staging produced for one disc.</summary>
+/// <param name="DiscRoot">Staged disc folder.</param>
+/// <param name="Recovery">par2 settings used when the disc was filled, or null (fixed percentage or none).</param>
+/// <param name="RecoverySectors">Sectors the RECOVERY folder's files take.</param>
+/// <param name="TotalSectors">Sectors all files on the disc take (each rounded up), recovery included.</param>
+/// <param name="RecoveryBudgetSectors">Room the recovery data was sized to fill (0 when not filled).</param>
+public sealed record ArchiveStagedDisc(string DiscRoot, Par2RecoveryLayout? Recovery, int RecoverySectors, int TotalSectors,
+    long RecoveryBudgetSectors = 0);
 
 /// <summary>
 /// File checksum entry in an archive manifest.

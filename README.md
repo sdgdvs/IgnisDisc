@@ -86,8 +86,11 @@ ignisdisc-cli <command> [options]
              [--read-offset <samples>] [--verify-accuraterip] [--secure] [--continue-on-error] [--cover <image>]
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
-             [--redundancy <0-100>]
+             [--redundancy <min %>] [--no-fill]      Recovery data fills each disc; --no-fill keeps exactly that %
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest
+  recover (--drive <id>|--image <file.iso>) --out <folder>
+                                               Copy a damaged archive disc's files out, rebuild them from its
+                                               PAR2 recovery data and check them (exit code 2 if any are lost)
   verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img>
   erase      --drive <id> [--full]
   scan       --drive <id> [--block-size <sectors>] [--csv <file.csv>]
@@ -131,6 +134,7 @@ ignisdisc-cli burn-audio --drive D: --tracks "01.wav,02.wav,03.wav" --title "Dem
 ignisdisc-cli rip --drive D: --output C:\Backup\disc.iso
 ignisdisc-cli rip-audio --drive D: --output C:\Music\Album --format flac --lookup --verify-accuraterip --secure
 ignisdisc-cli archive-stage --input "C:\Photos" --staging C:\temp\archive --media dvd --redundancy 10
+ignisdisc-cli recover --drive D: --out C:\Rescued\disc01
 ignisdisc-cli erase --drive D:
 ```
 

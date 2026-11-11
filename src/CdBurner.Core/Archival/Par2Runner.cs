@@ -113,6 +113,46 @@ public static class Par2Runner
     }
 
     /// <summary>
+    /// Arguments for a create with an explicit block size and recovery block count in a single recovery volume
+    /// (<c>-s</c>, <c>-c</c>, <c>-n1</c>), as sized by <see cref="Par2RecoverySizer"/>.
+    /// </summary>
+    public static IReadOnlyList<string> BuildCreateArguments(string outputPar2Path, string baseDirectory, Par2RecoveryLayout layout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPar2Path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        return new List<string>
+        {
+            "create",
+            "-q",
+            $"-s{layout.BlockSize}",
+            $"-c{layout.RecoveryBlocks}",
+            "-n1",
+            "-R",
+            $"-B{baseDirectory}",
+            outputPar2Path,
+            "*"
+        };
+    }
+
+    /// <summary>
+    /// Creates recovery data with the block size and count in <paramref name="layout"/> (see
+    /// <see cref="CreateAsync(string, string, int, string, CancellationToken)"/> for the folders used).
+    /// </summary>
+    public static Task CreateAsync(
+        string par2Path,
+        string discRoot,
+        Par2RecoveryLayout layout,
+        string scratchDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return CreateCoreAsync(par2Path, discRoot, scratchDirectory,
+            output => BuildCreateArguments(output, discRoot, layout), cancellationToken);
+    }
+
+    /// <summary>
     /// Runs par2cmdline in a scratch folder to create recovery volumes, then moves them to discRoot/RECOVERY.
     /// </summary>
     /// <param name="par2Path">Path to par2 executable.</param>
@@ -121,7 +161,7 @@ public static class Par2Runner
     /// <param name="scratchDirectory">Temporary working directory for par2 generation.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="InvalidOperationException">Thrown if par2 returns a non-zero exit code.</exception>
-    public static async Task CreateAsync(
+    public static Task CreateAsync(
         string par2Path,
         string discRoot,
         int redundancyPercent,
@@ -130,9 +170,20 @@ public static class Par2Runner
     {
         if (redundancyPercent <= 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        return CreateCoreAsync(par2Path, discRoot, scratchDirectory,
+            output => BuildCreateArguments(output, discRoot, redundancyPercent), cancellationToken);
+    }
+
+    private static async Task CreateCoreAsync(
+        string par2Path,
+        string discRoot,
+        string scratchDirectory,
+        Func<string, IReadOnlyList<string>> buildArguments,
+        CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(par2Path);
         ArgumentException.ThrowIfNullOrWhiteSpace(discRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchDirectory);
@@ -150,7 +201,7 @@ public static class Par2Runner
         Directory.CreateDirectory(scratchDirectory);
 
         string outputPar2Path = Path.Combine(scratchDirectory, "recovery.par2");
-        var args = BuildCreateArguments(outputPar2Path, discRoot, redundancyPercent);
+        var args = buildArguments(outputPar2Path);
 
         var psi = new ProcessStartInfo
         {
@@ -272,12 +323,17 @@ public static class Par2Runner
         var filesBefore = new HashSet<string>(
             Directory.EnumerateFiles(folderRoot, "*", SearchOption.AllDirectories), StringComparer.OrdinalIgnoreCase);
 
+        // par2cmdline refuses any file whose full path passes 260 characters. Long names in a deep folder do, so par2
+        // then works through a short directory junction to the same folder (removed afterwards; the folder is kept).
+        using var alias = ShortPathAlias.CreateIfNeeded(folderRoot, filesBefore);
+        string runRoot = alias?.Path ?? folderRoot;
+
         int exitCode;
         string errorOutput;
         int attempts = 1;
         try
         {
-            (exitCode, errorOutput) = await RunRepairOnceAsync(par2Path, folderRoot, cancellationToken).ConfigureAwait(false);
+            (exitCode, errorOutput) = await RunRepairOnceAsync(par2Path, runRoot, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -304,7 +360,7 @@ public static class Par2Runner
                     int retryExitCode;
                     try
                     {
-                        (retryExitCode, _) = await RunRepairOnceAsync(par2Path, folderRoot, cancellationToken).ConfigureAwait(false);
+                        (retryExitCode, _) = await RunRepairOnceAsync(par2Path, runRoot, cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
@@ -494,3 +550,78 @@ public static class Par2Runner
 /// repair and whose original exists again. Files that were already there before the repair are never listed.</param>
 /// <param name="Attempts">Number of par2 runs made.</param>
 public sealed record Par2RepairResult(int ExitCode, string ErrorOutput, IReadOnlyList<string> BackupFiles, int Attempts);
+
+/// <summary>
+/// A short directory junction (under %TEMP%, or the drive root when that path is long too) pointing at a folder, so a
+/// tool limited to 260-character paths can reach files with long names. Disposing removes the junction only; the
+/// folder it points at and its files are untouched.
+/// </summary>
+internal sealed class ShortPathAlias : IDisposable
+{
+    /// <summary>par2cmdline's limit (MAX_PATH); paths at or past it are refused.</summary>
+    internal const int PathLimit = 259;
+
+    private ShortPathAlias(string path) => Path = path;
+
+    public string Path { get; }
+
+    /// <summary>Creates a junction when some file under <paramref name="folder"/> has a path too long; otherwise null.</summary>
+    public static ShortPathAlias? CreateIfNeeded(string folder, IEnumerable<string> files)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        string full = System.IO.Path.GetFullPath(folder).TrimEnd(System.IO.Path.DirectorySeparatorChar);
+        int longestRelative = files.Select(f => f.Length - full.Length).DefaultIfEmpty(0).Max() + 16; // + name.1 backups
+        if (full.Length + longestRelative <= PathLimit)
+        {
+            return null;
+        }
+
+        string temp = System.IO.Path.GetTempPath();
+        string parent = temp.Length <= 40 ? temp : System.IO.Path.GetPathRoot(full)!;
+        string link = System.IO.Path.Combine(parent, "ip2-" + Guid.NewGuid().ToString("N")[..6]);
+        try
+        {
+            var psi = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add("mklink");
+            psi.ArgumentList.Add("/J");
+            psi.ArgumentList.Add(link);
+            psi.ArgumentList.Add(full);
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(10_000);
+            return proc is { ExitCode: 0 } && Directory.Exists(link) ? new ShortPathAlias(link) : null;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            // Non-recursive: removes the junction itself, never what it points at.
+            if (new DirectoryInfo(Path).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                Directory.Delete(Path, recursive: false);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+}

@@ -199,6 +199,7 @@ public static class CliCommandRunner
             "detect-offset" or "detectoffset" => await HandleDetectOffsetAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "archive-stage" or "archivestage" => await HandleArchiveStageAsync(cmd, stdout).ConfigureAwait(false),
             "archive-verify" or "archiveverify" => await HandleArchiveVerifyAsync(cmd, stdout).ConfigureAwait(false),
+            "recover" or "archive-recover" => await HandleRecoverAsync(cmd, stdout, deviceService, burnEngine).ConfigureAwait(false),
             "verify" or "verify-disc" => await HandleVerifyAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "erase" or "erase-disc" => await HandleEraseAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "scan" or "scan-disc" => await HandleScanAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
@@ -1774,7 +1775,8 @@ public static class CliCommandRunner
             throw new CommandLineException($"Invalid redundancy '{redundancyOpt}'. Expected a percentage between 0 and 100.");
         }
 
-        var plan = ArchiveSpanPlanner.Plan(input, media, redundancy);
+        // Recovery data fills each disc unless --no-fill; --redundancy is then the minimum.
+        var plan = ArchiveSpanPlanner.Plan(input, media, redundancy, fillFreeSpace: !cmd.HasFlag("no-fill"));
 
         string? par2Path = null;
         if (!planOnly && redundancy > 0)
@@ -1784,12 +1786,13 @@ public static class CliCommandRunner
                     "PAR2 recovery data needs par2cmdline (par2.exe on PATH). Install it, or pass --redundancy 0 for manifests only.");
         }
 
-        IReadOnlyList<string> stagedDiscs = Array.Empty<string>();
+        IReadOnlyList<ArchiveStagedDisc> staged = Array.Empty<ArchiveStagedDisc>();
         if (!planOnly)
         {
             var progress = cmd.IsJson ? null : new Progress<string>(message => stdout.WriteLine($"  {message}"));
-            stagedDiscs = await ArchiveStager.StageAsync(plan, staging!, par2Path, progress).ConfigureAwait(false);
+            staged = await ArchiveStager.StageDiscsAsync(plan, staging!, par2Path, progress).ConfigureAwait(false);
         }
+        IReadOnlyList<string> stagedDiscs = staged.Select(s => s.DiscRoot).ToList();
 
         if (cmd.IsJson)
         {
@@ -1800,13 +1803,24 @@ public static class CliCommandRunner
                 media = media.ToString(),
                 redundancyPercent = plan.RedundancyPercent,
                 usableSectorsPerDisc = plan.UsableSectorsPerDisc,
+                ceilingSectorsPerDisc = plan.EffectiveCeilingSectors,
+                fillFreeSpace = plan.FillFreeSpace,
                 totalBytes = plan.TotalBytes,
-                discs = plan.Discs.Select(d => new
+                discs = plan.Discs.Select(d =>
                 {
-                    discNumber = d.DiscNumber,
-                    files = d.Files.Count,
-                    dataBytes = d.DataBytes,
-                    path = stagedDiscs.Count >= d.DiscNumber ? stagedDiscs[d.DiscNumber - 1] : null
+                    var s = staged.Count >= d.DiscNumber ? staged[d.DiscNumber - 1] : null;
+                    return new
+                    {
+                        discNumber = d.DiscNumber,
+                        files = d.Files.Count,
+                        dataBytes = d.DataBytes,
+                        path = s?.DiscRoot,
+                        totalSectors = s?.TotalSectors,
+                        recoverySectors = s?.RecoverySectors,
+                        recoveryBlocks = s?.Recovery?.RecoveryBlocks,
+                        recoveryBlockSize = s?.Recovery?.BlockSize,
+                        recoveryPercent = s?.Recovery == null ? (double?)null : Math.Round(s.Recovery.RedundancyPercent, 1)
+                    };
                 }),
                 planOnly
             });
@@ -1833,8 +1847,12 @@ public static class CliCommandRunner
         stdout.WriteLine($"  Discs:            {plan.Discs.Count}");
         foreach (var d in plan.Discs)
         {
-            string where = stagedDiscs.Count >= d.DiscNumber ? $"  -> {stagedDiscs[d.DiscNumber - 1]}" : string.Empty;
-            stdout.WriteLine($"    Disc {d.DiscNumber:D2}: {d.Files.Count:N0} files, {d.DataBytes / 1048576.0:N1} MB{where}");
+            var s = staged.Count >= d.DiscNumber ? staged[d.DiscNumber - 1] : null;
+            string where = s != null ? $"  -> {s.DiscRoot}" : string.Empty;
+            string recovery = s?.Recovery is { } r
+                ? $", recovery {r.RecoverySectors * 2048.0 / 1048576:N1} MB ({r.RedundancyPercent:N0} %, survives {r.RecoveryBlocks:N0} damaged blocks of {r.BlockSize / 1024:N0} KB)"
+                : string.Empty;
+            stdout.WriteLine($"    Disc {d.DiscNumber:D2}: {d.Files.Count:N0} files, {d.DataBytes / 1048576.0:N1} MB{recovery}{where}");
         }
         if (!planOnly && stagedDiscs.Count > 0)
         {
@@ -1842,6 +1860,90 @@ public static class CliCommandRunner
             stdout.WriteLine("  Check a burned disc later with: archive-verify --path <drive letter>");
         }
         return 0;
+    }
+
+    /// <summary>
+    /// recover (--drive &lt;id&gt; | --image &lt;file.iso&gt;) --out &lt;folder&gt; [--retries N] [--keep-image] [--json]:
+    /// reads an archive disc with retries (unreadable sectors zero-filled), copies its files out, rebuilds damaged
+    /// ones from the disc's PAR2 recovery data and checks them against its manifest. Exit code 0 only when every
+    /// file checks out, 2 when some could not be recovered.
+    /// </summary>
+    private static async Task<int> HandleRecoverAsync(
+        CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService, IBurnEngineBackend burnEngine)
+    {
+        string output = Path.GetFullPath(cmd.GetRequiredOption("out", "--out <folder>"));
+        string? image = cmd.GetOption("image");
+        string? driveId = cmd.GetOption("drive");
+        if ((image == null) == (driveId == null))
+        {
+            throw new CommandLineException("Give either --drive <id> to read a disc, or --image <file.iso> for an image of one.");
+        }
+
+        string retriesOption = cmd.GetOption("retries") ?? "5";
+        if (!int.TryParse(retriesOption, NumberStyles.Integer, CultureInfo.InvariantCulture, out int retries) || retries is < 0 or > 100)
+        {
+            throw new CommandLineException($"Invalid --retries '{retriesOption}'. Expected 0 to 100.");
+        }
+
+        var progress = cmd.IsJson ? null : new Progress<string>(message => stdout.WriteLine($"  {message}"));
+        IReadOnlyList<int> unreadable = Array.Empty<int>();
+        string? ripped = null;
+        if (driveId != null)
+        {
+            var recorder = FindRecorder(deviceService, driveId);
+            ripped = output.TrimEnd(Path.DirectorySeparatorChar) + ".read.iso";
+            if (!cmd.IsJson)
+            {
+                stdout.WriteLine($"Reading the disc in {driveId} (up to {retries} retries per bad sector)...");
+            }
+            var rip = await new DiscRipperService().RipToIsoAsync(recorder, burnEngine, ripped,
+                new RipOptions { MaxRetriesPerSector = retries, ContinueOnUnreadableSector = true }).ConfigureAwait(false);
+            if (!File.Exists(ripped))
+            {
+                throw new CommandLineException("The disc could not be read: " + (rip.ErrorMessage ?? "unknown error"));
+            }
+            unreadable = rip.BadSectorLbas;
+            image = ripped;
+        }
+        else if (!File.Exists(image))
+        {
+            throw new CommandLineException($"Image not found: '{image}'.");
+        }
+
+        var report = await ArchiveRecoveryService.RecoverFromImageAsync(
+            image!, unreadable, output, Par2Runner.FindPar2Executable(), progress).ConfigureAwait(false);
+
+        string reportPath = output.TrimEnd(Path.DirectorySeparatorChar) + "-recovery-report.txt";
+        await File.WriteAllTextAsync(reportPath, report.ToText()).ConfigureAwait(false);
+        if (ripped != null && !cmd.HasFlag("keep-image"))
+        {
+            try { File.Delete(ripped); } catch (IOException) { }
+        }
+
+        if (cmd.IsJson)
+        {
+            WriteJsonResult(stdout, new
+            {
+                success = report.FullyRecovered,
+                output = report.OutputFolder,
+                report = reportPath,
+                image = ripped != null && cmd.HasFlag("keep-image") ? ripped : image,
+                unreadableSectors = report.UnreadableSectors.Count,
+                damagedFiles = report.DamagedFiles,
+                repairedFiles = report.RepairedFiles,
+                stillMissing = report.StillMissing,
+                stillCorrupt = report.StillCorrupt,
+                filesChecked = report.FilesChecked,
+                hadRecoveryData = report.HadRecoveryData,
+                problem = report.Problem
+            });
+        }
+        else
+        {
+            stdout.Write(report.ToText());
+            stdout.WriteLine($"Report saved to: {reportPath}");
+        }
+        return report.FullyRecovered ? 0 : 2;
     }
 
     private static async Task<int> HandleArchiveVerifyAsync(CommandLineArgs cmd, TextWriter stdout)
@@ -2225,9 +2327,10 @@ public static class CliCommandRunner
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
-        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <0-100>] [--json]");
+        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--json]");
         stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data.");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
+        stdout.WriteLine("  recover (--drive <id> | --image <file.iso>) --out <folder> [--retries N] [--keep-image] [--json]");
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
