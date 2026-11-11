@@ -878,6 +878,10 @@ public class DataBurnViewModel : ObservableObject
                 BurnProgress = 100.0;
                 StatusMessage = $"Data burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath})."
                     + (directEngine?.LastSummary is { } how ? " " + how : "");
+                if (result.Warning != null)
+                {
+                    StatusMessage += " " + result.Warning;
+                }
             }
             else
             {

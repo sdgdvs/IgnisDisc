@@ -769,6 +769,7 @@ public static class CliCommandRunner
                 averageSpeedMultiplier = result.AverageSpeedMultiplier,
                 verified = result.Verified,
                 verificationNote = result.VerificationNote,
+                warning = result.Warning,
                 phases = phases.Phases.Select(p => new { phase = p.Name, seconds = Math.Round(p.Duration.TotalSeconds, 1) }),
                 directWrite = NativeDataJson(nativeEngine),
                 error = result.ErrorMessage
@@ -787,6 +788,7 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Duration:       {result.TotalTime}");
             stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
             if (result.VerificationNote != null) stdout.WriteLine($"  Verify Note:    {result.VerificationNote}");
+            if (result.Warning != null) stdout.WriteLine($"  Warning:        {result.Warning}");
             WriteNativeDataSummary(stdout, nativeEngine);
             phases.WriteSummary(stdout);
             return 0;

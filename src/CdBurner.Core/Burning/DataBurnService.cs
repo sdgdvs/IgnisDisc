@@ -123,8 +123,61 @@ public class DataBurnService
             }
 
             // 4. Burn stream
-            return await ExecuteBurnPipelineAsync(recorder, imageStream, burnOptions, requiredSectors, progress, cancellationToken);
+            var result = await ExecuteBurnPipelineAsync(recorder, imageStream, burnOptions, requiredSectors, progress, cancellationToken);
+            if (result.Success)
+            {
+                result.Warning = DescribeShortenedNames(rootDirectory, buildOptions, sessionStartLba);
+            }
+            return result;
         }
+    }
+
+    /// <summary>Joliet holds 64 UTF-16 characters per name.</summary>
+    public const int JolietNameLimit = 64;
+
+    /// <summary>
+    /// Says which names the disc cannot hold in full. Only UDF keeps long names, and a disc left open for more
+    /// sessions, or a session added to one, is written without UDF: Windows then reads the Joliet names, which stop
+    /// at <see cref="JolietNameLimit"/> characters. Null when every name fits or the disc carries UDF.
+    /// </summary>
+    public static string? DescribeShortenedNames(CompilationDirectory rootDirectory, IsoBuildOptions buildOptions, int sessionStartLba)
+    {
+        ArgumentNullException.ThrowIfNull(rootDirectory);
+        ArgumentNullException.ThrowIfNull(buildOptions);
+        bool udfOnDisc = buildOptions.IncludeUdf && sessionStartLba == 0;
+        if (udfOnDisc || !buildOptions.IncludeJoliet)
+        {
+            return null;
+        }
+
+        int count = 0;
+        string? example = null;
+        var pending = new Stack<CompilationDirectory>();
+        pending.Push(rootDirectory);
+        while (pending.Count > 0)
+        {
+            foreach (var child in pending.Pop().Children)
+            {
+                if (child.Name.Length > JolietNameLimit)
+                {
+                    count++;
+                    example ??= child.VirtualPath;
+                }
+                if (child is CompilationDirectory directory)
+                {
+                    pending.Push(directory);
+                }
+            }
+        }
+
+        if (count == 0)
+        {
+            return null;
+        }
+
+        string why = sessionStartLba > 0 ? "a session added to a disc" : "a disc without UDF (for example one left open for more sessions)";
+        return $"{count} name(s) longer than {JolietNameLimit} characters were shortened on the disc, for example \"{example}\". " +
+               $"Only UDF holds longer names, and {why} is read through Joliet. The contents of the files are complete.";
     }
 
     /// <summary>
@@ -514,6 +567,12 @@ public class DataBurnResult : BurnOperationResult
     /// or that the drive would not skip its cache. Null when there is nothing to add.
     /// </summary>
     public string? VerificationNote { get; init; }
+
+    /// <summary>
+    /// Something the burn did that the user did not ask for and should know about, although the burn succeeded:
+    /// names shortened on the disc. Null when there is nothing to say.
+    /// </summary>
+    public string? Warning { get; set; }
 
     /// <summary>
     /// Optional path to the temporary or source ISO image file burned.

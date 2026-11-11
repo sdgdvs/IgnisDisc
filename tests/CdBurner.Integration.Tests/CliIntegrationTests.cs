@@ -1122,6 +1122,39 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task BurnData_NamesTooLongForAnOpenDisc_AreReportedAsShortened_ButNotOnAClosedDisc()
+    {
+        string longName = "a file whose name is clearly longer than sixty-four characters in all.txt";
+        Assert.True(longName.Length > 64);
+        string dir = Path.Combine(_tempDir, "longnames");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, longName), "content");
+        File.WriteAllText(Path.Combine(dir, "short.txt"), "content");
+
+        async Task<JsonElement> Burn(params string[] extra)
+        {
+            using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+            _recorder.InsertMedia(medium);
+            var (o, e) = CreateStringWriters();
+            var args = new[] { "burn-data", "--drive", "VDRV-01", "--input", dir, "--label", "NAMES", "--json" }.Concat(extra).ToArray();
+            Assert.Equal(0, await CliCommandRunner.RunAsync(args, o, e, _deviceService, _burnEngine));
+            using var doc = ParseJsonOutput(o);
+            return doc.RootElement.Clone();
+        }
+
+        // Left open for more sessions: no UDF, so the long name is cut to Joliet's 64 characters, and the result says so.
+        var open = await Burn("--no-close");
+        string warning = open.GetProperty("warning").GetString()!;
+        Assert.Contains("1 name(s) longer than 64 characters were shortened", warning);
+        Assert.Contains(longName, warning);
+
+        // Closed disc: UDF carries the full name, nothing to report.
+        var closed = await Burn();
+        Assert.True(closed.GetProperty("success").GetBoolean());
+        Assert.True(!closed.TryGetProperty("warning", out var none) || none.ValueKind == JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task BurnData_MultiSessionCli_MergesPreviousSessionAndOmitsUdfWhenOpen()
     {
         string session1Dir = Path.Combine(_tempDir, "ms_s1");

@@ -124,8 +124,8 @@
     "featureHtml": "Append a session (multi-session)",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions",
-    "notesHtml": "Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions"
+    "notesMarkdown": "Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions; names longer than 64 characters are shortened there, and the burn result says so",
+    "notesHtml": "Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions; names longer than 64 characters are shortened there, and the burn result says so"
   },
   {
     "featureMarkdown": "Bootable discs (El Torito BIOS + UEFI)",
