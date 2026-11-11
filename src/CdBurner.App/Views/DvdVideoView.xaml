@@ -255,14 +255,14 @@
                                   AutomationProperties.Name="DVD-9 Layer Break (OTP)"
                                   SelectedItem="{Binding SelectedLayerBreakLba}"
                                   IsEnabled="{Binding IsDualLayerRequired}"
-                                  ToolTip="16-sector aligned layer break transition address">
+                                  ToolTip="Cell boundaries where the layer change can go (players expect it at the start of a cell). The address shown is on the planned layout; the burn finds the same cell in the built disc image and uses the nearest one on a 16-sector block. Applied only with Direct drive commands.">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding StringFormat='LBA {0:N0}'}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
-                        <TextBlock Text="Requires 16-sector ECC boundary"
+                        <TextBlock Text="Cell boundary; used with Direct drive commands"
                                    FontSize="10"
                                    Foreground="{DynamicResource TextMutedBrush}"
                                    Margin="0,4,0,0" />
@@ -453,6 +453,12 @@
                             ToolTip="Cancel ongoing DVD authoring or burn"
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
                             Margin="0,0,10,0" />
+                    <CheckBox Content="Direct drive commands (experimental)"
+                              AutomationProperties.Name="Direct drive commands (experimental)"
+                              IsChecked="{Binding UseDirectDriveCommands}"
+                              ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, then read the disc back to check it. On a dual-layer DVD+R the layer break goes on the chosen cell boundary, which the Windows writer cannot do. Covers the same discs as on the Data Disc screen."
+                              VerticalAlignment="Center"
+                              Margin="0,0,12,0" />
                     <Button Content="💾 Build DVD ISO..."
                             AutomationProperties.Name="Build DVD ISO"
                             Command="{Binding BuildDvdIsoCommand}"

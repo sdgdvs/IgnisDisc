@@ -185,6 +185,14 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   `SEND DISC STRUCTURE` (0xBF) format 20h (byte 1 = 10, bytes 8-11 = layer 0 size) and read back; the read-back
   decides, because some drives answer 5/26/00 yet set the break (cdwrite list). A break fixed elsewhere that would
   have to move, or one the drive will not take, stops the burn before the first `WRITE`.
+- *DVD-Video layer break on a cell boundary* (2026-11-11, simulator and unit tests). `DvdCellLayerBreak` (Core) reads
+  each title set's cell address table: the IFO's byte 0xE0 holds the VTS_C_ADT sector; 8-byte header (number of VOBs,
+  reserved, end address), 12-byte entries (VOB id, cell id, reserved, start sector, last sector) counted within the
+  title set's VOB files (mpucoder's IFO reference; libdvdread `c_adt_t`, `cell_adr_t`). The DVD-Video screen, with
+  "Direct drive commands" on a dual-layer disc, builds the image, reads where the VTS_nn_k.VOB files landed, places
+  each cell start there, and keeps those on a 16-sector block with layer 0 at least half the disc and within its
+  capacity; the one at or nearest the cell picked in the picker (else nearest an even split) becomes
+  `LayerBreakSectors`. None usable: the burn stops with nothing written.
 - Dual-layer DVD-R goes to the Windows writer with a stated reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
 
 ## Buffer and underrun handling

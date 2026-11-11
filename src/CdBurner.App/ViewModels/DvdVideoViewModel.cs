@@ -308,9 +308,35 @@ public class DvdVideoViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Candidate Layer Break LBAs satisfying 16-sector ECC block alignment and Layer 0 >= Layer 1 capacity.
+    /// Layer break choices for a dual-layer disc. When the VIDEO_TS IFO files can be read these are cell starts (where
+    /// players expect the layer change) within the allowed range, as addresses on the planned layout; otherwise the
+    /// even split. The address on the disc itself is worked out when the image is built.
     /// </summary>
     public ObservableCollection<int> CandidateLayerBreakLbas { get; } = new();
+
+    /// <summary>The cell behind each planned break address, so the burn can find the same cell in the built image.</summary>
+    private readonly Dictionary<int, DvdCellStart> _plannedBreakCells = new();
+
+    /// <summary>
+    /// Burn with IgnisDisc's own drive commands instead of the Windows writer. Off by default. On a dual-layer DVD+R
+    /// it places the layer break on the chosen cell boundary; the Windows writer cannot set a layer break.
+    /// </summary>
+    public bool UseDirectDriveCommands
+    {
+        get => _useDirectDriveCommands;
+        set => SetProperty(ref _useDirectDriveCommands, value);
+    }
+
+    private bool _useDirectDriveCommands;
+
+    /// <summary>Folder for the command logs of direct burns; null for the default under %LOCALAPPDATA%.</summary>
+    public string? DirectBurnLogDirectory { get; set; }
+
+    /// <summary>The direct writer used for the last burn made with <see cref="UseDirectDriveCommands"/>, and its log.</summary>
+    public CdBurner.Hardware.NativeWriting.NativeDataBurnEngine? LastDirectBurnEngine { get; private set; }
+
+    /// <summary>The cell the last dual-layer direct burn put the layer break on, with its address on the disc.</summary>
+    public DvdCellPosition? LastLayerBreak { get; private set; }
 
     /// <summary>
     /// Currently chosen Layer Break transition LBA for Dual-Layer DVD-9 (OTP) recording.
@@ -613,6 +639,7 @@ public class DvdVideoViewModel : ObservableObject
         ValidationMessages.Clear();
         ExtentLayoutRows.Clear();
         CandidateLayerBreakLbas.Clear();
+        _plannedBreakCells.Clear();
         SelectedLayerBreakLba = 0;
         IsDualLayerRequired = false;
         TotalSizeBytes = 0;
@@ -692,7 +719,7 @@ public class DvdVideoViewModel : ObservableObject
                         .ToList();
 
                     var layout = planner.Plan(fileEntries, startLba: 0);
-                    PopulateLayoutAndDualLayer(layout);
+                    PopulateLayoutAndDualLayer(layout, actualVideoTsPath);
                     return;
                 }
             }
@@ -933,7 +960,7 @@ public class DvdVideoViewModel : ObservableObject
                     var layout = planner.Plan(fileEntries, startLba: 0);
                     ExtentLayoutRows.Clear();
                     CandidateLayerBreakLbas.Clear();
-                    PopulateLayoutAndDualLayer(layout);
+                    PopulateLayoutAndDualLayer(layout, result.VideoTsDirectory);
                 }
             }
             else if (!string.IsNullOrEmpty(result.ErrorMessage))
@@ -1145,13 +1172,18 @@ public class DvdVideoViewModel : ObservableObject
             {
                 VolumeLabel = effectiveLabel,
                 CloseDisc = true,
-                VerifyAfterBurn = VerifyAfterBurn,
+                VerifyAfterBurn = VerifyAfterBurn || UseDirectDriveCommands, // a direct burn is always read back
                 EjectAfterBurn = EjectAfterBurn,
                 Speed = SelectedWriteSpeed,
                 OverwriteExistingData = replaceAllowed
             };
 
-            var burnService = new DataBurnService(_burnEngine);
+            var directEngine = UseDirectDriveCommands
+                ? new CdBurner.Hardware.NativeWriting.NativeDataBurnEngine(_burnEngine, DirectBurnLogDirectory)
+                : null;
+            LastDirectBurnEngine = directEngine;
+            LastLayerBreak = null;
+            var burnService = new DataBurnService(directEngine ?? _burnEngine);
             var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
             {
                 if (snap.TotalLba > 0)
@@ -1169,11 +1201,15 @@ public class DvdVideoViewModel : ObservableObject
                 }
             });
 
-            var result = await burnService.BurnCompilationAsync(targetRecorder, root, burnOptions, buildOptions, progressHandler, cts.Token);
+            var result = directEngine != null && IsDualLayerRequired
+                ? await BurnDualLayerOnCellBoundaryAsync(burnService, targetRecorder, root, burnOptions, buildOptions, progressHandler, cts.Token)
+                : await burnService.BurnCompilationAsync(targetRecorder, root, burnOptions, buildOptions, progressHandler, cts.Token);
             if (result.Success)
             {
                 BurnProgress = 100.0;
-                StatusMessage = $"DVD-Video burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath}).";
+                StatusMessage = $"DVD-Video burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath})."
+                    + (LastLayerBreak is { } brk ? $" Layer break: {brk}." : "")
+                    + (directEngine?.LastSummary is { } how ? " " + how : "");
             }
             else
             {
@@ -1204,8 +1240,9 @@ public class DvdVideoViewModel : ObservableObject
 
     #region Helpers
 
-    private void PopulateLayoutAndDualLayer(DvdVideoLayout layout)
+    private void PopulateLayoutAndDualLayer(DvdVideoLayout layout, string? videoTsFolder = null)
     {
+        _plannedBreakCells.Clear();
         TotalSectors = layout.TotalSectors;
 
         foreach (var placement in layout.Placements)
@@ -1236,7 +1273,21 @@ public class DvdVideoViewModel : ObservableObject
 
         // 4. Dual-Layer assessment
         IsDualLayerRequired = DvdLayerBreakCalculator.RequiresLayerBreak(layout.TotalSectors);
-        if (IsDualLayerRequired)
+        if (IsDualLayerRequired && PlannedCellBreaks(layout, videoTsFolder) is { Count: > 0 } cellBreaks)
+        {
+            // Real cell starts in the allowed range (layer 0 at least half, within its capacity). Whether a cell also
+            // lands on a 16-sector block is only known on the built image, so that is checked at burn time.
+            int minLayer0 = DvdLayerBreakCalculator.CalculateMinimumLayer0Sectors(layout.TotalSectors);
+            foreach (var p in cellBreaks)
+            {
+                CandidateLayerBreakLbas.Add(p.Lba);
+                _plannedBreakCells[p.Lba] = p.Cell;
+            }
+            var nearest = cellBreaks.OrderBy(p => Math.Abs(p.Lba - minLayer0)).First();
+            SelectedLayerBreakLba = nearest.Lba;
+            ValidationMessages.Add($"Dual-Layer DVD-9 required ({layout.TotalSectors:N0} sectors). {cellBreaks.Count} cell boundaries can take the layer break; nearest an even split: title set {nearest.Cell.TitleSet}, cell {nearest.Cell.CellId}. The address on the disc is worked out when the image is built.");
+        }
+        else if (IsDualLayerRequired)
         {
             var candidates = DvdLayerBreakCalculator.CalculateCandidates(layout.TotalSectors, Array.Empty<int>());
             if (candidates.Count == 0)
@@ -1266,6 +1317,98 @@ public class DvdVideoViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Cell starts of the VIDEO_TS folder placed on the planned layout, within the range a layer break may take;
+    /// empty when there is no folder or no readable title set IFO.
+    /// </summary>
+    private static IReadOnlyList<DvdCellPosition> PlannedCellBreaks(DvdVideoLayout layout, string? videoTsFolder)
+    {
+        if (string.IsNullOrEmpty(videoTsFolder) || !Directory.Exists(videoTsFolder))
+        {
+            return Array.Empty<DvdCellPosition>();
+        }
+
+        var files = layout.FilePlacements
+            .GroupBy(p => p.FileName.ToUpperInvariant())
+            .ToDictionary(g => g.Key, g => (g.First().StartLba.Value, g.First().SectorCount));
+        var positions = DvdCellLayerBreak.PlaceCells(files, name => ReadSmallFile(Path.Combine(videoTsFolder, name)));
+        int minLayer0 = DvdLayerBreakCalculator.CalculateMinimumLayer0Sectors(layout.TotalSectors);
+        return positions
+            .Where(p => p.Lba >= minLayer0 && p.Lba <= DvdLayerBreakCalculator.MaxLayer0Sectors)
+            .GroupBy(p => p.Lba).Select(g => g.First())
+            .OrderBy(p => p.Lba)
+            .ToList();
+    }
+
+    /// <summary>An IFO's bytes, or null if it cannot be read or is too large to be one.</summary>
+    private static byte[]? ReadSmallFile(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists && info.Length <= 16 * 1024 * 1024 ? File.ReadAllBytes(path) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Dual-layer burn with the direct writer: builds the image, finds the cells in it, puts the layer break on the
+    /// usable cell start nearest the one picked (or nearest an even split), then burns the image with that break.
+    /// Stops before writing when no cell start can take the break.
+    /// </summary>
+    private async Task<DataBurnResult> BurnDualLayerOnCellBoundaryAsync(DataBurnService burnService, IDiscRecorderBackend recorder,
+        CompilationDirectory root, DataBurnOptions burnOptions, IsoBuildOptions buildOptions, IProgress<BurnProgressSnapshot> progress,
+        CancellationToken cancellationToken)
+    {
+        string tempImage = Path.Combine(Path.GetTempPath(), $"ignisdisc_dvd9_{Guid.NewGuid():N}.iso");
+        await using var image = new FileStream(tempImage, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 65536,
+            FileOptions.DeleteOnClose | FileOptions.Asynchronous);
+        StatusMessage = "Building the disc image to place the layer break...";
+        await IsoUdfImageBuilder.BuildAsync(root, image, buildOptions, null, cancellationToken, 0);
+        int totalSectors = OpticalConstants.BytesToSectors(image.Length, OpticalConstants.DataSectorSize);
+
+        DvdCellPosition? chosen;
+        image.Position = 0;
+        using (var reader = IsoImageReader.FromStream(image, leaveOpen: true))
+        {
+            var videoTs = reader.FindDirectory("/VIDEO_TS");
+            var entries = videoTs?.Files.GroupBy(f => f.Name.ToUpperInvariant()).ToDictionary(g => g.Key, g => g.First())
+                          ?? new Dictionary<string, IsoFileEntry>();
+            var files = entries.ToDictionary(e => e.Key,
+                e => (e.Value.StartLba, OpticalConstants.BytesToSectors(e.Value.SizeBytes, OpticalConstants.DataSectorSize)));
+            var positions = DvdCellLayerBreak.PlaceCells(files,
+                name => entries.TryGetValue(name, out var entry) && entry.SizeBytes <= 16 * 1024 * 1024 ? reader.ReadFileBytes(entry) : null);
+            DvdCellStart? picked = _plannedBreakCells.TryGetValue(SelectedLayerBreakLba, out var cell) ? cell : null;
+            chosen = DvdCellLayerBreak.Choose(positions, totalSectors, picked);
+        }
+
+        if (chosen == null)
+        {
+            return DataBurnResult.Failed("No cell boundary of this DVD-Video can take the layer break (it must start on a 16-sector " +
+                "block with at least half the disc on the first layer). Nothing was written. Without Direct drive commands, the " +
+                "Windows writer burns the disc and places the break itself.");
+        }
+
+        LastLayerBreak = chosen;
+        StatusMessage = $"Layer break: {chosen} ({chosen.Lba * 100.0 / totalSectors:F1}% on the first layer). Burning...";
+        image.Position = 0;
+        var options = new DataBurnOptions
+        {
+            VolumeLabel = burnOptions.VolumeLabel,
+            CloseDisc = burnOptions.CloseDisc,
+            VerifyAfterBurn = burnOptions.VerifyAfterBurn,
+            StrictVerify = burnOptions.StrictVerify,
+            EjectAfterBurn = burnOptions.EjectAfterBurn,
+            Speed = burnOptions.Speed,
+            OverwriteExistingData = burnOptions.OverwriteExistingData,
+            LayerBreakSectors = chosen.Lba
+        };
+        return await burnService.BurnStreamAsync(recorder, image, options, progress, cancellationToken);
+    }
+
     private void RefreshDrives()
     {
         var recorders = _deviceService.GetRecorders();
@@ -1289,6 +1432,7 @@ public class DvdVideoViewModel : ObservableObject
         ValidationMessages.Clear();
         ExtentLayoutRows.Clear();
         CandidateLayerBreakLbas.Clear();
+        _plannedBreakCells.Clear();
         SelectedLayerBreakLba = 0;
         IsDualLayerRequired = false;
         TotalSizeBytes = 0;

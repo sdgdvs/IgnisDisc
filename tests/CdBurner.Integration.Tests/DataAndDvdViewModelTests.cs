@@ -317,6 +317,43 @@ public sealed class DataAndDvdViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task DvdVideoViewModel_WithDirectDriveCommands_BurnsThroughTheDirectWriter()
+    {
+        string dvdDir = Path.Combine(_tempDir, "DvdDirectSource");
+        string videoTsDir = Path.Combine(dvdDir, "VIDEO_TS");
+        Directory.CreateDirectory(videoTsDir);
+        byte[] vmgBytes = DvdVideoValidator.CreateSyntheticVmgIfo();
+        byte[] vtsBytes = DvdVideoValidator.CreateSyntheticVtsIfo();
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VIDEO_TS.IFO"), vmgBytes);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VIDEO_TS.VOB"), new byte[2048]);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VIDEO_TS.BUP"), (byte[])vmgBytes.Clone());
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_0.IFO"), vtsBytes);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_0.VOB"), new byte[2048]);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_1.VOB"), new byte[4096]);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_0.BUP"), (byte[])vtsBytes.Clone());
+
+        var vm = new DvdVideoViewModel(_deviceManager, _burnEngine)
+        {
+            VideoTsFolderPath = dvdDir,
+            VolumeLabel = "DVD_DIRECT",
+            UseDirectDriveCommands = true,
+            DirectBurnLogDirectory = Path.Combine(_tempDir, "logs")
+        };
+        Assert.True(vm.IsStructureValid);
+        Assert.False(vm.IsDualLayerRequired);
+
+        var result = await vm.StartDvdBurnAsync("VDRV-01");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified); // a direct burn is always read back
+        Assert.NotNull(vm.LastDirectBurnEngine);
+        Assert.Null(vm.LastDirectBurnEngine!.LastFallbackReason);
+        Assert.True(vm.LastDirectBurnEngine.LastResult!.IsDvd);
+        Assert.Null(vm.LastLayerBreak); // single layer: no break to place
+        Assert.Contains("direct drive commands", vm.StatusMessage);
+    }
+
+    [Fact]
     public async Task DvdVideoViewModel_OneClickMkvAndMp4WithJunkFiles_AutoConvertsCreatesMenuBuildsIsoAndBurnsToVdrv01()
     {
         // 1. Arrange: Create temp folder containing movies and junk files
