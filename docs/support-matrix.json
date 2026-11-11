@@ -4,8 +4,8 @@
     "featureHtml": "Burn a data disc from files and folders",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "ISO 9660 + Joliet + UDF 1.02 bridge",
-    "notesHtml": "ISO 9660 + Joliet + UDF 1.02 bridge"
+    "notesMarkdown": "ISO 9660 + Joliet + UDF bridge; UDF 1.02 by default, 1.50 to 2.60 on request (`--udf-rev`)",
+    "notesHtml": "ISO 9660 + Joliet + UDF bridge; UDF 1.02 by default, 1.50 to 2.60 on request (<code>--udf-rev</code>)"
   },
   {
     "featureMarkdown": "Burn an existing `.iso`",
@@ -28,8 +28,16 @@
     "featureHtml": "Verify after burning",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "SHA-256 readback",
-    "notesHtml": "Reads the disc back and compares SHA-256"
+    "notesMarkdown": "Reads every sector back and compares it with the image. The drive is told to read the disc itself, not its memory, where burn data can still be held; `--strict-verify` does that for every read. Damage is reported by file",
+    "notesHtml": "Reads every sector back and compares it with the image. The drive is told to read the disc itself, not its memory, where burn data can still be held; <code>--strict-verify</code> does that for every read. Damage is reported by file"
+  },
+  {
+    "featureMarkdown": "Hash lists on data discs (`SHA256SUMS` / `BLAKE3SUMS`)",
+    "featureHtml": "Hash lists on data discs (<code>SHA256SUMS</code> / <code>BLAKE3SUMS</code>)",
+    "physical": "✅",
+    "virtual": "✅",
+    "notesMarkdown": "Optional (`--sha256sums`, `--blake3sums`, or checkboxes on the Data Disc screen); written to the disc root and checked file by file after the burn",
+    "notesHtml": "Optional (<code>--sha256sums</code>, <code>--blake3sums</code>, or checkboxes on the Data Disc screen); written to the disc root and checked file by file after the burn"
   },
   {
     "featureMarkdown": "Rip data disc to `.iso` / `.bin` + `.cue`",
@@ -92,8 +100,8 @@
     "featureHtml": "Archive Studio: span folders across discs",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`)",
-    "notesHtml": "SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code>"
+    "notesMarkdown": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) fills the space left on each disc; `recover` copies the files off a damaged archive disc and rebuilds them",
+    "notesHtml": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs <code>par2.exe</code>) fills the space left on each disc; <code>recover</code> copies the files off a damaged archive disc and rebuilds them"
   },
   {
     "featureMarkdown": "Quick / full erase of rewritable media",
@@ -152,6 +160,14 @@
     "notesHtml": "Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive"
   },
   {
+    "featureMarkdown": "Burn CDs with direct drive commands (experimental, off by default)",
+    "featureHtml": "Burn CDs with direct drive commands (experimental, off by default)",
+    "physical": "⚠️",
+    "virtual": "✅",
+    "notesMarkdown": "Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or \"Direct drive commands\" in the app); the disc is always read back and compared. DVDs and Blu-ray discs still use the Windows writer. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW",
+    "notesHtml": "Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (<code>--native</code>, or \"Direct drive commands\" in the app); the disc is always read back and compared. DVDs and Blu-ray discs still use the Windows writer. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW"
+  },
+  {
     "featureMarkdown": "CD-Text / ISRC on burned audio CDs",
     "featureHtml": "CD-Text / ISRC on burned audio CDs",
     "physical": "⚠️",
@@ -170,9 +186,9 @@
   {
     "featureMarkdown": "Test-write / simulation",
     "featureHtml": "Test write (simulation)",
-    "physical": "❌",
+    "physical": "⚠️",
     "virtual": "✅",
-    "notesMarkdown": "Not available through IMAPIv2",
-    "notesHtml": "Not available through IMAPIv2"
+    "notesMarkdown": "CDs only, with the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. The Windows writer has no test write",
+    "notesHtml": "CDs only, with the experimental direct writer (<code>--native --test-write</code>): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. The Windows writer has no test write"
   }
 ]

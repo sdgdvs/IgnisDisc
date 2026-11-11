@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IgnisDisc Optical Studio — Windows CD/DVD Burner, Audio CD Ripper &amp; Archiver</title>
-  <meta name="description" content="IgnisDisc Optical Studio (v1.12): native Windows 10/11 WPF desktop application and scriptable CLI for ISO/UDF/El Torito burning, C2/AccurateRip audio CD extraction, and multi-disc SHA-256 + PAR2 cold archival." />
+  <meta name="description" content="IgnisDisc Optical Studio (v1.12): free, open-source Windows 10/11 desktop app and command-line tool for burning data, audio and video discs (ISO 9660 / Joliet / UDF, El Torito), ripping audio CDs with C2 error pointers and AccurateRip, and multi-disc archives with SHA-256 manifests and PAR2 recovery data." />
   <link rel="icon" type="image/x-icon" href="/assets/IgnisDisc.ico" />
-  <link rel="stylesheet" href="/styles.css?v=1.10.4" />
+  <link rel="stylesheet" href="/styles.css?v=1.12.1" />
 </head>
 <body>
   <!-- Top Bar -->
@@ -20,7 +20,7 @@
       <div class="telemetry-meta">
         <div class="telemetry-cell">REV: <span id="navVersion">v1.12</span></div>
         <div class="telemetry-cell">TARGET: <strong>WIN10/11 x64 (.NET 10)</strong></div>
-        <div class="telemetry-cell">LICENSE: <strong>GPL-3.0</strong></div>
+        <div class="telemetry-cell">LICENSE: <strong>GPL-3.0-OR-LATER</strong></div>
         <div class="telemetry-cell">SRC: <a id="navGithubLink" href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">GITHUB</a></div>
       </div>
     </div>
@@ -33,7 +33,7 @@
       <div class="cell">
         <h1 class="spec-title">Burn CDs and DVDs, rip music CDs, and back up folders on Windows.</h1>
         <p class="spec-lead">
-          <strong>IgnisDisc</strong> is a free, open-source disc burner and audio CD ripper for Windows 10 and 11. Burn files, folders, and <code>.iso</code> images to CD or DVD, make audio CDs from WAV, FLAC, MP3, or M4A tracks, rip your music CDs to lossless audio with automatic track names, or split a large folder across several numbered backup discs. It uses Windows' built-in disc burning service — no extra drivers, no ads, no bundled offers, and no tracking.
+          <strong>IgnisDisc</strong> is a free, open-source disc burner and audio CD ripper for Windows 10 and 11. Burn files, folders, and <code>.iso</code> images to CD or DVD, make audio CDs from WAV, FLAC, MP3, M4A, or WMA tracks, rip your music CDs to lossless audio with automatic track names, or split a large folder across several numbered backup discs. After a burn it can read the whole disc back and compare it with what you asked for. Burning goes through Windows' built-in disc burning service by default; for CDs you can switch on IgnisDisc's own drive commands instead (experimental), which also write CD-Text and always check the disc afterwards. No extra drivers, no ads, no bundled offers, and no tracking.
         </p>
 
         <!-- Download & Verification Block -->
@@ -93,27 +93,47 @@
 
           <!-- Pane 2: CLI JSON Telemetry Output -->
           <div class="instrument-pane" id="paneCli" role="tabpanel" aria-labelledby="tabBtnCli" hidden>
-            <pre class="terminal-pre"><code>PS C:\&gt; ignisdisc-cli.exe media-info --drive H: --json
+            <pre class="terminal-pre"><code># Real output from an LG GP60NB50, shortened (... marks left-out lines)
+
+PS C:\&gt; ignisdisc-cli.exe media-info --drive H: --json
 {
-  "driveId": "H:",
-  "vendor": "HL-DT-ST",
-  "product": "DVDRAM GP60NB50",
-  "firmware": "PE00",
-  "mediaType": "DVD-R",
-  "mediaState": "Blank, Writable",
-  "freeBytes": 4706074624,
-  "totalBytes": 4706074624,
-  "sessions": 0,
-  "supportedSpeedsKBps": [ 2770, 5540, 11080 ]
+  "engine": "IgnisDisc v1.12 (GPL-3.0-or-later, https://ignisdisc.tetherworks.dev)",
+  "success": true,
+  ...
+  "vendorId": "HL-DT-ST",
+  "productId": "DVDRAM GP60NB50",
+  "productRevision": "RF02",
+  ...
+  "mediaTypeName": "DVD\u002BRW",
+  "mediaManufacturerId": "MKM-A02-00 (Mitsubishi Chemical Corp. (Verbatim))",
+  ...
+  "isBlank": false,
+  "isRewritable": true,
+  ...
+  "totalCapacityBytes": 4700372992,
+  ...
+  "usedSectors": 31055,
+  "sessionCount": 1,
+  ...
 }
 
-PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac --secure --verify-accuraterip --json
+PS C:\&gt; ignisdisc-cli.exe burn-audio --drive H: --tracks album\album.cue --dao --native --log-dir logs --json
 {
-  "status": "Completed",
-  "tracksRipped": 12,
-  "c2RecoveredSectors": 0,
-  "accurateRipVerified": true,
-  "appliedReadOffsetSamples": 6
+  ...
+  "success": true,
+  "testWrite": false,
+  "native": true,
+  "commandLog": "logs\\native-write-20261110-204257.log",
+  ...
+  "discRecorded": true,
+  "verified": true,
+  "verifyMessage": "Read-back check passed: 4 track(s), 3,748,500 audio samples identical (drive offset 0 samples).",
+  "readBackOffsetSamples": 0,
+  "samplesCompared": 3748500,
+  ...
+  "trackCount": 4,
+  "sectorsWritten": 18068,
+  ...
 }</code></pre>
           </div>
         </div>
@@ -134,10 +154,11 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
           </thead>
           <!-- SUPPORT-TABLE-START -->
               <tbody>
-                <tr><td>Burn a data disc from files and folders</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>ISO 9660 + Joliet + UDF 1.02 bridge</td></tr>
+                <tr><td>Burn a data disc from files and folders</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>ISO 9660 + Joliet + UDF bridge; UDF 1.02 by default, 1.50 to 2.60 on request (<code>--udf-rev</code>)</td></tr>
                 <tr><td>Burn an existing <code>.iso</code></td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td></td></tr>
                 <tr><td>Create <code>.iso</code> image files</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-na">[ N/A ]</span></td><td>Validated against an independent reader (DiscUtils) in the test suite</td></tr>
-                <tr><td>Verify after burning</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Reads the disc back and compares SHA-256</td></tr>
+                <tr><td>Verify after burning</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Reads every sector back and compares it with the image. The drive is told to read the disc itself, not its memory, where burn data can still be held; <code>--strict-verify</code> does that for every read. Damage is reported by file</td></tr>
+                <tr><td>Hash lists on data discs (<code>SHA256SUMS</code> / <code>BLAKE3SUMS</code>)</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Optional (<code>--sha256sums</code>, <code>--blake3sums</code>, or checkboxes on the Data Disc screen); written to the disc root and checked file by file after the burn</td></tr>
                 <tr><td>Rip a data disc to <code>.iso</code> or <code>.bin</code> + <code>.cue</code></td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td></td></tr>
                 <tr><td>Burn an audio CD (Disc-at-Once / Track-at-Once)</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>From WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; <code>.cue</code> sheets (per-track or single-file albums) and <code>.m3u</code>/<code>.m3u8</code>/<code>.pls</code> playlists; loudness leveling, crossfade, preview, printable jewel-case insert</td></tr>
                 <tr><td>Burn, verify or convert Nero, Alcohol 120% and CloneCD images</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td><code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; streamed, no size limit</td></tr>
@@ -145,7 +166,7 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
                 <tr><td>Rip an audio CD to WAV or FLAC + <code>.cue</code></td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Reads the real TOC and CD-Text; optional MusicBrainz track names</td></tr>
                 <tr><td>AccurateRip verification and read-offset correction</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Detects your drive's offset from a disc in the AccurateRip database</td></tr>
                 <tr><td>Secure audio ripping (C2 error pointers and re-reads)</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Flags suspect sectors; can be slow on badly scratched discs</td></tr>
-                <tr><td>Archive Studio: span folders across discs</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>SHA-256 manifest on every disc; optional PAR2 recovery data needs <code>par2.exe</code></td></tr>
+                <tr><td>Archive Studio: span folders across discs</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>SHA-256 manifest on every disc; optional PAR2 recovery data (needs <code>par2.exe</code>) fills the space left on each disc; <code>recover</code> copies the files off a damaged archive disc and rebuilds them</td></tr>
                 <tr><td>Quick or full erase of rewritable media</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td></td></tr>
                 <tr><td>Re-burn a used DVD+RW / DVD-RAM</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Asks before replacing the files on the disc (<code>--overwrite</code> on the command line); finalized CD-RW / sequential DVD-RW require <code>erase</code> first</td></tr>
                 <tr><td>Surface scan</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Per-track Full TOC (<code>0x02</code>) scan skips unrecorded multi-session gaps and auto-selects 2352B raw mode on audio tracks</td></tr>
@@ -153,9 +174,10 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
                 <tr><td>Bootable discs (El Torito BIOS + UEFI)</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders</td></tr>
                 <tr><td>DVD-Video authoring</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Requires <code>ffmpeg.exe</code>; test on a standalone player before relying on it</td></tr>
                 <tr><td>Blu-ray (BD-R / BD-RE)</td><td><span class="badge-na">[ N/A ]</span></td><td><span class="badge-na">[ N/A ]</span></td><td>Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive</td></tr>
+                <tr><td>Burn CDs with direct drive commands (experimental, off by default)</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (<code>--native</code>, or "Direct drive commands" in the app); the disc is always read back and compared. DVDs and Blu-ray discs still use the Windows writer. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW</td></tr>
                 <tr><td>CD-Text / ISRC on burned audio CDs</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (<code>--native</code>, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly</td></tr>
                 <tr><td>DVD+R book type (bitsetting)</td><td><span class="badge-na">[ N/A ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Needs drive-vendor-specific commands; reports "not supported" instead of pretending</td></tr>
-                <tr><td>Test write (simulation)</td><td><span class="badge-na">[ N/A - IMAPIv2 ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Not available through IMAPIv2</td></tr>
+                <tr><td>Test write (simulation)</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>CDs only, with the experimental direct writer (<code>--native --test-write</code>): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. The Windows writer has no test write</td></tr>
               </tbody>
               <!-- SUPPORT-TABLE-END -->
         </table>
@@ -167,7 +189,7 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
       <!-- Left Column: Command Syntax Table -->
       <div class="cell">
         <p class="spec-lead">
-          <code>ignisdisc-cli.exe</code> exposes 16 headless subcommands. Every command accepts <code>--json</code> for structured stdout output and returns deterministic process exit codes (<code>0</code> on success).
+          <code>ignisdisc-cli.exe</code> has 17 commands. Every command accepts <code>--json</code> for machine-readable output and exits with code <code>0</code> on success.
         </p>
         <div class="table-scroll">
           <table class="spec-table">
@@ -180,27 +202,31 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
             <tbody>
               <tr>
                 <td><code>drives</code></td>
-                <td><code>[--json]</code> — Enumerate physical and virtual optical recorders</td>
+                <td><code>[--json]</code> — List physical and virtual drives and what they can write</td>
               </tr>
               <tr>
                 <td><code>media-info</code></td>
-                <td><code>--drive &lt;id&gt; [--json]</code> — Media type, sessions, capacity, speeds</td>
+                <td><code>--drive &lt;id&gt;</code> — Disc type, maker ID, sessions, capacity, and the write speeds the drive reports</td>
+              </tr>
+              <tr>
+                <td><code>drive-report</code></td>
+                <td><code>--drive &lt;id&gt;</code> — Drive capability and media ID report as Markdown</td>
               </tr>
               <tr>
                 <td><code>build-iso</code></td>
-                <td><code>--input &lt;dir&gt; --output &lt;iso&gt; [--label &lt;vol&gt;] [--udf] [--joliet] [--boot-bios &lt;img&gt;] [--boot-uefi &lt;img&gt;]</code></td>
+                <td><code>--input &lt;dir&gt; --output &lt;iso&gt; [--label &lt;vol&gt;] [--udf] [--joliet] [--udf-rev &lt;1.02|1.50|2.00|2.01|2.50|2.60&gt;] [--boot-bios &lt;img&gt;] [--boot-uefi &lt;img&gt;] [--fixed-time &lt;t&gt;] [--sha256sums] [--blake3sums]</code></td>
               </tr>
               <tr>
                 <td><code>burn-iso</code></td>
-                <td><code>--drive &lt;id&gt; --iso &lt;file&gt; [--speed &lt;X&gt;] [--verify] [--no-close] [--overwrite]</code></td>
+                <td><code>--drive &lt;id&gt; --iso &lt;file&gt; [--speed &lt;X&gt;] [--verify | --strict-verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
               </tr>
               <tr>
                 <td><code>burn-data</code></td>
-                <td><code>--drive &lt;id&gt; --input &lt;dir&gt; [--label &lt;vol&gt;] [--verify] [--no-close] [--overwrite]</code></td>
+                <td><code>--drive &lt;id&gt; --input &lt;dir&gt; [--label &lt;vol&gt;] [--speed &lt;X&gt;] [--udf-rev &lt;rev&gt;] [--verify | --strict-verify] [--no-close] [--overwrite] [--sha256sums] [--blake3sums] [--fixed-time &lt;t&gt;] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
               </tr>
               <tr>
                 <td><code>burn-audio</code></td>
-                <td><code>--drive &lt;id&gt; --tracks &lt;list|cue|m3u&gt; [--title &lt;str&gt;] [--artist &lt;str&gt;] [--dao] [--native --test-write]</code></td>
+                <td><code>--drive &lt;id&gt; --tracks &lt;files|cue|m3u&gt; [--title &lt;str&gt;] [--artist &lt;str&gt;] [--speed &lt;X&gt;] [--dao] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
               </tr>
               <tr>
                 <td><code>burn-dvd</code></td>
@@ -212,27 +238,35 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
               </tr>
               <tr>
                 <td><code>rip-audio</code></td>
-                <td><code>--drive &lt;id&gt; --output &lt;dir&gt; [--format wav|flac] [--secure] [--verify-accuraterip] [--read-offset &lt;n&gt;] [--cover &lt;img&gt;]</code></td>
+                <td><code>--drive &lt;id&gt; --output &lt;dir&gt; [--format wav|flac] [--tracks 1,3,5] [--lookup] [--secure] [--verify-accuraterip] [--read-offset &lt;n&gt;] [--cover &lt;img&gt;] [--keep-wav] [--continue-on-error]</code></td>
               </tr>
               <tr>
                 <td><code>detect-offset</code></td>
-                <td><code>--drive &lt;id&gt;</code> — Detect drive sample offset against AccurateRip key disc</td>
+                <td><code>--drive &lt;id&gt;</code> — Find the drive's audio read offset from a CD that is in the AccurateRip database</td>
               </tr>
               <tr>
                 <td><code>archive-stage</code></td>
-                <td><code>--input &lt;dir&gt; (--staging &lt;dir&gt; | --plan-only) [--media cd|dvd|dvd-dl] [--redundancy &lt;0-100&gt;]</code></td>
+                <td><code>--input &lt;dir&gt; (--staging &lt;dir&gt; | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy &lt;min %&gt;] [--no-fill]</code></td>
               </tr>
               <tr>
                 <td><code>archive-verify</code></td>
-                <td><code>--path &lt;dir|drive&gt; [--json]</code> — Verify disc against SHA-256 manifest</td>
+                <td><code>--path &lt;dir|drive&gt;</code> — Check an archive disc against its SHA-256 manifest</td>
               </tr>
               <tr>
-                <td><code>verify</code> / <code>erase</code> / <code>scan</code></td>
-                <td><code>verify --drive &lt;id&gt; --iso &lt;file&gt;</code> | <code>erase --drive &lt;id&gt; [--full]</code> | <code>scan --drive &lt;id&gt; [--csv &lt;file&gt;]</code></td>
+                <td><code>recover</code></td>
+                <td><code>(--drive &lt;id&gt; | --image &lt;iso&gt;) --out &lt;dir&gt; [--retries N] [--keep-image]</code> — Copy the files off a damaged archive disc and rebuild them with par2</td>
               </tr>
               <tr>
-                <td><code>drive-report</code></td>
-                <td><code>--drive &lt;id&gt; [--json]</code> — Generate drive capability &amp; media ID report</td>
+                <td><code>verify</code></td>
+                <td><code>--drive &lt;id&gt; --iso &lt;file&gt;</code> — Compare a disc with an image, sector by sector</td>
+              </tr>
+              <tr>
+                <td><code>erase</code></td>
+                <td><code>--drive &lt;id&gt; [--full]</code> — Erase a rewritable disc</td>
+              </tr>
+              <tr>
+                <td><code>scan</code></td>
+                <td><code>--drive &lt;id&gt; [--block-size &lt;sectors&gt;] [--csv &lt;file&gt;]</code> — Surface scan with read-speed curve</td>
               </tr>
             </tbody>
           </table>
@@ -268,10 +302,26 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
 
           <div class="cli-block">
             <div class="cli-block-head">
-              <span>MULTI-SESSION DATA APPEND &amp; SHA-256 READBACK VERIFY</span>
+              <span>FIRST SESSION OF A MULTI-SESSION DISC, READ BACK AND COMPARED</span>
               <button type="button" class="btn-copy" data-copy="ignisdisc-cli.exe burn-data --drive H: --input &quot;C:\Batch1&quot; --label &quot;ARCHIVE_S1&quot; --no-close --verify">[ COPY ]</button>
             </div>
             <pre class="cli-block-code"><code>ignisdisc-cli.exe burn-data --drive H: --input "C:\Batch1" --label "ARCHIVE_S1" --no-close --verify</code></pre>
+          </div>
+
+          <div class="cli-block">
+            <div class="cli-block-head">
+              <span>DATA DISC WITH A SHA256SUMS LIST AND A STRICT READ-BACK CHECK</span>
+              <button type="button" class="btn-copy" data-copy="ignisdisc-cli.exe burn-data --drive H: --input &quot;C:\Photos&quot; --label &quot;PHOTOS_2026&quot; --sha256sums --strict-verify">[ COPY ]</button>
+            </div>
+            <pre class="cli-block-code"><code>ignisdisc-cli.exe burn-data --drive H: --input "C:\Photos" --label "PHOTOS_2026" --sha256sums --strict-verify</code></pre>
+          </div>
+
+          <div class="cli-block">
+            <div class="cli-block-head">
+              <span>AUDIO CD WITH CD-TEXT FROM A CUE SHEET, DIRECT DRIVE COMMANDS (EXPERIMENTAL)</span>
+              <button type="button" class="btn-copy" data-copy="ignisdisc-cli.exe burn-audio --drive H: --tracks &quot;C:\Album\album.cue&quot; --dao --native --json">[ COPY ]</button>
+            </div>
+            <pre class="cli-block-code"><code>ignisdisc-cli.exe burn-audio --drive H: --tracks "C:\Album\album.cue" --dao --native --json</code></pre>
           </div>
         </div>
       </div>
@@ -282,16 +332,16 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
       <div class="cell">
         <h2 class="spec-module-title">Technical Overview &amp; Subsystem Architecture</h2>
         <p class="spec-lead">
-          Under the hood, IgnisDisc Optical Studio ships as a native .NET 10 WPF desktop application (<code>IgnisDisc.exe</code>) and scriptable command-line tool (<code>ignisdisc-cli.exe</code>). It authors ISO 9660 + Joliet + UDF 1.02 bridge data volumes, El Torito BIOS/UEFI boot images, legacy disc images (<code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>), and Red Book DAO/TAO audio CDs via Windows IMAPIv2. Sector extraction uses Win32 SCSI pass-through with 294-byte C2 error pointers, AccurateRip checksum verification, and drive read-offset detection, alongside multi-disc cold archival with per-disc SHA-256 manifests, PAR2 recovery volumes, and a deterministic in-memory virtual optical drive simulator.
+          IgnisDisc Optical Studio is a .NET 10 WPF desktop application (<code>IgnisDisc.exe</code>) and a command-line tool (<code>ignisdisc-cli.exe</code>). Its own image builder writes ISO 9660 + Joliet + UDF bridge volumes (UDF 1.02 by default, 1.50 to 2.60 on request), El Torito BIOS/UEFI boot images, and optional <code>SHA256SUMS</code> / <code>BLAKE3SUMS</code> hash lists; legacy disc images (<code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>) are read and converted. Discs are burned through Windows IMAPIv2 by default. CDs can instead be written with IgnisDisc's own SCSI MMC commands (experimental, off by default): Session-at-Once audio with CD-Text, and Track-at-Once data. Reading uses Win32 SCSI pass-through: 294-byte C2 error pointers, AccurateRip checksums and read-offset detection for audio, and after a burn a sector-by-sector comparison in which the drive is told to read the disc rather than its buffer. Multi-disc archives carry per-disc SHA-256 manifests and PAR2 recovery volumes. In-memory virtual drives stand in for hardware in the test suite.
         </p>
       </div>
       <div class="grid-1px grid-4col">
       <div class="cell">
         <h2 class="spec-module-title">CdBurner.Core</h2>
         <ul class="spec-module-list">
-          <li>Pure .NET <code>IsoUdfImageBuilder</code> authoring ISO 9660, Joliet UCS-2BE, OSTA UDF 1.02 Bridge, and El Torito BIOS/UEFI boot catalogs.</li>
+          <li><code>IsoUdfImageBuilder</code>: ISO 9660, Joliet UCS-2BE, OSTA UDF 1.02 to 2.60 (metadata partition and mirror from 2.50), El Torito BIOS/UEFI boot catalogs; byte-identical output with a fixed build time.</li>
           <li>Streaming <code>LegacyDiscImageConverter</code> for <code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, and <code>.ccd</code>/<code>.img</code> (incl. Mode 2 / XA 2336B/2448B sectors).</li>
-          <li><code>RedBookPcmConverter</code> (polyphase resampler + TPDF dither), built-in <code>FlacFileCodec</code>, CUE/playlist parsers, and <code>ArchiveSpanPlanner</code>.</li>
+          <li><code>RedBookPcmConverter</code> (polyphase resampler + TPDF dither), built-in <code>FlacFileCodec</code>, CUE/playlist parsers, <code>ArchiveSpanPlanner</code>, and built-in SHA-256 and BLAKE3 hash lists.</li>
         </ul>
       </div>
 
@@ -299,8 +349,8 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
         <h2 class="spec-module-title">CdBurner.Hardware</h2>
         <ul class="spec-module-list">
           <li>Background <code>ApartmentState.MTA</code> worker (<code>MtaBurnWorker</code>) driving <code>IDiscFormat2Data</code>, <code>IDiscFormat2TrackAtOnce</code>, <code>IDiscFormat2RawCD</code>, and <code>IDiscFormat2Erase</code>.</li>
-          <li><code>PhysicalSectorReader</code> + <code>Win32ScsiTransport</code> (<code>IOCTL_SCSI_PASS_THROUGH_DIRECT</code>, Full TOC <code>0x02</code>, <code>READ CD</code> with C2 pointers).</li>
-          <li>Deterministic <code>VirtualDiscBackend</code> simulating 25 optical drive and media firmware personas in CI.</li>
+          <li><code>PhysicalSectorReader</code> + <code>Win32ScsiTransport</code> (<code>IOCTL_SCSI_PASS_THROUGH_DIRECT</code>, Full TOC <code>0x02</code>, <code>READ CD</code> with C2 pointers, <code>READ (10)</code> with FUA for the check after a burn).</li>
+          <li>In-memory virtual drives for tests (<code>VirtualDiscBackend</code>, <code>VirtualMmcDrive</code>) and a compatibility test matrix of 32 simulated drive and media combinations.</li>
         </ul>
       </div>
 
@@ -308,17 +358,18 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
         <h2 class="spec-module-title">CdBurner.Cli &amp; App</h2>
         <ul class="spec-module-list">
           <li><code>IgnisDisc.exe</code>: WPF desktop studio with 8 dedicated workspaces and OS-synced Dark/Light theme (<code>ThemeManager</code>).</li>
-          <li><code>ignisdisc-cli.exe</code>: 16 automation commands with <code>--json</code> output and non-interactive overwrite/erase safety guards.</li>
-          <li>Two-stage 81.9 MB installer (<code>net48</code> bootstrapper + shared-runtime <code>Uninstall-IgnisDisc.exe</code>).</li>
+          <li><code>ignisdisc-cli.exe</code>: 17 commands with <code>--json</code> output; it refuses to replace the contents of a rewritable disc unless <code>--overwrite</code> is given.</li>
+          <li>Per-user installer (<code>net48</code> bootstrapper, no administrator rights) with a small separate <code>Uninstall-IgnisDisc.exe</code>.</li>
         </ul>
       </div>
 
       <div class="cell">
-        <h2 class="spec-module-title">Native SCSI MMC Writer</h2>
+        <h2 class="spec-module-title">Direct drive commands (experimental)</h2>
         <ul class="spec-module-list">
-          <li><strong>Capability Probe:</strong> Read-only <code>GET CONFIGURATION</code> (<code>0x46</code>) and Mode Page <code>0x05</code> write capability inspector.</li>
-          <li><strong>Test Write (Experimental):</strong> <code>burn-audio --native --test-write</code> sends Session-at-Once cue sheets and R-W lead-in CD-Text with the laser off (verified on physical CD-R).</li>
-          <li><strong>Safety Rail:</strong> IMAPIv2 remains the default for all real burns; real native burns are not enabled yet.</li>
+          <li><strong>Audio CDs:</strong> Session-at-Once with <code>SEND CUE SHEET</code> and <code>WRITE (10)</code>: CD-Text in the lead-in (R-W sub-channel), ISRC and catalog codes, pre-emphasis and copy bits, <code>INDEX 00</code> gaps, and audio in front of track 1.</li>
+          <li><strong>Data CDs:</strong> one Mode 1 track written Track-at-Once at a speed taken from the drive's own list.</li>
+          <li><strong>Checks:</strong> every direct burn is read back and compared (track list, CD-Text, codes, every audio sample or data sector). A laser-off test write is available, and every drive command is logged.</li>
+          <li><strong>Status:</strong> off by default; IMAPIv2 stays the default writer and handles DVD and Blu-ray. Run on real hardware on one drive (LG GP60NB50), on CD-R and CD-RW.</li>
         </ul>
       </div>
       </div>
@@ -339,7 +390,7 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
       <div class="cell">
         <h2 class="spec-module-title">Privacy &amp; open-source license</h2>
         <p class="spec-lead">
-          This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it (optional MusicBrainz/AccurateRip disc TOC lookups and opt-in GitHub release checks; see <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>).
+          This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it (optional MusicBrainz/AccurateRip disc TOC lookups, opt-in GitHub release checks, and the FFmpeg and par2 downloads you start yourself; see <a href="https://github.com/tether-works/IgnisDisc/blob/master/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>).
         </p>
         <ul class="spec-module-list">
           <li><strong>Source license:</strong> GNU General Public License v3.0 or later (<code>GPL-3.0-or-later</code>).</li>
@@ -362,6 +413,6 @@ PS C:\&gt; ignisdisc-cli.exe rip-audio --drive H: --output C:\Rips --format flac
     </footer>
   </main>
 
-  <script src="/app.js?v=1.10.4"></script>
+  <script src="/app.js?v=1.12.1"></script>
 </body>
 </html>

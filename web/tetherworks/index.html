@@ -86,19 +86,19 @@
             <tbody>
               <tr>
                 <td><strong>Data &amp; Boot Mastering</strong></td>
-                <td>ISO 9660 + Joliet UCS-2BE + UDF 1.02 bridge, hybrid BIOS/UEFI El Torito boot catalogs, multi-session append, and streaming <code>.nrg</code> / <code>.mdf</code> / <code>.ccd</code> conversion.</td>
+                <td>ISO 9660 + Joliet UCS-2BE + UDF bridge (UDF 1.02 to 2.60), hybrid BIOS/UEFI El Torito boot catalogs, multi-session append, optional <code>SHA256SUMS</code> / <code>BLAKE3SUMS</code> hash lists, and streaming <code>.nrg</code> / <code>.mdf</code> / <code>.ccd</code> conversion.</td>
               </tr>
               <tr>
                 <td><strong>Audio CD Rip &amp; Burn</strong></td>
-                <td>Secure SCSI extraction with 294-byte C2 error pointers, AccurateRip verification, drive offset detection, MusicBrainz lookup, and Red Book DAO/TAO burning (WAV, FLAC, MP3/M4A, CUE).</td>
+                <td>Secure SCSI extraction with 294-byte C2 error pointers, AccurateRip verification, drive offset detection, MusicBrainz lookup, and Red Book DAO/TAO burning (WAV, FLAC, MP3/M4A, CUE). Optional direct drive commands (experimental) write CD-Text and read the disc back.</td>
               </tr>
               <tr>
                 <td><strong>Multi-Disc Cold Archive</strong></td>
-                <td>Automated folder spanning across optical volumes with per-disc SHA-256 manifests and optional PAR2 recovery files.</td>
+                <td>Folder spanning across discs with per-disc SHA-256 manifests, optional PAR2 recovery data that fills each disc, and a <code>recover</code> command for damaged discs.</td>
               </tr>
               <tr>
                 <td><strong>Hardware Verification</strong></td>
-                <td>Tested on physical CD-R, CD-RW, DVD-R, and DVD+RW media plus 600+ automated unit/integration tests.</td>
+                <td>Tested on physical CD-R, CD-RW, DVD-R, and DVD+RW media on one drive model, plus over 1,200 automated tests.</td>
               </tr>
             </tbody>
           </table>

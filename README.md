@@ -18,10 +18,11 @@ pipeline can be tested without hardware or blank media.
 <!-- SUPPORT-TABLE-START -->
 | Feature | Physical drives | Virtual drive | Notes |
 | --- | :---: | :---: | --- |
-| Burn data disc from files / folders | ✅ | ✅ | ISO 9660 + Joliet + UDF 1.02 bridge |
+| Burn data disc from files / folders | ✅ | ✅ | ISO 9660 + Joliet + UDF bridge; UDF 1.02 by default, 1.50 to 2.60 on request (`--udf-rev`) |
 | Burn an existing `.iso` | ✅ | ✅ | |
 | Create `.iso` image files | ✅ | — | Validated against an independent reader (DiscUtils) in the test suite |
-| Verify after burn | ✅ | ✅ | SHA-256 readback |
+| Verify after burn | ✅ | ✅ | Reads every sector back and compares it with the image. The drive is told to read the disc itself, not its memory, where burn data can still be held; `--strict-verify` does that for every read. Damage is reported by file |
+| Hash lists on data discs (`SHA256SUMS` / `BLAKE3SUMS`) | ✅ | ✅ | Optional (`--sha256sums`, `--blake3sums`, or checkboxes on the Data Disc screen); written to the disc root and checked file by file after the burn |
 | Rip data disc to `.iso` / `.bin` + `.cue` | ✅ | ✅ | |
 | Burn audio CD (Disc-at-Once / Track-at-Once) | ✅ | ✅ | WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling, crossfade, preview, printable jewel-case insert |
 | Burn / verify / convert legacy images | ✅ | ✅ | Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit |
@@ -29,7 +30,7 @@ pipeline can be tested without hardware or blank media.
 | Rip audio CD to `.wav` / `.flac` + `.cue` | ✅ | ✅ | Reads the real TOC and CD-Text; optional MusicBrainz track names |
 | AccurateRip verification + read-offset correction | ✅ | ✅ | Detects your drive's offset from a disc in the AccurateRip database |
 | Secure audio ripping (C2 error pointers + re-reads) | ✅ | ✅ | Flags suspect sectors; can be slow on badly scratched discs |
-| Archive Studio: span folders across discs | ✅ | ✅ | SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) |
+| Archive Studio: span folders across discs | ✅ | ✅ | SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) fills the space left on each disc; `recover` copies the files off a damaged archive disc and rebuilds them |
 | Quick / full erase of rewritable media | ✅ | ✅ | |
 | Re-burn a used DVD+RW / DVD-RAM | ✅ | ✅ | Asks before replacing the files on the disc (`--overwrite` on the command line); finalized CD-RW / sequential DVD-RW require `erase` first |
 | Surface scan | ✅ | ✅ | Per-track Full TOC (`0x02`) scan skips unrecorded multi-session gaps and auto-selects 2352B raw mode on audio tracks |
@@ -37,9 +38,10 @@ pipeline can be tested without hardware or blank media.
 | Bootable discs (El Torito BIOS + UEFI) | ✅ | ✅ | Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders |
 | DVD-Video authoring | ⚠️ | ✅ | Requires `ffmpeg.exe`; test on a standalone player before relying on it |
 | Blu-ray (BD-R / BD-RE) | ❌ | — | Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive |
+| Burn CDs with direct drive commands (experimental, off by default) | ⚠️ | ✅ | Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or "Direct drive commands" in the app); the disc is always read back and compared. DVDs and Blu-ray discs still use the Windows writer. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW |
 | CD-Text / ISRC on burned audio CDs | ⚠️ | ✅ | The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
-| Test-write / simulation | ❌ | ✅ | Not available through IMAPIv2 |
+| Test-write / simulation | ⚠️ | ✅ | CDs only, with the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. The Windows writer has no test write |
 <!-- SUPPORT-TABLE-END -->
 
 ✅ supported · ⚠️ works but needs more real-hardware testing · ❌ not available on physical drives yet
