@@ -28,6 +28,12 @@ public static class BatchedSectorReader
     /// <param name="onSector">Receives each readable sector in LBA order. The memory is only valid during the call.</param>
     /// <param name="onUnreadable">Called for a sector that failed every retry; return true to continue past it, false to stop.</param>
     /// <param name="onProgress">Optional; receives the number of sectors handled so far after each batch.</param>
+    /// <param name="readFromDisc">
+    /// Read 2,048-byte data sectors the way a check after a burn does
+    /// (<see cref="IBurnEngineBackend.ReadSectorsForVerifyAsync"/>), so the drive cannot answer from what a burn left
+    /// in its memory. Every batch is judged against the whole range, not on its own.
+    /// </param>
+    /// <param name="strict">With <paramref name="readFromDisc"/>: force every read from the disc.</param>
     public static async Task<BatchedReadOutcome> ReadRangeAsync(
         IBurnEngineBackend engine,
         IDiscRecorderBackend recorder,
@@ -39,7 +45,9 @@ public static class BatchedSectorReader
         Func<int, ValueTask<bool>> onUnreadable,
         Action<int>? onProgress = null,
         int batchSectors = DefaultBatchSectors,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool readFromDisc = false,
+        bool strict = false)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(recorder);
@@ -50,6 +58,12 @@ public static class BatchedSectorReader
         int endLba = startLba + sectorCount;
         int nextLba = startLba;
         int totalRetries = 0;
+        bool verifyReads = readFromDisc && !raw2352Mode;
+        var wholeRange = new SectorRange(startLba, sectorCount);
+
+        Task<RipOperationResult> Read(int lba, int count, Func<int, ReadOnlyMemory<byte>, ValueTask> consumer) => verifyReads
+            ? engine.ReadSectorsForVerifyAsync(recorder, lba, count, consumer, progress: null, cancellationToken, strict, wholeRange)
+            : engine.ReadSectorsAsync(recorder, lba, count, raw2352Mode, consumer, progress: null, cancellationToken);
 
         while (nextLba < endLba)
         {
@@ -61,20 +75,16 @@ public static class BatchedSectorReader
 
             try
             {
-                var result = await engine.ReadSectorsAsync(
-                    recorder,
+                var result = await Read(
                     batchStart,
                     batch,
-                    raw2352Mode,
                     async (lba, data) =>
                     {
                         // Engines deliver in order; ignore anything outside the expected position defensively.
                         if (lba != batchStart + delivered) return;
                         await onSector(lba, data).ConfigureAwait(false);
                         delivered++;
-                    },
-                    progress: null,
-                    cancellationToken).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
 
                 batchOk = result.Success && delivered == batch;
             }
@@ -98,19 +108,15 @@ public static class BatchedSectorReader
                     try
                     {
                         bool got = false;
-                        var single = await engine.ReadSectorsAsync(
-                            recorder,
+                        var single = await Read(
                             suspectLba,
                             1,
-                            raw2352Mode,
                             async (lba, data) =>
                             {
                                 if (lba != suspectLba || got) return;
                                 await onSector(lba, data).ConfigureAwait(false);
                                 got = true;
-                            },
-                            progress: null,
-                            cancellationToken).ConfigureAwait(false);
+                            }).ConfigureAwait(false);
 
                         recovered = single.Success && got;
                     }

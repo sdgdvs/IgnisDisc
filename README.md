@@ -36,7 +36,7 @@ pipeline can be tested without hardware or blank media.
 | Append a session (multi-session) | ✅ | ✅ | Open and appended sessions omit UDF 1.02 so Windows mounts Joliet across all sessions; names longer than 64 characters are shortened there, and the burn result says so |
 | Bootable discs (El Torito BIOS + UEFI) | ✅ | ✅ | Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders |
 | DVD-Video authoring | ⚠️ | ✅ | Requires `ffmpeg.exe`; test on a standalone player before relying on it |
-| Blu-ray (BD-R / BD-RE) | ❌ | — | Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first |
+| Blu-ray (BD-R / BD-RE) | ❌ | — | Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive |
 | CD-Text / ISRC on burned audio CDs | ⚠️ | ✅ | The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
 | Test-write / simulation | ❌ | ✅ | Not available through IMAPIv2 |
@@ -201,9 +201,11 @@ pwsh scripts/Build-Installer.ps1 -FfmpegPath C:\tools\ffmpeg\bin\ffmpeg.exe -Ffm
 
 ## Roadmap
 
-- Opt-in native SCSI MMC write engine (`SEND CUE SHEET` / `WRITE(10)`) for physical lead-in CD-Text, `INDEX 00` pre-gaps, and DVD±R DL layer-break control
+- Direct drive-command writing for DVD and Blu-ray, and DVD±R DL layer-break control (audio CDs and data CDs can
+  already be written this way as an experimental option)
+- More drives and disc types tried with the direct writer, so it can leave experimental status
+- Blu-ray burning, tested on real drives
 - CUETools Database (CTDB) verification and audio repair alongside AccurateRip
-- Blu-ray (`BD-R` / `BD-RE`) media recognition and UDF 2.50 mastering
 - Mixed-mode and Enhanced CD compilation and disc copy support
 
 ---

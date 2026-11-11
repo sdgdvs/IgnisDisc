@@ -378,7 +378,10 @@ public class DiscVerificationService
                 CurrentSpeedMultiplier = 24.0,
                 CurrentBytesPerSecond = 24 * (raw2352Mode ? OpticalConstants.CdAudio1XBytesPerSec : OpticalConstants.CdData1XBytesPerSec)
             }),
-            cancellationToken: ct).ConfigureAwait(false);
+            cancellationToken: ct,
+            // The disc may have been burned a moment ago: make the drive read it, not what the burn left in its memory.
+            readFromDisc: !raw2352Mode,
+            strict: VerifyPreferences.StrictByDefault).ConfigureAwait(false);
 
         progress?.Report(new BurnProgressSnapshot
         {

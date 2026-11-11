@@ -57,9 +57,10 @@ public class VerifyReadBackTests
 
         public Task<RipOperationResult> ReadSectorsForVerifyAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount,
             Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken,
-            bool strict = false) =>
+            bool strict = false, SectorRange? writtenRange = null) =>
             PhysicalSectorReader.ReadDataSectorsAsync(drive, startLba, sectorCount,
-                strict ? DriveCacheBypass.EveryRead : DriveCacheBypass.RecentlyWritten, sectorConsumer, progress, cancellationToken);
+                strict ? DriveCacheBypass.EveryRead : DriveCacheBypass.RecentlyWritten, sectorConsumer, progress, cancellationToken,
+                writtenRange?.Start, writtenRange?.Count);
 
         public Task<BurnOperationResult> BurnAudioTracksAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks, AudioBurnOptions options,
             IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -107,6 +108,12 @@ public class VerifyReadBackTests
     private const int Guard = 1024;
 
     private static VirtualMmcDrive SmallBufferDrive() => new() { BufferCapacityBytes = 1024 * 1024 };
+
+    /// <summary>
+    /// The same drive, holding on to what the burn left in its memory however much is read without FUA. Ordinary
+    /// reads never get past that memory, so damage under it is found only by a read forced from the disc.
+    /// </summary>
+    private static VirtualMmcDrive StubbornMemoryDrive() => new() { BufferCapacityBytes = 1024 * 1024, ReadCacheCapacitySectors = int.MaxValue };
 
     /// <summary>About 6 MB: three times the two guarded stretches, so most of it lies between them.</summary>
     private static byte[] BuildLargeImage()
@@ -160,7 +167,7 @@ public class VerifyReadBackTests
         byte[] image = BuildLargeImage();
         int bad = FirstLbaOf(image, "/3-end.bin") + 900; // inside the last megabyte written
         Assert.True(bad >= image.Length / 2048 - 512);
-        var engine = new MmcDataEngine(SmallBufferDrive()) { DamageLba = bad, KeepInDriveMemory = LastWritten(image, 512) };
+        var engine = new MmcDataEngine(StubbornMemoryDrive()) { DamageLba = bad, KeepInDriveMemory = LastWritten(image, 512) };
 
         var result = await BurnAndVerify(engine, image);
 
@@ -199,6 +206,51 @@ public class VerifyReadBackTests
         Assert.False(strict.Success);
         Assert.Contains("/2-middle.bin", strict.ErrorMessage);
         Assert.All(strictDrive.Read10Log, r => Assert.True(r.Fua, $"READ (10) of LBA {r.Lba} had no FUA"));
+    }
+
+    // ---- The separate disc-against-image check (Image screen, verify command) ----
+
+    private static async Task<VerificationResult> VerifyAgainstImage(MmcDataEngine engine, byte[] image)
+    {
+        using var recorder = new VirtualDiscRecorder();
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        recorder.InsertMedia(medium);
+        return await new DiscVerificationService().VerifyDiscAgainstStreamAsync(recorder, engine, new MemoryStream(image), raw2352Mode: false);
+    }
+
+    [Fact]
+    public async Task ImageCheck_DamageInTheLastSectorsWritten_HiddenByDriveMemory_IsCaught()
+    {
+        byte[] image = BuildLargeImage();
+        int bad = FirstLbaOf(image, "/3-end.bin") + 900;
+        var drive = StubbornMemoryDrive();
+        var engine = new MmcDataEngine(drive) { DamageLba = bad, KeepInDriveMemory = LastWritten(image, 512) };
+        await engine.BurnDataStreamAsync(null!, new MemoryStream(image), new DataBurnOptions(), null, default);
+
+        var result = await VerifyAgainstImage(engine, image);
+
+        Assert.False(result.IsMatch);
+        Assert.Contains(bad, result.MismatchedLbas);
+    }
+
+    [Fact]
+    public async Task ImageCheck_ReadsInBatches_ButJudgesTheEndsAgainstTheWholeDisc()
+    {
+        byte[] image = BuildLargeImage();
+        int sectors = image.Length / 2048;
+        var drive = SmallBufferDrive();
+        var engine = new MmcDataEngine(drive) { KeepInDriveMemory = LastWritten(image, 512) };
+        await engine.BurnDataStreamAsync(null!, new MemoryStream(image), new DataBurnOptions(), null, default);
+
+        var result = await VerifyAgainstImage(engine, image);
+
+        Assert.True(result.IsMatch, result.ErrorMessage);
+        Assert.Equal(sectors, drive.Read10Log.Sum(r => r.Count));
+        Assert.All(drive.Read10Log.Where(r => r.Lba < Guard), r => Assert.True(r.Fua, $"start, LBA {r.Lba}"));
+        Assert.All(drive.Read10Log.Where(r => r.Lba + r.Count > sectors - Guard), r => Assert.True(r.Fua, $"end, LBA {r.Lba}"));
+        var middle = drive.Read10Log.Where(r => r.Lba >= Guard && r.Lba + r.Count <= sectors - Guard).ToList();
+        Assert.NotEmpty(middle);
+        Assert.All(middle, r => Assert.False(r.Fua, $"middle, LBA {r.Lba}")); // a batch on its own would be forced throughout
     }
 
     [Fact]

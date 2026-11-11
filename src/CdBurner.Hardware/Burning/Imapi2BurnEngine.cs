@@ -959,13 +959,15 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken,
-        bool strict = false)
+        bool strict = false,
+        SectorRange? writtenRange = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(sectorConsumer);
         return PhysicalSectorReader.ReadAsync(recorder.VolumePath, startLba, sectorCount, raw2352Mode: false,
             sectorConsumer, progress, cancellationToken,
-            strict ? DriveCacheBypass.EveryRead : DriveCacheBypass.RecentlyWritten);
+            strict ? DriveCacheBypass.EveryRead : DriveCacheBypass.RecentlyWritten,
+            writtenRange?.Start, writtenRange?.Count);
     }
 
     /// <inheritdoc/>

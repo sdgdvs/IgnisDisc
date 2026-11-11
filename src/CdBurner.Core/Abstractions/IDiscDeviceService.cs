@@ -84,6 +84,10 @@ public interface IBurnEngineBackend
     /// that can still be in its memory (the last sectors written, and the start); with <paramref name="strict"/> for
     /// every read, which is several times slower. Backends without a drive cache read normally.
     /// </summary>
+    /// <param name="writtenRange">
+    /// The whole stretch being checked when this call reads only a piece of it, so "the last sectors written" is
+    /// judged against the whole and not against each piece. Null: the call's own range is the whole.
+    /// </param>
     Task<RipOperationResult> ReadSectorsForVerifyAsync(
         IDiscRecorderBackend recorder,
         int startLba,
@@ -91,7 +95,8 @@ public interface IBurnEngineBackend
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken,
-        bool strict = false) =>
+        bool strict = false,
+        SectorRange? writtenRange = null) =>
         ReadSectorsAsync(recorder, startLba, sectorCount, raw2352Mode: false, sectorConsumer, progress, cancellationToken);
 }
 
@@ -305,6 +310,9 @@ public class RipOperationResult
 /// <summary>
 /// Configuration options for data disc burning.
 /// </summary>
+/// <summary>A run of sectors on a disc.</summary>
+public readonly record struct SectorRange(int Start, int Count);
+
 /// <summary>The user's standing choice for how a burn is checked; set once from the app's settings.</summary>
 public static class VerifyPreferences
 {

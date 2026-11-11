@@ -98,10 +98,11 @@ public class CompositeBurnEngine : IBurnEngineBackend, ISecureAudioReader
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken,
-        bool strict = false)
+        bool strict = false,
+        SectorRange? writtenRange = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
-        return SelectBackend(recorder).ReadSectorsForVerifyAsync(recorder, startLba, sectorCount, sectorConsumer, progress, cancellationToken, strict);
+        return SelectBackend(recorder).ReadSectorsForVerifyAsync(recorder, startLba, sectorCount, sectorConsumer, progress, cancellationToken, strict, writtenRange);
     }
 
     /// <inheritdoc/>

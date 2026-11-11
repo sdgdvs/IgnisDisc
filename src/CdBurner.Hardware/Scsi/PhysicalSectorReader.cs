@@ -66,7 +66,9 @@ public static partial class PhysicalSectorReader
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken,
-        DriveCacheBypass cacheBypass = DriveCacheBypass.None)
+        DriveCacheBypass cacheBypass = DriveCacheBypass.None,
+        int? bypassRangeStart = null,
+        int? bypassRangeCount = null)
     {
         ArgumentNullException.ThrowIfNull(sectorConsumer);
         bool forceUnitAccess = cacheBypass != DriveCacheBypass.None;
@@ -96,7 +98,8 @@ public static partial class PhysicalSectorReader
             }
             if (forceUnitAccess && !raw2352Mode && source is SptiSource spti)
             {
-                spti.EnableForceUnitAccess(startLba, sectorCount, cacheBypass == DriveCacheBypass.EveryRead);
+                spti.EnableForceUnitAccess(bypassRangeStart ?? startLba, bypassRangeCount ?? sectorCount,
+                    cacheBypass == DriveCacheBypass.EveryRead);
             }
 
             var result = await ReadCoreAsync(source, startLba, sectorCount, raw2352Mode, sectorConsumer, progress, cancellationToken).ConfigureAwait(false);
@@ -120,7 +123,9 @@ public static partial class PhysicalSectorReader
         DriveCacheBypass cacheBypass,
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer,
         IProgress<BurnProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? bypassRangeStart = null,
+        int? bypassRangeCount = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(sectorConsumer);
@@ -132,7 +137,8 @@ public static partial class PhysicalSectorReader
         var source = new SptiSource(transport, ownedHandle: null, raw: false);
         if (cacheBypass != DriveCacheBypass.None)
         {
-            source.EnableForceUnitAccess(startLba, sectorCount, cacheBypass == DriveCacheBypass.EveryRead);
+            source.EnableForceUnitAccess(bypassRangeStart ?? startLba, bypassRangeCount ?? sectorCount,
+                cacheBypass == DriveCacheBypass.EveryRead);
         }
         return ReadCoreAsync(source, startLba, sectorCount, false, sectorConsumer, progress, cancellationToken);
     }

@@ -148,8 +148,8 @@
     "featureHtml": "Blu-ray (BD-R / BD-RE)",
     "physical": "❌",
     "virtual": "—",
-    "notesMarkdown": "Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first",
-    "notesHtml": "Not yet: Blu-ray media are not recognised by the app; planned, and will be tested on real discs first"
+    "notesMarkdown": "Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive",
+    "notesHtml": "Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive"
   },
   {
     "featureMarkdown": "CD-Text / ISRC on burned audio CDs",

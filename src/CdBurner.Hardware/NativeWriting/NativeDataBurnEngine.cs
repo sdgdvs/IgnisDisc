@@ -254,6 +254,6 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
 
     public Task<RipOperationResult> ReadSectorsForVerifyAsync(IDiscRecorderBackend recorder, int startLba, int sectorCount,
         Func<int, ReadOnlyMemory<byte>, ValueTask> sectorConsumer, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken,
-        bool strict = false) =>
-        _fallback.ReadSectorsForVerifyAsync(recorder, startLba, sectorCount, sectorConsumer, progress, cancellationToken, strict);
+        bool strict = false, SectorRange? writtenRange = null) =>
+        _fallback.ReadSectorsForVerifyAsync(recorder, startLba, sectorCount, sectorConsumer, progress, cancellationToken, strict, writtenRange);
 }
