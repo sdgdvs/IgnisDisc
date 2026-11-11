@@ -105,7 +105,7 @@ public static class CliCommandRunner
                     WriteJsonResult(stdout, new
                     {
                         success = true,
-                        version = version ?? "1.11",
+                        version = version ?? "unknown",
                         notice = LegalBanner.VersionNotice
                     });
                     return 0;
