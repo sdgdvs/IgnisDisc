@@ -709,9 +709,14 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
             int? readOnlySectors = _comProvider.ReadCapacity(VolumePath);
             if (readOnlySectors is > 0)
             {
+                // The disc type from the drive's current profiles (the GP60NB50 reports a closed DVD-R as DVD-ROM); the size is only
+                // a last resort, because a small DVD (a 372 MB closed DVD-R, a short pressed DVD) is not a CD.
+                // Reading CurrentProfiles makes Windows send one GET CONFIGURATION (a few ms), and only here, for
+                // discs its writer will not describe.
                 bool isCd = readOnlySectors.Value <= 450_000; // ~ 880 MB: larger than any CD
                 long bytes = (long)readOnlySectors.Value * OpticalConstants.DataSectorSize;
-                var readOnlyMediaType = isCd ? DiscMediaType.CdRom : DiscMediaType.DvdRom;
+                var readOnlyMediaType = MapCurrentProfilesToMediaType(ReadCurrentProfiles())
+                                        ?? (isCd ? DiscMediaType.CdRom : DiscMediaType.DvdRom);
                 return new MediaStatusDto
                 {
                     MediaType = readOnlyMediaType,
@@ -822,6 +827,70 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
         catch
         {
         }
+    }
+
+    /// <summary>The recorder's current MMC profiles (IDiscRecorder2.CurrentProfiles), or an empty list if it gives none.</summary>
+    private IReadOnlyList<int> ReadCurrentProfiles()
+    {
+        var profiles = new List<int>();
+        try
+        {
+            if (_recorder?.CurrentProfiles is Array values)
+            {
+                foreach (object? value in values)
+                {
+                    if (value != null)
+                    {
+                        profiles.Add(Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException or FormatException or OverflowException)
+        {
+            // No profiles: the caller falls back to guessing from the size.
+        }
+        return profiles;
+    }
+
+    /// <summary>
+    /// The disc type for a set of current MMC profiles (MMC-6 profile list). Drives often mark the ROM profile current
+    /// as well as the recordable one (CD-ROM with CD-R, DVD-ROM with DVD-R), so a recordable profile wins. Null when
+    /// no profile is recognised.
+    /// </summary>
+    public static DiscMediaType? MapCurrentProfilesToMediaType(IEnumerable<int> profiles)
+    {
+        DiscMediaType? rom = null;
+        foreach (int profile in profiles)
+        {
+            DiscMediaType? type = profile switch
+            {
+                0x0008 => DiscMediaType.CdRom,
+                0x0009 => DiscMediaType.CdR,
+                0x000A => DiscMediaType.CdRw,
+                0x0010 => DiscMediaType.DvdRom,
+                0x0011 => DiscMediaType.DvdMinusR,
+                0x0012 => DiscMediaType.DvdRam,
+                0x0013 or 0x0014 => DiscMediaType.DvdMinusRw,
+                0x0015 or 0x0016 => DiscMediaType.DvdMinusRDualLayer,
+                0x001A or 0x002A => DiscMediaType.DvdPlusRw,
+                0x001B => DiscMediaType.DvdPlusR,
+                0x002B => DiscMediaType.DvdPlusRDualLayer,
+                0x0040 => DiscMediaType.BdRom,
+                0x0041 or 0x0042 => DiscMediaType.BdR,
+                0x0043 => DiscMediaType.BdRe,
+                _ => null
+            };
+            if (type is DiscMediaType.CdRom or DiscMediaType.DvdRom or DiscMediaType.BdRom)
+            {
+                rom ??= type;
+            }
+            else if (type != null)
+            {
+                return type;
+            }
+        }
+        return rom;
     }
 
     /// <summary>

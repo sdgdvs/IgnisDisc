@@ -36,6 +36,9 @@ public class DriveCompatibilityMatrixTests
         public string VolumePath { get; init; } = "Z:\\";
         public int[] MmcProfiles { get; init; } = new[] { 0x0009, 0x000A, 0x0011, 0x0013, 0x001A, 0x001B, 0x002B };
 
+        /// <summary>IDiscRecorder2.CurrentProfiles for the inserted disc; empty when the drive reports none.</summary>
+        public int[] CurrentProfiles { get; init; } = Array.Empty<int>();
+
         // IDiscFormat2Data simulation
         public bool DataFormatSupported { get; init; } = true;
         public ImapiMediaPhysicalType PhysicalMediaType { get; init; } = ImapiMediaPhysicalType.CdR;
@@ -111,7 +114,7 @@ public class DriveCompatibilityMatrixTests
         public Array SupportedFeaturePages => Array.Empty<object>();
         public Array CurrentFeaturePages => Array.Empty<object>();
         public Array SupportedProfiles => _p.MmcProfiles.Cast<object>().ToArray();
-        public Array CurrentProfiles => Array.Empty<object>();
+        public Array CurrentProfiles => _p.CurrentProfiles.Cast<object>().ToArray();
         public Array SupportedModePages => Array.Empty<object>();
         public string ExclusiveAccessOwner => ExclusiveOwner ?? string.Empty;
     }
@@ -1219,6 +1222,65 @@ public class DriveCompatibilityMatrixTests
                 CanErase = false
             }
         };
+
+        // 26. Small closed DVD-R (372 MB, Disc-At-Once): IDiscFormat2Data unsupported, under the CD size limit. Measured on
+        //     the GP60NB50 (2026-11-11): once closed, the drive marks only DVD-ROM (0x0010) current, so it reads as DVD-ROM.
+        yield return new object[]
+        {
+            new SimulatedDrivePersona
+            {
+                Name = "26_Closed_Small_DvdMinusR",
+                DataFormatSupported = false,
+                EraseFormatSupported = false,
+                ScsiReadCapacitySectors = 181_648,
+                ScsiSessionCount = 1,
+                CurrentProfiles = new[] { 0x0010 },
+                ExpectedMediaType = DiscMediaType.DvdRom,
+                ExpectedIsBlank = false,
+                ExpectedIsRewritable = false,
+                ExpectedIsAppendable = false,
+                ExpectedIsOverwriteOnly = false,
+                ExpectedRequiresEraseToWrite = false,
+                ExpectedHasDataThatBurningReplaces = false,
+                ExpectedTotalSectors = 181_648,
+                ExpectedFreeSectors = 0,
+                ExpectedUsedSectors = 181_648,
+                ExpectedNextWritableLba = -1,
+                CanBurnDataWithoutFlags = false,
+                CanBurnDataWithOverwriteFlag = false,
+                CanBurnAudioCd = false,
+                CanErase = false
+            }
+        };
+
+        // 27. Small pressed DVD-ROM (300,000 sectors): not a CD despite its size
+        yield return new object[]
+        {
+            new SimulatedDrivePersona
+            {
+                Name = "27_Pressed_Small_DvdRom",
+                DataFormatSupported = false,
+                EraseFormatSupported = false,
+                ScsiReadCapacitySectors = 300_000,
+                ScsiSessionCount = 1,
+                CurrentProfiles = new[] { 0x0010 },
+                ExpectedMediaType = DiscMediaType.DvdRom,
+                ExpectedIsBlank = false,
+                ExpectedIsRewritable = false,
+                ExpectedIsAppendable = false,
+                ExpectedIsOverwriteOnly = false,
+                ExpectedRequiresEraseToWrite = false,
+                ExpectedHasDataThatBurningReplaces = false,
+                ExpectedTotalSectors = 300_000,
+                ExpectedFreeSectors = 0,
+                ExpectedUsedSectors = 300_000,
+                ExpectedNextWritableLba = -1,
+                CanBurnDataWithoutFlags = false,
+                CanBurnDataWithOverwriteFlag = false,
+                CanBurnAudioCd = false,
+                CanErase = false
+            }
+        };
     }
 
     [Theory]
@@ -1638,6 +1700,32 @@ public class DriveCompatibilityMatrixTests
         Assert.Contains(expectedDiagnosticFragment, result.ErrorMessage);
         // Exclusive lock must still be released in finally block after COM error
         Assert.Equal(string.Empty, provider.ComRecorder.ExclusiveAccessOwner);
+    }
+
+    #endregion
+
+    #region Disc type from the drive's current profiles
+
+    [Theory]
+    [InlineData(new[] { 0x0010, 0x0011 }, DiscMediaType.DvdMinusR)] // ROM listed first: the recordable profile still wins
+    [InlineData(new[] { 0x0011, 0x0010 }, DiscMediaType.DvdMinusR)]
+    [InlineData(new[] { 0x0008, 0x0009 }, DiscMediaType.CdR)]
+    [InlineData(new[] { 0x0008 }, DiscMediaType.CdRom)]
+    [InlineData(new[] { 0x0010 }, DiscMediaType.DvdRom)]
+    [InlineData(new[] { 0x001B }, DiscMediaType.DvdPlusR)]
+    [InlineData(new[] { 0x002B }, DiscMediaType.DvdPlusRDualLayer)]
+    [InlineData(new[] { 0x0040, 0x0041 }, DiscMediaType.BdR)]
+    public void CurrentProfiles_GiveTheDiscType(int[] profiles, DiscMediaType expected)
+    {
+        Assert.Equal(expected, ImapiDiscRecorder.MapCurrentProfilesToMediaType(profiles));
+    }
+
+    [Theory]
+    [InlineData(new int[0])]
+    [InlineData(new[] { 0x0002, 0xFFFF })] // removable disk, vendor profile
+    public void NoRecognisedProfile_LeavesTheTypeToTheSize(int[] profiles)
+    {
+        Assert.Null(ImapiDiscRecorder.MapCurrentProfilesToMediaType(profiles));
     }
 
     #endregion
