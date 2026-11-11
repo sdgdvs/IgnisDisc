@@ -97,6 +97,15 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>SET CD SPEED fails with 5/24/00.</summary>
     public bool RejectsSetSpeed { get; set; }
 
+    /// <summary>The recorded disc shows no catalog number and no ISRC codes (the drive dropped them while writing).</summary>
+    public bool LosesCatalogAndIsrc { get; set; }
+
+    /// <summary>The ISRC of this track reads back with its last character changed.</summary>
+    public int? ChangesIsrcOfTrack { get; set; }
+
+    /// <summary>The drive refuses READ SUB-CHANNEL (5/20/00), so the codes cannot be read back at all.</summary>
+    public bool RejectsReadSubChannel { get; set; }
+
     // ---- Track-at-Once data writing ----
 
     /// <summary>READ TRACK INFORMATION fails with 5/20/00, as on drives that do not offer it.</summary>
@@ -215,6 +224,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             0xBE => ReadCd(cdb, dataBuffer),
             0x28 => Read10(cdb, dataBuffer),
             0x43 => ReadToc(cdb, dataBuffer),
+            0x42 => ReadSubChannel(cdb, dataBuffer),
             MmcMediaReport.OpCodeReadFormatCapacities => CannedResponse(FormatCapacitiesResponse, dataBuffer),
             MmcMediaReport.OpCodeGetPerformance when cdb.Length >= 11 && cdb[10] == MmcMediaReport.PerformanceTypeWriteSpeed
                 => CannedResponse(WriteSpeedPerformanceResponse, dataBuffer),
@@ -617,6 +627,70 @@ public sealed class VirtualMmcDrive : IScsiTransport
             }
         }
         return packs.ToArray();
+    }
+
+    /// <summary>
+    /// READ SUB-CHANNEL formats 2 (catalog number) and 3 (ISRC): answered from the cue sheet of the recorded disc,
+    /// the way a drive answers from the Q sub-channel it wrote.
+    /// </summary>
+    private ScsiExecutionResult ReadSubChannel(ReadOnlySpan<byte> cdb, Span<byte> data)
+    {
+        if (RejectsReadSubChannel)
+        {
+            return Sense(0x05, 0x20, 0x00);
+        }
+        if (!Recorded || RecordedCueSheet is not { } sheet)
+        {
+            return Sense(0x05, 0x64, 0x00); // illegal mode for this track: nothing recorded
+        }
+
+        byte format = cdb[3];
+        byte track = cdb[6];
+        if (format is not (0x02 or 0x03))
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+
+        string code = string.Empty;
+        for (int i = 0; i + 16 <= sheet.Length; i += 8)
+        {
+            int adr = sheet[i] & 0x0F;
+            if (format == 0x02 && adr == 0x02 && (sheet[i + 8] & 0x0F) == 0x02)
+            {
+                code = System.Text.Encoding.ASCII.GetString(sheet, i + 1, 7) + System.Text.Encoding.ASCII.GetString(sheet, i + 9, 6);
+                break;
+            }
+            if (format == 0x03 && adr == 0x03 && sheet[i + 1] == track && (sheet[i + 8] & 0x0F) == 0x03)
+            {
+                code = System.Text.Encoding.ASCII.GetString(sheet, i + 2, 6) + System.Text.Encoding.ASCII.GetString(sheet, i + 10, 6);
+                break;
+            }
+        }
+
+        if (LosesCatalogAndIsrc)
+        {
+            code = string.Empty;
+        }
+        if (format == 0x03 && ChangesIsrcOfTrack == track && code.Length == 12)
+        {
+            code = code[..11] + (code[11] == '9' ? '0' : '9');
+        }
+
+        byte[] response = new byte[24];
+        response[1] = 0x15; // audio status: no current status to return
+        response[3] = 20;
+        response[4] = format;
+        if (format == 0x03)
+        {
+            response[5] = 0x10; // ADR 1, no control bits
+            response[6] = track;
+        }
+        if (code.Length > 0)
+        {
+            response[8] = 0x80; // MCVal / TCVal
+            System.Text.Encoding.ASCII.GetBytes(code, response.AsSpan(9));
+        }
+        return CopyOut(response, data);
     }
 
     private ScsiExecutionResult SetCdSpeed(ReadOnlySpan<byte> cdb)

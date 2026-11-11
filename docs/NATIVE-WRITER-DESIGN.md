@@ -13,9 +13,10 @@
   file system.
 
 **What has run where.** Everything above passes against the virtual drive (`VirtualMmcDrive`). On real hardware
-(see Test hardware) the test write has run on CD-R and CD-RW, and one real write has run: two tracks with CD-Text
-on a CD-RW, read back identical. A real write on CD-R, ISRC and catalog codes, pre-emphasis and copy bits, and
-audio in pre-gaps or in front of track 1 have only run in the simulator.
+(see Test hardware) the test write has run on CD-R and CD-RW, and two real audio writes have run and read back
+identical: two tracks with CD-Text on a CD-RW, and four tracks on a CD-R with CD-Text, catalog and ISRC codes,
+pre-emphasis and copy bits, audio in pre-gaps and audio in front of track 1. One drive model only; no disc has
+been played in a stand-alone CD player yet.
 
 Phases 5–6 below are still plans.
 
@@ -44,6 +45,8 @@ way (`Win32ScsiTransport`, `IOCTL_SCSI_PASS_THROUGH_DIRECT`); this proposal adds
    write" for why most drives cannot go straight on to the real write.
 4. **Verify after every native burn.** Not optional in native mode: `NativeSaoVerifier` reads the table of contents
    (track starts, lead-out, pre-emphasis and copy bits), the CD-Text packs and all the audio back and compares them.
+   A catalog number and ISRC codes are read with `READ SUB-CHANNEL` (formats 2 and 3) and compared; a code that is
+   missing or different fails the check, and a drive that refuses the command is reported as "not checked".
    Audio reads back shifted by the drive's write and read offsets, so the check first finds that shift (searching
    up to 2,352 samples either way from a stretch of real signal) and then compares every sample under it.
 5. **Stop before the laser starts.** Any error during setup (exclusive access, `MODE SELECT`, `SEND CUE SHEET`) aborts
@@ -139,7 +142,7 @@ BURN-Free / buffer-underrun protection (BUFE bit in page 0x05) when the drive su
 
 - Virtual drive: each command is implemented in `VirtualDiscBackend`, including failure injection (sense codes at
   chosen LBAs), so the error paths are tested.
-- Real hardware, in order: test write on CD-RW (done), real write on CD-RW (done), then CD-R (not yet run); DVD after CD.
+- Real hardware, in order: test write on CD-RW (done), real write on CD-RW (done), then CD-R (done); DVD after CD.
 
 ## Test hardware
 
@@ -158,6 +161,7 @@ Results:
 | 2026-11-10 | GP60NB50 | same CD-RW, reloaded (blank again, status 0) | Real write, 2 tracks of 20 s, CD-Text, no test write | Cue sheet accepted, 135 WRITEs, 14,077 sectors with the CD-Text lead-in; closing the session took 20 s. Read-back check passed: table of contents, 9 CD-Text packs and 1,764,000 audio samples identical, combined drive offset 0 samples. 67 s in all. A separate `rip-audio` of the disc gave files identical to the sources and took its names from CD-Text. Disc reports one closed session of 3,000 sectors. |
 | 2026-11-10 | GP60NB50 | same CD-RW, quick-erased | Data, Track-at-Once, 24 MB ISO (12,237 sectors), no test write | Feature 0x002D current, track 1 NWA 0 with 359,847 free; mode page TAO / track mode 4 / block type 8 confirmed; GET PERFORMANCE listed 1,764 kB/s and SET CD SPEED 10x was accepted. WRITEs 24 s, SYNCHRONIZE CACHE 5 s, CLOSE SESSION with Immed about 30 s of 2/04/07. TOC: one data track, lead-out at 12,239 (2 run-out blocks). FUA read-back of every sector passed. 61 s in all. |
 | 2026-11-10 | GP60NB50 | same CD-RW, quick-erased | Data, Track-at-Once, 690 MB ISO (352,787 sectors) | Data written in 477 s (9.9x average), with close 8 min 52 s; FUA read-back of every sector passed (7 min 15 s). The same image through IMAPI on the same disc and drive the same day took 12 min 42 s to write. |
+| 2026-11-10 | GP60NB50 | CD-R, FORNET (ATIP 97:26:07) | Real audio write from a single-file cue sheet: 4 tracks (85 s), CD-Text, catalog number, 4 ISRC codes, pre-emphasis on track 2, copy permitted on track 3, 2 s of gap audio before tracks 2 and 3, 6 s of audio in front of track 1; no test write | Cue sheet (19 entries) accepted in the standard layout, 18,068 sectors with the CD-Text lead-in, session closed in 10 s, 73 s in all. Read-back check passed: table of contents, 21 CD-Text packs, 3,748,500 samples identical, offset 0. Read separately from the disc: control bits 0/1/2/0 in the table of contents, catalog number and all four ISRC codes as written, and the Q sub-channel shows INDEX 00 from the exact frame of each gap, counting down to INDEX 01. A `rip-audio` of the disc gave four files identical to the source. |
 
 Media on hand: CD-RW, CD-R, DVD±R / DVD±RW, DVD±R DL.
 

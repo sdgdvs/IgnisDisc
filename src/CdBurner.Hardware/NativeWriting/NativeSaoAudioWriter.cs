@@ -262,7 +262,8 @@ public sealed class NativeSaoAudioWriter
             verification = new NativeSaoVerifier(_transport, _note, _sleep).Verify(
                 layout, request.OpenTrackAudio, request.CdTextPacks,
                 (done, total) => reporter.Report(totalSectors, $"Checking the disc ({100.0 * done / Math.Max(1, total):F0}%)"),
-                CancellationToken.None);
+                CancellationToken.None,
+                request.MediaCatalogNumber);
         }
 
         reporter.Report(totalSectors, "Done");

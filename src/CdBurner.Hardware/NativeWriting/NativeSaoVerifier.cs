@@ -4,7 +4,8 @@ using CdBurner.Hardware.Scsi;
 namespace CdBurner.Hardware.NativeWriting;
 
 /// <summary>Outcome of the read-back check that follows every real native write.</summary>
-/// <param name="Passed">True when the table of contents, the CD-Text and every compared audio sample matched.</param>
+/// <param name="Passed">True when the table of contents, the CD-Text, the catalog number and ISRC codes, and every
+/// compared audio sample matched.</param>
 /// <param name="Message">What was checked, or the first thing that did not match.</param>
 /// <param name="OffsetSamples">How many samples later than written the audio reads back (the drive's combined
 /// write and read offset); null when the audio was not compared.</param>
@@ -13,7 +14,8 @@ public sealed record NativeVerifyResult(bool Passed, string Message, int? Offset
 
 /// <summary>
 /// Reads a freshly written Session-at-Once audio disc back and compares it with what was sent: the table of contents
-/// (track starts, lead-out, pre-emphasis and copy bits), the CD-Text packs, and the audio itself.
+/// (track starts, lead-out, pre-emphasis and copy bits), the CD-Text packs, the catalog number and ISRC codes, and
+/// the audio itself.
 /// <para>
 /// Audio never reads back at exactly the position it was written to: a drive writes and reads a fixed number of
 /// samples early or late (its offsets). The check finds that shift from a short stretch of the audio and then
@@ -46,12 +48,14 @@ public sealed class NativeSaoVerifier
     /// <param name="openTrackAudio">Opens the audio that was written for track <c>i</c>, as the writer received it.</param>
     /// <param name="cdTextPacks">The CD-Text packs that were written, or null.</param>
     /// <param name="progress">Receives (program sectors compared, total) while the audio is compared.</param>
+    /// <param name="mediaCatalogNumber">The catalog number that was written, or null.</param>
     public NativeVerifyResult Verify(
         SaoAudioLayout layout,
         Func<int, Stream> openTrackAudio,
         byte[]? cdTextPacks,
         Action<int, int>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? mediaCatalogNumber = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(openTrackAudio);
@@ -73,9 +77,16 @@ public sealed class NativeSaoVerifier
             _note($"CD-Text matches: {cdTextPacks.Length / 18} pack(s).");
         }
 
+        problem = CheckCodes(layout, mediaCatalogNumber, out string codesSummary);
+        if (problem != null)
+        {
+            return Fail(problem);
+        }
+
         try
         {
-            return CompareAudio(layout, openTrackAudio, progress, cancellationToken);
+            var audio = CompareAudio(layout, openTrackAudio, progress, cancellationToken);
+            return audio.Passed && codesSummary.Length > 0 ? audio with { Message = audio.Message + " " + codesSummary } : audio;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -180,6 +191,112 @@ public sealed class NativeSaoVerifier
         }
 
         return null;
+    }
+
+    // ---- Catalog number and ISRC codes ----
+
+    private enum CodeState
+    {
+        Read,
+        NotOnDisc,
+        DriveCannotReport
+    }
+
+    /// <summary>
+    /// Compares the catalog number and the ISRC codes with what the drive finds in the Q sub-channel. A code the
+    /// drive reads differently, or does not find, fails the check. A drive that refuses the command altogether
+    /// cannot tell either way: that is said in the summary and does not fail the burn.
+    /// </summary>
+    private string? CheckCodes(SaoAudioLayout layout, string? mediaCatalogNumber, out string summary)
+    {
+        summary = string.Empty;
+        string? catalog = SaoAudioLayout.NormalizeMcn(mediaCatalogNumber);
+        var withIsrc = layout.Tracks.Where(t => t.Isrc != null).ToList();
+        if (catalog == null && withIsrc.Count == 0)
+        {
+            return null;
+        }
+
+        const string cannotReport = "The catalog number and ISRC codes could not be checked: this drive does not report them.";
+
+        if (catalog != null)
+        {
+            var state = ReadCode(format: 0x02, track: 0, length: 13, out string onDisc, out string detail);
+            if (state == CodeState.DriveCannotReport)
+            {
+                _note($"{cannotReport} ({detail})");
+                summary = cannotReport;
+                return null;
+            }
+            if (state == CodeState.NotOnDisc)
+            {
+                return $"The catalog number {catalog} was written, but the disc does not show one.";
+            }
+            if (!string.Equals(onDisc, catalog, StringComparison.Ordinal))
+            {
+                return $"The catalog number reads back as {onDisc}; {catalog} was written.";
+            }
+        }
+
+        foreach (var t in withIsrc)
+        {
+            var state = ReadCode(format: 0x03, track: (byte)t.TrackNumber, length: 12, out string onDisc, out string detail);
+            if (state == CodeState.DriveCannotReport)
+            {
+                _note($"{cannotReport} ({detail})");
+                summary = cannotReport;
+                return null;
+            }
+            if (state == CodeState.NotOnDisc)
+            {
+                return $"The ISRC {t.Isrc} was written for track {t.TrackNumber}, but the disc does not show one.";
+            }
+            if (!string.Equals(onDisc, t.Isrc, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"The ISRC of track {t.TrackNumber} reads back as {onDisc}; {t.Isrc} was written.";
+            }
+        }
+
+        summary = (catalog != null, withIsrc.Count) switch
+        {
+            (true, 0) => "Catalog number matches.",
+            (false, _) => $"{withIsrc.Count} ISRC code(s) match.",
+            _ => $"Catalog number and {withIsrc.Count} ISRC code(s) match."
+        };
+        _note(summary);
+        return null;
+    }
+
+    /// <summary>
+    /// READ SUB-CHANNEL (0x42) with format 2 (catalog number) or 3 (ISRC of one track). The drive looks for a Q frame
+    /// that carries the code; those come only every hundred frames or so, which is why "not found" is asked again.
+    /// </summary>
+    private CodeState ReadCode(byte format, byte track, int length, out string value, out string detail)
+    {
+        value = string.Empty;
+        detail = string.Empty;
+        byte[] buffer = new byte[24];
+        byte[] cdb = [0x42, 0x00, 0x40, format, 0x00, 0x00, track, 0x00, (byte)buffer.Length, 0x00];
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            Array.Clear(buffer);
+            var r = ExecuteWhenReady(cdb, buffer);
+            if (!r.IsSuccess || r.DataTransferLength < 9 + (uint)length)
+            {
+                detail = r.IsSuccess ? "the answer was too short" : Describe(r);
+                return CodeState.DriveCannotReport;
+            }
+
+            if ((buffer[8] & 0x80) != 0)
+            {
+                value = System.Text.Encoding.ASCII.GetString(buffer, 9, length).TrimEnd('\0', ' ');
+                return CodeState.Read;
+            }
+            _sleep(TimeSpan.FromMilliseconds(200));
+        }
+
+        return CodeState.NotOnDisc;
     }
 
     // ---- Audio ----

@@ -287,4 +287,67 @@ public class NativeSaoRealWriteTests
         Assert.True(result.StoppedBeforeWriting);
         Assert.Equal(0, drive.WriteCommandCount);
     }
+
+    private const string Catalog = "1234567890128";
+
+    private static NativeSaoWriteRequest WithCodes(string? catalog = Catalog) =>
+        TwoTracks(second: new SaoTrack(2, TrackSectors, Isrc: "ZZTST2600002")) with { MediaCatalogNumber = catalog };
+
+    [Fact]
+    public void CatalogNumberAndIsrc_AreReadBackAndCompared()
+    {
+        var drive = new VirtualMmcDrive();
+
+        var result = Run(drive, WithCodes());
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("Catalog number and 1 ISRC code(s) match.", result.Verification!.Message);
+        Assert.Contains((byte)0x42, drive.CommandsReceived);
+    }
+
+    [Fact]
+    public void WithoutCodes_TheDriveIsNotAskedForThem()
+    {
+        var drive = new VirtualMmcDrive { LosesCatalogAndIsrc = true };
+
+        var result = Run(drive, TwoTracks());
+
+        Assert.True(result.Success, result.Message);
+        Assert.DoesNotContain((byte)0x42, drive.CommandsReceived);
+        Assert.DoesNotContain("ISRC", result.Verification!.Message);
+    }
+
+    [Fact]
+    public void CodesMissingOnTheNewDisc_FailTheCheck()
+    {
+        var result = Run(new VirtualMmcDrive { LosesCatalogAndIsrc = true }, WithCodes());
+
+        Assert.False(result.Success);
+        Assert.True(result.DiscRecorded);
+        Assert.Contains("catalog number " + Catalog, result.Verification!.Message);
+        Assert.Contains("does not show one", result.Verification.Message);
+
+        var isrcOnly = Run(new VirtualMmcDrive { LosesCatalogAndIsrc = true }, WithCodes(catalog: null));
+        Assert.False(isrcOnly.Success);
+        Assert.Contains("ISRC ZZTST2600002 was written for track 2", isrcOnly.Verification!.Message);
+    }
+
+    [Fact]
+    public void IsrcThatReadsBackDifferently_FailsTheCheck_AndNamesTheTrack()
+    {
+        var result = Run(new VirtualMmcDrive { ChangesIsrcOfTrack = 2 }, WithCodes());
+
+        Assert.False(result.Success);
+        Assert.Contains("ISRC of track 2 reads back as ZZTST2600009", result.Verification!.Message);
+    }
+
+    [Fact]
+    public void DriveThatCannotReportCodes_DoesNotFailTheBurn_ButSaysTheyWereNotChecked()
+    {
+        var result = Run(new VirtualMmcDrive { RejectsReadSubChannel = true }, WithCodes());
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("could not be checked", result.Verification!.Message);
+        Assert.DoesNotContain("match.", result.Verification.Message);
+    }
 }

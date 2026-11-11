@@ -100,6 +100,7 @@ public sealed class LoggingScsiTransport : IScsiTransport
     {
         0x00 => "TEST UNIT READY",
         0x35 => "SYNCHRONIZE CACHE",
+        0x42 => "READ SUB-CHANNEL",
         0x43 => "READ TOC",
         0xBB => "SET CD SPEED",
         0x46 => "GET CONFIGURATION",

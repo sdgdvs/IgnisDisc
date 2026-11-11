@@ -156,8 +156,8 @@
     "featureHtml": "CD-Text / ISRC on burned audio CDs",
     "physical": "⚠️",
     "virtual": "✅",
-    "notesMarkdown": "The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or \"Direct drive commands\" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware once so far: one drive (LG GP60NB50), one CD-RW, CD-Text and audio read back correctly. ISRC and catalog codes have only been run in the simulator",
-    "notesHtml": "The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (<code>--native</code>, or \"Direct drive commands\" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware once so far: one drive (LG GP60NB50), one CD-RW, CD-Text and audio read back correctly. ISRC and catalog codes have only been run in the simulator"
+    "notesMarkdown": "The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or \"Direct drive commands\" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly",
+    "notesHtml": "The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (<code>--native</code>, or \"Direct drive commands\" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly"
   },
   {
     "featureMarkdown": "DVD+R book type (bitsetting)",
