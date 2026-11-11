@@ -136,7 +136,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
 
         using var log = new LoggingScsiTransport(device, ownsInner: true);
         string kind = request.TestWrite ? "test write only" : TestWriteFirst ? "test write, then real write" : "real write";
-        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
+        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R, DVD+RW), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
         log.Note($"Image: {request.ImageBytes:N0} bytes, close disc {request.CloseDisc}, speed asked {(request.WriteSpeedKiloBytesPerSecond?.ToString() ?? "fastest listed")}.");
 
         IDisposable? exclusive = null;
