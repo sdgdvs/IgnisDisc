@@ -32,6 +32,7 @@ internal static class Program
         bool createStartMenuShortcut = true;
         bool addToPath = true;
         string installDir = defaultInstallDir;
+        ShortcutManager shortcuts = ShortcutManager.ForCurrentUser();
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -60,24 +61,32 @@ internal static class Program
             {
                 installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(args[++i]));
             }
+            else if (string.Equals(arg, "--shortcut-root", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                // Puts the shortcuts in <folder>\Desktop and <folder>\Programs instead of the real ones. Used by the
+                // installer tests so a test install never replaces or removes the user's own shortcuts.
+                shortcuts = ShortcutManager.ForRoot(Path.GetFullPath(args[++i]));
+            }
         }
 
         if (uninstall)
         {
-            return RunUninstall(installDir, silent);
+            return RunUninstall(installDir, silent, shortcuts);
         }
 
         if (silent)
         {
             try
             {
-                InstallPayload(
+                IReadOnlyList<string> warnings = InstallPayload(
                     installDir,
                     createDesktopShortcut,
                     createStartMenuShortcut,
                     addToPath,
                     registerUninstaller: installDir.Equals(defaultInstallDir, StringComparison.OrdinalIgnoreCase),
-                    progress: null);
+                    progress: null,
+                    shortcuts: shortcuts);
+                foreach (string warning in warnings) Console.Error.WriteLine($"Warning: {warning}");
                 return 0;
             }
             catch (Exception ex)
@@ -88,7 +97,7 @@ internal static class Program
         }
 
         var app = new System.Windows.Application();
-        var window = new SetupWizardWindow(installDir);
+        var window = new SetupWizardWindow(installDir, shortcuts);
         app.Run(window);
         return window.ExitCode;
     }
@@ -127,8 +136,19 @@ internal static class Program
         return null;
     }
 
-    public static string? GetExistingInstallVersion()
+    /// <summary>
+    /// The version of the IgnisDisc already in <paramref name="installDir"/>, read from its program file. The Apps &amp;
+    /// Features entry is only used when no program file is there: older installers did not always update it (1.08
+    /// left "1.07" behind), so it can name the wrong version.
+    /// </summary>
+    public static string? GetExistingInstallVersion(string installDir)
     {
+        foreach (string exeName in ShortcutManager.KnownAppExeNames)
+        {
+            string? version = ReadProductVersion(Path.Combine(installDir, exeName));
+            if (version != null) return version;
+        }
+
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(UninstallRegKeyPath)
@@ -140,37 +160,22 @@ internal static class Program
         }
         catch { }
 
-        string defaultDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs",
-            "IgnisDisc");
-        string exe = Path.Combine(defaultDir, "IgnisDisc.exe");
-        if (File.Exists(exe))
-        {
-            try
-            {
-                var vi = FileVersionInfo.GetVersionInfo(exe);
-                return vi.ProductVersion?.Split('+')[0] ?? vi.FileVersion;
-            }
-            catch { }
-        }
-
-        string legacyDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs",
-            "CdBurner");
-        string legacyExe = Path.Combine(legacyDir, "CdBurner.App.exe");
-        if (File.Exists(legacyExe))
-        {
-            try
-            {
-                var vi = FileVersionInfo.GetVersionInfo(legacyExe);
-                return vi.ProductVersion?.Split('+')[0] ?? vi.FileVersion;
-            }
-            catch { }
-        }
-
         return null;
+    }
+
+    internal static string? ReadProductVersion(string exePath)
+    {
+        if (!File.Exists(exePath)) return null;
+        try
+        {
+            var vi = FileVersionInfo.GetVersionInfo(exePath);
+            string? version = vi.ProductVersion?.Split('+')[0];
+            return string.IsNullOrWhiteSpace(version) ? vi.FileVersion : version;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static bool EnsureRunningProcessesClosed(string installDir, bool silent)
@@ -277,14 +282,19 @@ internal static class Program
         return dir;
     }
 
-    public static void InstallPayload(
+    /// <summary>
+    /// Copies the files, replaces the shortcuts, and registers the install. Returns warnings for parts that did not
+    /// work but do not stop the program from running (currently: a shortcut that could not be created).
+    /// </summary>
+    public static IReadOnlyList<string> InstallPayload(
         string installDir,
         bool createDesktopShortcut,
         bool createStartMenuShortcut,
         bool addToPath,
         bool registerUninstaller,
         IProgress<(double Percent, string Status)>? progress,
-        bool ensureClosed = true)
+        bool ensureClosed = true,
+        ShortcutManager? shortcuts = null)
     {
         installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
         string installDirWithSep = installDir + Path.DirectorySeparatorChar;
@@ -377,30 +387,14 @@ internal static class Program
         {
         }
 
-        if (createDesktopShortcut)
-        {
-            progress?.Report((88, "Creating Desktop shortcut..."));
-            string desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            CreateWindowsShortcut(
-                Path.Combine(desktopDir, $"{AppTitle}.lnk"),
-                appExePath,
-                installDir,
-                "IgnisDisc Optical Studio — Master CD, DVD, ISO/CUE & Red Book Audio Discs");
-        }
-
-        if (createStartMenuShortcut)
-        {
-            progress?.Report((92, "Creating Start Menu shortcut..."));
-            string startMenuDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.Programs),
-                AppTitle);
-            Directory.CreateDirectory(startMenuDir);
-            CreateWindowsShortcut(
-                Path.Combine(startMenuDir, $"{AppTitle}.lnk"),
-                appExePath,
-                installDir,
-                "IgnisDisc Optical Studio — Master CD, DVD, ISO/CUE & Red Book Audio Discs");
-        }
+        // Replaces the Desktop and Start menu shortcuts and removes ones left by earlier versions, so exactly one of
+        // each opens the program that was just installed.
+        progress?.Report((90, "Updating Desktop and Start menu shortcuts..."));
+        IReadOnlyList<string> warnings = (shortcuts ?? ShortcutManager.ForCurrentUser()).Install(
+            installDir,
+            appExePath,
+            createDesktopShortcut,
+            createStartMenuShortcut);
 
         if (addToPath)
         {
@@ -415,26 +409,7 @@ internal static class Program
         }
 
         progress?.Report((100, $"Installation complete! Installed to {installDir}"));
-    }
-
-    private static void CreateWindowsShortcut(string shortcutPath, string targetPath, string workingDir, string description)
-    {
-        try
-        {
-            Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return;
-            dynamic? shell = Activator.CreateInstance(shellType);
-            if (shell == null) return;
-            dynamic shortcut = shell.CreateShortcut(shortcutPath);
-            shortcut.TargetPath = targetPath;
-            shortcut.WorkingDirectory = workingDir;
-            shortcut.Description = description;
-            shortcut.IconLocation = $"{targetPath},0";
-            shortcut.Save();
-        }
-        catch
-        {
-        }
+        return warnings;
     }
 
     private static void AddDirectoryToUserPath(string installDir)
@@ -537,29 +512,6 @@ internal static class Program
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(location)),
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir)),
                 StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// True when the shortcut at <paramref name="shortcutPath"/> exists and targets a file inside the install folder.
-    /// </summary>
-    internal static bool ShortcutPointsInto(string shortcutPath, string installDirWithSep)
-    {
-        if (!File.Exists(shortcutPath)) return false;
-        try
-        {
-            Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return false;
-            dynamic? shell = Activator.CreateInstance(shellType);
-            if (shell == null) return false;
-            dynamic shortcut = shell.CreateShortcut(shortcutPath);
-            string target = (string)shortcut.TargetPath;
-            return !string.IsNullOrWhiteSpace(target) &&
-                   Path.GetFullPath(target).StartsWith(installDirWithSep, StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
@@ -672,7 +624,7 @@ internal static class Program
         }
     }
 
-    private static int RunUninstall(string installDir, bool silent)
+    private static int RunUninstall(string installDir, bool silent, ShortcutManager shortcuts)
     {
         try
         {
@@ -697,25 +649,10 @@ internal static class Program
                 return 1;
             }
 
-            // Only remove shortcuts and the Apps & Features entry that belong to THIS install folder, so uninstalling one
-            // copy (or a test install in another folder) never touches a different IgnisDisc installation.
-            string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"{AppTitle}.lnk");
-            if (ShortcutPointsInto(desktopLink, installDirWithSep)) TryDeleteFile(desktopLink);
-
-            string startMenuFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), AppTitle);
-            string startMenuLink = Path.Combine(startMenuFolder, $"{AppTitle}.lnk");
-            if (ShortcutPointsInto(startMenuLink, installDirWithSep))
-            {
-                TryDeleteFile(startMenuLink);
-                try
-                {
-                    if (Directory.Exists(startMenuFolder) && !Directory.EnumerateFileSystemEntries(startMenuFolder).Any())
-                    {
-                        Directory.Delete(startMenuFolder);
-                    }
-                }
-                catch { }
-            }
+            // Only remove shortcuts and the Apps & Features entry that belong to THIS install folder (plus shortcuts to
+            // IgnisDisc copies that no longer exist), so uninstalling one copy (or a test install in another folder)
+            // never touches a different IgnisDisc installation.
+            shortcuts.Uninstall(installDir);
 
             if (RegistryEntryBelongsTo(installDir))
             {
@@ -778,13 +715,15 @@ internal sealed class SetupWizardWindow : Window
     private readonly System.Windows.Controls.Button _launchButton;
     private readonly System.Windows.Controls.Button _closeButton;
     private readonly bool _isUpgrade;
+    private readonly ShortcutManager _shortcuts;
     private bool _isInstalled;
 
     public int ExitCode { get; private set; }
 
-    public SetupWizardWindow(string defaultInstallDir)
+    public SetupWizardWindow(string defaultInstallDir, ShortcutManager shortcuts)
     {
-        string? previousVer = Program.GetExistingInstallVersion();
+        _shortcuts = shortcuts;
+        string? previousVer = Program.GetExistingInstallVersion(defaultInstallDir);
         _isUpgrade = !string.IsNullOrEmpty(previousVer);
 
         Title = _isUpgrade
@@ -1038,14 +977,15 @@ internal sealed class SetupWizardWindow : Window
 
         try
         {
-            await Task.Run(() => Program.InstallPayload(
+            IReadOnlyList<string> warnings = await Task.Run(() => Program.InstallPayload(
                 targetDir,
                 desktop,
                 startMenu,
                 addPath,
                 registerUninstaller: true,
                 progress,
-                ensureClosed: false));
+                ensureClosed: false,
+                shortcuts: _shortcuts));
 
             _isInstalled = true;
             _installButton.Content = _isUpgrade ? "✓ Upgraded" : "✓ Installed";
@@ -1054,6 +994,15 @@ internal sealed class SetupWizardWindow : Window
                 : $"IgnisDisc v{Program.AppVersion} installed successfully.";
             _launchButton.Visibility = Visibility.Visible;
             ExitCode = 0;
+
+            if (warnings.Count > 0)
+            {
+                System.Windows.MessageBox.Show(
+                    $"{Program.AppTitle} v{Program.AppVersion} is installed in:\n{targetDir}\n\n" + string.Join("\n", warnings),
+                    Title,
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
         catch (Exception ex)
         {

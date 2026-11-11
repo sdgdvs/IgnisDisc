@@ -17,4 +17,8 @@
     <DebugType>embedded</DebugType>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="CdBurner.Setup.Tests" />
+  </ItemGroup>
+
 </Project>

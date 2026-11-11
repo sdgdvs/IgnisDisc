@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CdBurner.Setup", "tools\CdB
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CdBurner.SetupBootstrapper", "tools\CdBurner.SetupBootstrapper\CdBurner.SetupBootstrapper.csproj", "{6EB22D95-87F9-4BD2-A81A-F6D9E8AD33D7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CdBurner.Setup.Tests", "tests\CdBurner.Setup.Tests\CdBurner.Setup.Tests.csproj", "{0BC038BB-790E-405A-A555-EEC4DE00E8E0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -145,6 +147,18 @@ Global
 		{6EB22D95-87F9-4BD2-A81A-F6D9E8AD33D7}.Release|x64.Build.0 = Release|Any CPU
 		{6EB22D95-87F9-4BD2-A81A-F6D9E8AD33D7}.Release|x86.ActiveCfg = Release|Any CPU
 		{6EB22D95-87F9-4BD2-A81A-F6D9E8AD33D7}.Release|x86.Build.0 = Release|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Debug|x64.Build.0 = Debug|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Debug|x86.Build.0 = Debug|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Release|x64.ActiveCfg = Release|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Release|x64.Build.0 = Release|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Release|x86.ActiveCfg = Release|Any CPU
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -159,5 +173,6 @@ Global
 		{34D6CE35-13EF-4BCA-B3B0-0B711DA122F2} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{DEF2587C-63B4-4FEE-AF32-FEFC55BBB842} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{6EB22D95-87F9-4BD2-A81A-F6D9E8AD33D7} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{0BC038BB-790E-405A-A555-EEC4DE00E8E0} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
