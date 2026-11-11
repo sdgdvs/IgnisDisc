@@ -6,6 +6,7 @@ using CdBurner.Core.Abstractions;
 using CdBurner.Core.Archival;
 using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Persistence;
+using CdBurner.Core.Primitives;
 using CdBurner.Core.Utilities;
 
 namespace CdBurner.App.ViewModels;
@@ -263,12 +264,15 @@ public class SettingsViewModel : ObservableObject
     };
 
     /// <summary>
-    /// Available default burn speeds.
+    /// Default write speed choices: Safest (the default) first, then Maximum, then fixed multipliers.
     /// </summary>
-    public IReadOnlyList<int> AvailableSpeeds { get; } = new[]
-    {
-        0, 1, 2, 4, 8, 16, 24, 32, 40, 48, 52
-    };
+    public IReadOnlyList<SpeedChoice> AvailableSpeeds { get; } =
+        new[] { WriteSpeedPolicy.Safest, WriteSpeedPolicy.Maximum, 4, 8, 16, 24, 32, 48, 52 }
+            .Select(v => new SpeedChoice(v, WriteSpeedPolicy.Describe(v)))
+            .ToArray();
+
+    /// <summary>One entry of the default write speed list.</summary>
+    public sealed record SpeedChoice(int Value, string Label);
 
     #endregion
 

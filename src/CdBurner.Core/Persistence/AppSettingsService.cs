@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CdBurner.Core.Primitives;
 
 namespace CdBurner.Core.Persistence;
 
@@ -18,9 +19,10 @@ public enum ThemeMode
 public class AppSettings
 {
     /// <summary>
-    /// Default optical burn speed multiplier (e.g. 16 for 16X; 0 indicates maximum speed).
+    /// Default write speed: <see cref="WriteSpeedPolicy.Safest"/> (-1, the default) for the slowest speed the drive offers
+    /// for the disc, <see cref="WriteSpeedPolicy.Maximum"/> (0) for the fastest, or a multiplier such as 16.
     /// </summary>
-    public int DefaultWriteSpeedMultiplier { get; set; } = 16;
+    public int DefaultWriteSpeedMultiplier { get; set; } = WriteSpeedPolicy.Safest;
 
     /// <summary>
     /// Whether to automatically verify written media sectors against source hash after burning.
@@ -61,7 +63,7 @@ public class AppSettings
     /// <summary>
     /// Whether to expose the software-defined virtual optical drive backend simulator.
     /// </summary>
-    public bool EnableVirtualDrive { get; set; } = true;
+    public bool EnableVirtualDrive { get; set; } = false;
 
     /// <summary>
     /// In-memory diagnostic ring buffer capacity for the structured burn logger.
@@ -76,7 +78,7 @@ public class AppSettings
     /// <summary>
     /// Whether to enable C2 error pointer based secure extraction by default when ripping Audio CDs.
     /// </summary>
-    public bool SecureAudioRipByDefault { get; set; } = false;
+    public bool SecureAudioRipByDefault { get; set; } = true;
 
     /// <summary>
     /// Whether to look up album and track metadata from MusicBrainz by default when ripping Audio CDs.
@@ -93,6 +95,34 @@ public class AppSettings
     /// Strictly opt-in (default is false).
     /// </summary>
     public bool CheckForUpdatesOnStartup { get; set; } = false;
+
+    /// <summary>The settings layout version this build writes.</summary>
+    public const int CurrentVersion = 2;
+
+    /// <summary>
+    /// Layout version of the stored settings. A file written before versions existed reads as 0.
+    /// </summary>
+    public int SettingsVersion { get; set; }
+
+    /// <summary>
+    /// Brings settings from an older file up to <see cref="CurrentVersion"/>. Version 2 made the defaults safer;
+    /// a value still equal to the old default is moved to the new one, because nobody chose it on purpose
+    /// (the settings file stores every value, chosen or not). Returns true when anything changed.
+    /// </summary>
+    public bool UpgradeToCurrentVersion()
+    {
+        if (SettingsVersion >= CurrentVersion) return false;
+
+        if (SettingsVersion < 2)
+        {
+            if (DefaultWriteSpeedMultiplier == 16) DefaultWriteSpeedMultiplier = WriteSpeedPolicy.Safest; // old default 16x
+            if (EnableVirtualDrive) EnableVirtualDrive = false;                                        // old default on
+            if (!SecureAudioRipByDefault) SecureAudioRipByDefault = true;                              // old default off
+        }
+
+        SettingsVersion = CurrentVersion;
+        return true;
+    }
 
     /// <summary>
     /// Creates a deep copy clone of the current settings.
@@ -115,7 +145,8 @@ public class AppSettings
             SecureAudioRipByDefault = SecureAudioRipByDefault,
             LookupMusicBrainzByDefault = LookupMusicBrainzByDefault,
             VerifyAccurateRipByDefault = VerifyAccurateRipByDefault,
-            CheckForUpdatesOnStartup = CheckForUpdatesOnStartup
+            CheckForUpdatesOnStartup = CheckForUpdatesOnStartup,
+            SettingsVersion = SettingsVersion
         };
     }
 }
@@ -259,6 +290,7 @@ public class AppSettingsService
             var settings = JsonSerializer.Deserialize<AppSettings>(json, ProjectSerializer.JsonOptions) ?? new AppSettings();
             settings.LogRingBufferCapacity = Math.Clamp(settings.LogRingBufferCapacity, 10, 100_000);
             settings.AudioReadOffsetSamples = Math.Clamp(settings.AudioReadOffsetSamples, -10000, 10000);
+            settings.UpgradeToCurrentVersion();
             return settings;
         }
         catch
@@ -284,6 +316,7 @@ public class AppSettingsService
             var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, ProjectSerializer.JsonOptions, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             settings.LogRingBufferCapacity = Math.Clamp(settings.LogRingBufferCapacity, 10, 100_000);
             settings.AudioReadOffsetSamples = Math.Clamp(settings.AudioReadOffsetSamples, -10000, 10000);
+            settings.UpgradeToCurrentVersion();
             return settings;
         }
         catch
@@ -306,6 +339,7 @@ public class AppSettingsService
             Directory.CreateDirectory(dir);
         }
 
+        settings.SettingsVersion = AppSettings.CurrentVersion; // written by this build: never upgrade it again on load
         string json = JsonSerializer.Serialize(settings, ProjectSerializer.JsonOptions);
         File.WriteAllText(filePath, json);
     }
@@ -324,6 +358,7 @@ public class AppSettingsService
             Directory.CreateDirectory(dir);
         }
 
+        settings.SettingsVersion = AppSettings.CurrentVersion; // written by this build: never upgrade it again on load
         await using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
         await JsonSerializer.SerializeAsync(stream, settings, ProjectSerializer.JsonOptions, cancellationToken).ConfigureAwait(false);
     }

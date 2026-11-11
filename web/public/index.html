@@ -218,19 +218,19 @@ PS C:\&gt; ignisdisc-cli.exe burn-audio --drive H: --tracks album\album.cue --da
               </tr>
               <tr>
                 <td><code>burn-iso</code></td>
-                <td><code>--drive &lt;id&gt; --iso &lt;file&gt; [--speed &lt;X&gt;] [--verify | --strict-verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
+                <td><code>--drive &lt;id&gt; --iso &lt;file&gt; [--speed &lt;X|max&gt;] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
               </tr>
               <tr>
                 <td><code>burn-data</code></td>
-                <td><code>--drive &lt;id&gt; --input &lt;dir&gt; [--label &lt;vol&gt;] [--speed &lt;X&gt;] [--udf-rev &lt;rev&gt;] [--verify | --strict-verify] [--no-close] [--overwrite] [--sha256sums] [--blake3sums] [--fixed-time &lt;t&gt;] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
+                <td><code>--drive &lt;id&gt; --input &lt;dir&gt; [--label &lt;vol&gt;] [--speed &lt;X|max&gt;] [--udf-rev &lt;rev&gt;] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--sha256sums] [--blake3sums] [--fixed-time &lt;t&gt;] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
               </tr>
               <tr>
                 <td><code>burn-audio</code></td>
-                <td><code>--drive &lt;id&gt; --tracks &lt;files|cue|m3u&gt; [--title &lt;str&gt;] [--artist &lt;str&gt;] [--speed &lt;X&gt;] [--dao] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
+                <td><code>--drive &lt;id&gt; --tracks &lt;files|cue|m3u&gt; [--title &lt;str&gt;] [--artist &lt;str&gt;] [--speed &lt;X|max&gt;] [--dao] [--native [--test-write | --test-first] [--log-dir &lt;dir&gt;]]</code></td>
               </tr>
               <tr>
                 <td><code>burn-dvd</code></td>
-                <td><code>--drive &lt;id&gt; --video-ts &lt;dir|file&gt; [--label &lt;vol&gt;] [--overwrite]</code></td>
+                <td><code>--drive &lt;id&gt; --video-ts &lt;dir|file&gt; [--label &lt;vol&gt;] [--speed &lt;X|max&gt;] [--no-verify] [--overwrite]</code></td>
               </tr>
               <tr>
                 <td><code>rip</code></td>
@@ -238,7 +238,7 @@ PS C:\&gt; ignisdisc-cli.exe burn-audio --drive H: --tracks album\album.cue --da
               </tr>
               <tr>
                 <td><code>rip-audio</code></td>
-                <td><code>--drive &lt;id&gt; --output &lt;dir&gt; [--format wav|flac] [--tracks 1,3,5] [--lookup] [--secure] [--verify-accuraterip] [--read-offset &lt;n&gt;] [--cover &lt;img&gt;] [--keep-wav] [--continue-on-error]</code></td>
+                <td><code>--drive &lt;id&gt; --output &lt;dir&gt; [--format wav|flac] [--tracks 1,3,5] [--lookup] [--no-secure] [--verify-accuraterip] [--read-offset &lt;n&gt;] [--cover &lt;img&gt;] [--keep-wav] [--continue-on-error]</code></td>
               </tr>
               <tr>
                 <td><code>detect-offset</code></td>

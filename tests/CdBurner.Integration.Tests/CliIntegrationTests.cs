@@ -475,6 +475,67 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("verified").GetBoolean());
     }
 
+    private async Task<string> BuildSmallIsoAsync(string name)
+    {
+        string inputFolder = CreateSampleDataFolder(name + "Source");
+        string iso = Path.Combine(_tempDir, name + ".iso");
+        Assert.Equal(0, await CliCommandRunner.RunAsync(
+            new[] { "build-iso", "--input", inputFolder, "--output", iso, "--label", "DEFAULTS", "--json" },
+            new StringWriter(), new StringWriter(), _deviceService, _burnEngine));
+        return iso;
+    }
+
+    [Fact]
+    public async Task BurnIso_WithNoOptions_UsesTheSlowestOfferedSpeed_AndChecksTheDisc()
+    {
+        string iso = await BuildSmallIsoAsync("defaults");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (burnOut, burnErr) = CreateStringWriters();
+        Assert.Equal(0, await CliCommandRunner.RunAsync(
+            new[] { "burn-iso", "--drive", "VDRV-01", "--iso", iso, "--json" }, burnOut, burnErr, _deviceService, _burnEngine));
+
+        using var doc = ParseJsonOutput(burnOut);
+        Assert.True(doc.RootElement.GetProperty("verified").GetBoolean());
+        // The virtual drive offers 8x to 48x for CD-R; the default is the slowest.
+        Assert.Equal(8.0, doc.RootElement.GetProperty("averageSpeedMultiplier").GetDouble(), 1);
+    }
+
+    [Fact]
+    public async Task BurnIso_SpeedMaxAndNoVerify_AreTheOptOuts()
+    {
+        string iso = await BuildSmallIsoAsync("optout");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (burnOut, burnErr) = CreateStringWriters();
+        Assert.Equal(0, await CliCommandRunner.RunAsync(
+            new[] { "burn-iso", "--drive", "VDRV-01", "--iso", iso, "--speed", "max", "--no-verify", "--json" },
+            burnOut, burnErr, _deviceService, _burnEngine));
+
+        using var doc = ParseJsonOutput(burnOut);
+        Assert.False(doc.RootElement.GetProperty("verified").GetBoolean());
+        Assert.Equal(48.0, doc.RootElement.GetProperty("averageSpeedMultiplier").GetDouble(), 1);
+    }
+
+    [Fact]
+    public async Task BurnIso_UnreadableSpeed_IsRefused_AndNothingIsWritten()
+    {
+        // Before, "--speed 8xx" silently meant the fastest speed.
+        string iso = await BuildSmallIsoAsync("typo");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (burnOut, burnErr) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "burn-iso", "--drive", "VDRV-01", "--iso", iso, "--speed", "8xx" }, burnOut, burnErr, _deviceService, _burnEngine);
+
+        Assert.NotEqual(0, code);
+        Assert.Contains("--speed", burnErr.ToString());
+        Assert.True(_recorder.CurrentMedium?.IsBlank);
+    }
+
     [Fact]
     public async Task BurnIso_Native_WritesDirectly_ReadsBack_AndReportsTheWriter()
     {
@@ -1088,7 +1149,7 @@ public sealed class CliIntegrationTests : IDisposable
         // --overwrite as the last argument, which is how the hardware test that caught the dropped switch ran it.
         var (out2, err2) = CreateStringWriters();
         int allowed = await CliCommandRunner.RunAsync(
-            new[] { "burn-data", "--drive", recorder.UniqueId, "--input", input, "--overwrite" }, out2, err2, devices, engine);
+            new[] { "burn-data", "--drive", recorder.UniqueId, "--input", input, "--no-verify", "--overwrite" }, out2, err2, devices, engine); // this fake drive cannot read back
 
         Assert.True(allowed == 0, err2.ToString());
         Assert.True(engine.Options!.OverwriteExistingData);

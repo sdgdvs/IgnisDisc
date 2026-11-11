@@ -73,7 +73,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     private double _discUsagePercent;
     private string _ripOutputFolder = string.Empty;
     private int _readOffsetSamples;
-    private bool _secureRip;
+    private bool _secureRip = true; // matches AppSettings.SecureAudioRipByDefault
     private bool _lookupMetadata = true;
     private bool _verifyAccurateRip = true;
     private bool _continueOnUnreadable;

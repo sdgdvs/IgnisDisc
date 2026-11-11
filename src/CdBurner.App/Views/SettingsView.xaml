@@ -79,19 +79,22 @@
                     <Grid Margin="0,0,0,12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="240" />
-                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="250" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0"
-                                   Text="Default Write Speed Multiplier:"
+                                   Text="Default write speed:"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                         <ComboBox Grid.Column="1"
-                                  AutomationProperties.Name="Default Write Speed Multiplier"
+                                  AutomationProperties.Name="Default write speed"
                                   ItemsSource="{Binding AvailableSpeeds}"
-                                  SelectedItem="{Binding DefaultWriteSpeedMultiplier}" />
+                                  DisplayMemberPath="Label"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding DefaultWriteSpeedMultiplier}" />
                         <TextBlock Grid.Column="2"
-                                   Text="(0 indicates Maximum supported speed)"
+                                   Text="Safest uses the slowest speed the drive offers for the inserted disc. A speed it does not offer becomes the nearest one it does."
+                                   TextWrapping="Wrap"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextMutedBrush}"
                                    Margin="10,0,0,0" />

@@ -512,13 +512,14 @@ public class ProjectPersistenceTests : IDisposable
 
         // Verify default settings
         var def = service1.CurrentSettings;
-        Assert.Equal(16, def.DefaultWriteSpeedMultiplier);
+        Assert.Equal(WriteSpeedPolicy.Safest, def.DefaultWriteSpeedMultiplier);
+        Assert.True(def.SecureAudioRipByDefault);
         Assert.True(def.VerifyAfterBurnByDefault);
         Assert.False(def.EjectAfterBurnByDefault);
         Assert.True(def.EnableBurnFreeByDefault);
         Assert.Equal(ThemeMode.System, def.ThemeMode);
         Assert.Equal("ffmpeg.exe", def.FfmpegExecutablePath);
-        Assert.True(def.EnableVirtualDrive);
+        Assert.False(def.EnableVirtualDrive);
 
         // 2. Modify settings
         var custom = new AppSettings
@@ -562,7 +563,7 @@ public class ProjectPersistenceTests : IDisposable
         // 5. Test ResetToDefaults
         service2.ResetToDefaults();
         var reset = service2.CurrentSettings;
-        Assert.Equal(16, reset.DefaultWriteSpeedMultiplier);
+        Assert.Equal(WriteSpeedPolicy.Safest, reset.DefaultWriteSpeedMultiplier);
         Assert.True(reset.VerifyAfterBurnByDefault);
         Assert.Equal(ThemeMode.System, reset.ThemeMode);
     }

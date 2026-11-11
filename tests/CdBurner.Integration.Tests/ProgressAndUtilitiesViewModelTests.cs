@@ -357,7 +357,7 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
             vm.ResetSettingsCommand.Execute(null);
 
             // Assert 2: Reset back to defaults
-            Assert.Equal(16, vm.DefaultWriteSpeedMultiplier);
+            Assert.Equal(CdBurner.Core.Primitives.WriteSpeedPolicy.Safest, vm.DefaultWriteSpeedMultiplier);
             Assert.True(vm.VerifyAfterBurnByDefault);
             Assert.False(vm.StrictVerify);
             Assert.Equal(ThemeMode.System, vm.ThemeMode);
@@ -435,20 +435,27 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
     }
 
     [Fact]
-    public void MainViewModel_DefaultWriteSpeed_Selects16xMultiplier()
+    public void MainViewModel_DefaultWriteSpeed_IsTheSlowestOffered_AndAChosenSpeedIsKept()
     {
-        // Arrange
         using var mainVm = new MainViewModel(_deviceManager, _burnEngine);
 
-        // Select virtual CD recorder
         var virtualCd = mainVm.AvailableRecorders.FirstOrDefault(r => r.UniqueId == "VDRV-01");
         Assert.NotNull(virtualCd);
         mainVm.SelectedRecorder = virtualCd;
 
-        // Assert: AvailableWriteSpeeds populated and default speed is 16x (or higher, never slow 4x/8x)
+        // Default: the slowest CD speed the virtual drive offers (8x of 8x..48x), so a first burn takes the cautious choice.
         Assert.NotEmpty(mainVm.AvailableWriteSpeeds);
         Assert.NotNull(mainVm.SelectedWriteSpeed);
-        Assert.Equal(16.0, mainVm.SelectedWriteSpeed.Value.Multiplier);
+        Assert.Equal(8.0, mainVm.SelectedWriteSpeed.Value.Multiplier);
+
+        // A speed chosen in Settings is used instead.
+        mainVm.Settings.DefaultWriteSpeedMultiplier = 16;
+        mainVm.SelectDefaultWriteSpeed();
+        Assert.Equal(16.0, mainVm.SelectedWriteSpeed!.Value.Multiplier);
+
+        mainVm.Settings.DefaultWriteSpeedMultiplier = CdBurner.Core.Primitives.WriteSpeedPolicy.Maximum;
+        mainVm.SelectDefaultWriteSpeed();
+        Assert.Equal(48.0, mainVm.SelectedWriteSpeed!.Value.Multiplier);
     }
 
     #endregion

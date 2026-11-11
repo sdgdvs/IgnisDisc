@@ -196,10 +196,26 @@ public sealed class RipAudioCliTests : IAsyncLifetime, IDisposable
         Assert.Equal(8, freeDb.Length);
 
         Assert.Equal("cd-text", root.GetProperty("metadataSource").GetString());
+        Assert.NotEqual("off", root.GetProperty("secureMode").GetString()); // secure reading is the default
 
         Assert.Contains(wavFiles, f => f.Contains("A4 Concert Pitch", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(wavFiles, f => f.Contains("A5 Octave Leap", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(wavFiles, f => f.Contains("A6 Harmonic Shimmer", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RipAudio_NoSecure_ReadsOnce()
+    {
+        string outDir = Path.Combine(_tempDir, "NoSecureOutput");
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "rip-audio", "--drive", "VDRV-01", "--output", outDir, "--no-secure", "--json" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.Equal("off", doc.RootElement.GetProperty("secureMode").GetString());
     }
 
     [Fact]

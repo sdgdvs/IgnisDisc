@@ -76,17 +76,17 @@ ignisdisc-cli <command> [options]
                                                --fixed-time (or SOURCE_DATE_EPOCH) gives byte-identical images;
                                                --sha256sums adds a root SHA256SUMS that `sha256sum -c` can check;
                                                --blake3sums adds a BLAKE3SUMS that `b3sum -c` can check
-  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify | --strict-verify] [--no-close] [--overwrite]
+  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X|max>] [--no-verify | --strict-verify] [--no-close] [--overwrite]
              [--native [--test-write | --test-first] [--log-dir <folder>]]
-  burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
-             [--boot-bios <img>] [--boot-uefi <img>] [--verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <...>]
+  burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X|max>] [--udf] [--joliet]
+             [--boot-bios <img>] [--boot-uefi <img>] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <...>]
              [--sha256sums] [--blake3sums] [--udf-rev <...>] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
-             [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
-  burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
+             [--speed <X|max>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
+  burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
-             [--read-offset <samples>] [--verify-accuraterip] [--secure] [--continue-on-error] [--cover <image>]
+             [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--continue-on-error] [--cover <image>]
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
              [--redundancy <min %>] [--no-fill]      Recovery data fills each disc; --no-fill keeps exactly that %
@@ -106,7 +106,7 @@ shown by `drives`.
 `--udf` / `--joliet`: by default an image contains ISO 9660, Joliet and UDF. Passing either flag limits the image to
 ISO 9660 plus the file systems you name.
 
-`--verify`: after the burn every sector is read back and compared with the image. A drive can answer a read from
+Verify (on by default; `--no-verify` skips it): after the burn every sector is read back and compared with the image. A drive can answer a read from
 its own memory instead of the disc, so the check tells it to read the disc itself (the FUA bit) wherever burn data
 can still be in that memory: the last part written and the start of the disc, each twice the size of the buffer the
 drive reports. The rest is read normally. `--strict-verify` sets that bit on every read instead; it leaves nothing
@@ -136,9 +136,9 @@ only been run against the built-in drive simulator, and no disc has been tried i
 
 `--native` on `burn-iso` and `burn-data` (experimental, also "Direct drive commands" on the app's Data Disc and Disc
 Image screens) writes the image to a blank CD-R or CD-RW with IgnisDisc's own drive commands: one Mode 1 data track,
-Track-at-Once, at a speed picked from the drive's own list for that disc (the fastest, or the `--speed` you give
+Track-at-Once, at a speed picked from the drive's own list for that disc (the slowest unless `--speed max` or another `--speed` is given,
 rounded down to one the drive offers), never left to Windows. The disc is always read back sector by sector from the
-disc itself afterwards, `--verify` or not. A blank single-layer DVD-R or DVD-RW is written Disc-At-Once (or in
+disc itself afterwards, even with `--no-verify`. A blank single-layer DVD-R or DVD-RW is written Disc-At-Once (or in
 packets when `--no-close` leaves it open) and a DVD+R in sequence, then closed or finalized; this DVD path has only
 run on real DVD-Rs on one drive: a test write, a 372 MB burn closed in one pass, and a disc left open to which
 Windows' own writer then added a second session, every file of both sessions reading back identical. DVD+R and
@@ -162,11 +162,11 @@ Examples:
 ```powershell
 ignisdisc-cli drives
 ignisdisc-cli build-iso --input "C:\Photos\2026" --output C:\temp\photos.iso --label PHOTOS_2026
-ignisdisc-cli burn-iso --drive D: --iso C:\Images\ubuntu.iso --speed 8 --verify
+ignisdisc-cli burn-iso --drive D: --iso C:\Images\ubuntu.iso --speed 8
 ignisdisc-cli burn-data --drive D: --input "C:\Deploy" --label INSTALLER --boot-bios etfsboot.com --boot-uefi efisys.bin
 ignisdisc-cli burn-audio --drive D: --tracks "01.wav,02.wav,03.wav" --title "Demo Album" --artist "Me" --dao
 ignisdisc-cli rip --drive D: --output C:\Backup\disc.iso
-ignisdisc-cli rip-audio --drive D: --output C:\Music\Album --format flac --lookup --verify-accuraterip --secure
+ignisdisc-cli rip-audio --drive D: --output C:\Music\Album --format flac --lookup --verify-accuraterip
 ignisdisc-cli archive-stage --input "C:\Photos" --staging C:\temp\archive --media dvd --redundancy 10
 ignisdisc-cli recover --drive D: --out C:\Rescued\disc01
 ignisdisc-cli erase --drive D:
