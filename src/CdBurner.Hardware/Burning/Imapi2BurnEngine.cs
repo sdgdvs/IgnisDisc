@@ -165,23 +165,19 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                 }
             }
 
-            int negotiatedSectorsPerSec = targetSectorsPerSec;
             DiscMediaType physicalMedia = DiscMediaType.CdR;
             try
             {
                 physicalMedia = ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(formatData.CurrentPhysicalMediaType);
-                int curSpeed = formatData.CurrentWriteSpeed;
-                if (curSpeed > 0)
-                {
-                    negotiatedSectorsPerSec = curSpeed;
-                }
             }
             catch
             {
             }
 
-            // 3. Connect event sink
-            eventSink = new DiscFormatDataEventsSink(progress);
+            // 3. Connect event sink; the speed meter times the data-writing phase from its reports.
+            var speedMeter = new WriteSpeedMeter();
+            eventSink = new DiscFormatDataEventsSink(progress, onSnapshot: snapshot => speedMeter.Observe(
+                snapshot.CurrentActionDescription == nameof(ImapiFormat2DataWriteAction.WritingData), snapshot.CurrentLba, sw.Elapsed));
             eventSink.Connect(formatData);
 
             // 4. Wrap image stream in COM IStream with real-time sector progress
@@ -237,10 +233,10 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
 
             long streamLength = imageStream.CanSeek ? imageStream.Length : 0;
             int sectorsWritten = OpticalConstants.BytesToSectors(streamLength, OpticalConstants.DataSectorSize);
-            int baseRate = WriteSpeedDescriptor.GetBaseRate(physicalMedia, isAudio: false);
-            double speedMultiplier = negotiatedSectorsPerSec > 0 && baseRate > 0
-                ? (double)((long)negotiatedSectorsPerSec * OpticalConstants.DataSectorSize) / baseRate
-                : (options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0);
+            // The speed reached, not the one asked for: measured over the data-writing phase, or over the whole burn
+            // when the writer sent too few progress reports to time that phase.
+            double speedMultiplier = WriteSpeedMeter.DataMultiplier(
+                speedMeter.SectorsPerSecond ?? WriteSpeedMeter.WholeBurnSectorsPerSecond(sectorsWritten, sw.Elapsed), physicalMedia);
 
             if (options.EjectWhenDone || options.EjectAfterBurn)
             {
@@ -354,7 +350,6 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
         bool createdComRecorder = false;
         bool acquiredLock = false;
         bool wasCancelled = false;
-        int negotiatedAudioSectorsPerSec = -1;
         IDiscFormat2TrackAtOnce? tao = null;
         IDiscFormat2RawCD? rawCd = null;
         IRawCDImageCreator? rawCreator = null;
@@ -487,15 +482,6 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                         if (rawTargetSectorsPerSec > 0)
                         {
                             try { rawCd.SetWriteSpeed(rawTargetSectorsPerSec, false); } catch { }
-                            negotiatedAudioSectorsPerSec = rawTargetSectorsPerSec;
-                        }
-                        try
-                        {
-                            int curRawSpeed = rawCd.CurrentWriteSpeed;
-                            if (curRawSpeed > 0) negotiatedAudioSectorsPerSec = curRawSpeed;
-                        }
-                        catch
-                        {
                         }
 
                         CancellationTokenRegistration daoReg = default;
@@ -582,15 +568,6 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
                     if (taoTargetSectorsPerSec > 0)
                     {
                         try { tao.SetWriteSpeed(taoTargetSectorsPerSec, false); } catch { }
-                        negotiatedAudioSectorsPerSec = taoTargetSectorsPerSec;
-                    }
-                    try
-                    {
-                        int curTaoSpeed = tao.CurrentWriteSpeed;
-                        if (curTaoSpeed > 0) negotiatedAudioSectorsPerSec = curTaoSpeed;
-                    }
-                    catch
-                    {
                     }
 
                     CancellationTokenRegistration taoReg = default;
@@ -649,9 +626,9 @@ public class Imapi2BurnEngine : IBurnEngineBackend, ISecureAudioReader
             }
 
             sw.Stop();
-            double speedMultiplier = negotiatedAudioSectorsPerSec > 0
-                ? (double)((long)negotiatedAudioSectorsPerSec * OpticalConstants.RawSectorSize) / OpticalConstants.CdAudio1XBytesPerSec
-                : (options.Speed?.Multiplier > 0 ? options.Speed.Value.Multiplier : 16.0);
+            // The speed reached, not the one asked for: audio sectors over the whole burn (1x = 75 a second), including
+            // the lead-in and closing, since this writer reports no separate data-writing phase.
+            double speedMultiplier = WriteSpeedMeter.WholeBurnSectorsPerSecond(totalSectors, sw.Elapsed) / 75.0;
 
             if (options.EjectWhenDone)
             {
