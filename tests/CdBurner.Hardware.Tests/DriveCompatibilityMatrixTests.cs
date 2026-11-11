@@ -58,6 +58,7 @@ public class DriveCompatibilityMatrixTests
         public int? ScsiReadCapacitySectors { get; init; }
         public int? ScsiSessionCount { get; init; }
         public int? MountedVolumeSectors { get; init; }
+        public int? FileSystemEndSector { get; init; }
         public IReadOnlyList<DiscTocTrack> TocTracks { get; init; } = Array.Empty<DiscTocTrack>();
         public byte[]? CdTextPacks { get; init; }
 
@@ -404,6 +405,7 @@ public class DriveCompatibilityMatrixTests
         public IReadOnlyList<DiscTocTrack> ReadTableOfContents(string volumePath) => Persona.TocTracks;
         public byte[]? ReadCdTextPacks(string volumePath) => Persona.CdTextPacks;
         public int? TryGetMountedVolumeSectors(string? volumePath) => Persona.MountedVolumeSectors;
+        public int? ReadFileSystemEndSector(string volumePath) => Persona.FileSystemEndSector;
         public bool TrySpinDown(string? volumePath)
         {
             SpinDownCount++;
@@ -953,7 +955,8 @@ public class DriveCompatibilityMatrixTests
                 FreeSectorsOnMedia = 2_295_104,
                 NextWritableAddress = 0,
                 ScsiReadCapacitySectors = 2_295_104,
-                MountedVolumeSectors = 30_000,
+                MountedVolumeSectors = 29_999, // Windows stops at the end of the UDF partition
+                FileSystemEndSector = 30_000,  // the disc's descriptors include the closing anchor
                 ScsiSessionCount = 1,
                 ExpectedMediaType = DiscMediaType.DvdPlusRw,
                 ExpectedIsBlank = false,

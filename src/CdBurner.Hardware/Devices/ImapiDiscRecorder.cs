@@ -549,10 +549,24 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
                             }
 
                             // On overwrite-only media READ CAPACITY returns the whole formatted disc (a DVD+RW holding
-                            // 60 MB reported 4.38 GB used), so use the mounted file system's size when Windows has one.
-                            if (overwriteOnly && _comProvider.TryGetMountedVolumeSectors(VolumePath) is { } volumeSectors)
+                            // 60 MB reported 4.38 GB used), so take the size of the file system instead: from the
+                            // disc's own volume descriptors, and from Windows when it has the disc mounted. Windows
+                            // ends a UDF volume with its partition and so leaves out the closing anchor in the last
+                            // sector (measured: 31,054 for a 31,055-sector image); the larger of the two is used.
+                            if (overwriteOnly)
                             {
-                                usedSectors = volumeSectors;
+                                int? mounted = _comProvider.TryGetMountedVolumeSectors(VolumePath);
+                                int? described = _comProvider.ReadFileSystemEndSector(VolumePath);
+                                if (described is { } d && readable is > 0 && d > readable.Value)
+                                {
+                                    described = null; // descriptors that point past the formatted disc are not trusted
+                                }
+
+                                int fileSystemSectors = Math.Max(mounted ?? 0, described ?? 0);
+                                if (fileSystemSectors > 0)
+                                {
+                                    usedSectors = fileSystemSectors;
+                                }
                             }
                         }
                         long totalBytes = (long)totalSectors * OpticalConstants.DataSectorSize;

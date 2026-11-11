@@ -1252,6 +1252,9 @@ public interface IImapiComProvider
     IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContents(string volumePath);
     byte[]? ReadCdTextPacks(string volumePath);
     int? TryGetMountedVolumeSectors(string? volumePath);
+
+    /// <summary>Sector count of the file system on the disc, from its own volume descriptors; null if unknown.</summary>
+    int? ReadFileSystemEndSector(string volumePath);
     bool TrySpinDown(string? volumePath);
 }
 
@@ -1274,6 +1277,7 @@ public sealed class DefaultImapiComProvider : IImapiComProvider
     public IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContents(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadTableOfContents(volumePath);
     public byte[]? ReadCdTextPacks(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadCdTextPacks(volumePath);
     public bool TrySpinDown(string? volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.TrySpinDown(volumePath);
+    public int? ReadFileSystemEndSector(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadFileSystemEndSector(volumePath);
 
     public int? TryGetMountedVolumeSectors(string? volumePath)
     {

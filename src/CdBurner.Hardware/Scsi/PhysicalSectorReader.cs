@@ -980,6 +980,33 @@ public static partial class PhysicalSectorReader
     }
 
     /// <summary>
+    /// Returns how many sectors the file system on the inserted disc occupies, read from its own ISO 9660 / UDF
+    /// volume descriptors (see <see cref="CdBurner.Core.Iso.RecordedVolumeExtent"/>), or null if it has neither.
+    /// </summary>
+    public static int? ReadFileSystemEndSector(string volumePath)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(volumePath))
+        {
+            return null;
+        }
+
+        using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+        if (handle == null)
+        {
+            return null;
+        }
+
+        using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+        return CdBurner.Core.Iso.RecordedVolumeExtent.FindEndSector(lba =>
+        {
+            byte[] sector = new byte[OpticalConstants.DataSectorSize];
+            var result = transport.ExecuteCommand(MmcCommandBuilder.BuildRead10Cdb(lba, 1), sector,
+                ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(10));
+            return result.IsSuccess ? sector : null;
+        });
+    }
+
+    /// <summary>
     /// Returns the number of readable sectors on the inserted disc (last recorded LBA + 1), or null if unknown.
     /// Uses READ CAPACITY via pass-through, then IOCTL_DISK_GET_LENGTH_INFO on a read-only handle.
     /// </summary>
