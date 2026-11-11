@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>IgnisDisc Optical Studio — Windows CD/DVD Burner, Audio CD Ripper &amp; Archiver</title>
-  <meta name="description" content="IgnisDisc Optical Studio (v1.12): free, open-source Windows 10/11 desktop app and command-line tool for burning data, audio and video discs (ISO 9660 / Joliet / UDF, El Torito), ripping audio CDs with C2 error pointers and AccurateRip, and multi-disc archives with SHA-256 manifests and PAR2 recovery data." />
+  <meta name="description" content="IgnisDisc Optical Studio (v1.13): free, open-source Windows 10/11 desktop app and command-line tool for burning data, audio and video discs (ISO 9660 / Joliet / UDF, El Torito), ripping audio CDs with C2 error pointers and AccurateRip, and multi-disc archives with SHA-256 manifests and PAR2 recovery data." />
   <link rel="icon" type="image/x-icon" href="/assets/IgnisDisc.ico" />
   <link rel="stylesheet" href="/styles.css?v=1.12.1" />
 </head>
@@ -18,7 +18,7 @@
         <span>IgnisDisc Optical Studio</span>
       </div>
       <div class="telemetry-meta">
-        <div class="telemetry-cell">REV: <span id="navVersion">v1.12</span></div>
+        <div class="telemetry-cell">REV: <span id="navVersion">v1.13</span></div>
         <div class="telemetry-cell">TARGET: <strong>WIN10/11 x64 (.NET 10)</strong></div>
         <div class="telemetry-cell">LICENSE: <strong>GPL-3.0-OR-LATER</strong></div>
         <div class="telemetry-cell">SRC: <a id="navGithubLink" href="https://github.com/tether-works/IgnisDisc" target="_blank" rel="noopener">GITHUB</a></div>
@@ -38,15 +38,15 @@
 
         <!-- Download & Verification Block -->
         <div class="action-bar" id="download">
-          <a id="btnDownloadSetup" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.12/IgnisDisc-Setup.exe" class="btn-hardware">
+          <a id="btnDownloadSetup" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.13/IgnisDisc-Setup.exe" class="btn-hardware">
             <span>Download Installer (IgnisDisc-Setup.exe)</span>
             <span>·</span>
-            <span class="dl-sub">v1.12 · 81.9 MB</span>
+            <span class="dl-sub">v1.13 · 81.9 MB</span>
           </a>
-          <a id="btnDownloadPortable" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.12/IgnisDisc-Portable-win-x64.zip" class="btn-hardware btn-hardware-secondary">
+          <a id="btnDownloadPortable" href="https://github.com/tether-works/IgnisDisc/releases/download/v1.13/IgnisDisc-Portable-win-x64.zip" class="btn-hardware btn-hardware-secondary">
             <span>Portable .zip</span>
             <span>·</span>
-            <span class="dl-sub">v1.12 · 81.3 MB</span>
+            <span class="dl-sub">v1.13 · 81.3 MB</span>
           </a>
         </div>
 
@@ -60,13 +60,13 @@
           </div>
           <div class="digest-row">
             <span class="digest-label">IgnisDisc-Setup.exe</span>
-            <code id="hashSetup">E078984B52E6DFFBBADCCBB07AC1771D3D3063210A9D2EFF344E1174B4E0B683</code>
-            <button type="button" class="btn-copy" data-copy="E078984B52E6DFFBBADCCBB07AC1771D3D3063210A9D2EFF344E1174B4E0B683">[ COPY ]</button>
+            <code id="hashSetup">41C578DED71356A8CFCC1B15E08E53BA0314058EFAFFAB8BA711DDD1D8327A60</code>
+            <button type="button" class="btn-copy" data-copy="41C578DED71356A8CFCC1B15E08E53BA0314058EFAFFAB8BA711DDD1D8327A60">[ COPY ]</button>
           </div>
           <div class="digest-row">
             <span class="digest-label">IgnisDisc-Portable-win-x64.zip</span>
-            <code id="hashPortable">D1904A1EAA6C8AC5DA184D6B1B81FFD6A66035F9798D6D59E11CE37591D71BF2</code>
-            <button type="button" class="btn-copy" data-copy="D1904A1EAA6C8AC5DA184D6B1B81FFD6A66035F9798D6D59E11CE37591D71BF2">[ COPY ]</button>
+            <code id="hashPortable">D0C8EF7591E33527826C2763E8035540EC6C934D13739887611FD70FF2803A30</code>
+            <button type="button" class="btn-copy" data-copy="D0C8EF7591E33527826C2763E8035540EC6C934D13739887611FD70FF2803A30">[ COPY ]</button>
           </div>
         </div>
       </div>
@@ -97,7 +97,7 @@
 
 PS C:\&gt; ignisdisc-cli.exe media-info --drive H: --json
 {
-  "engine": "IgnisDisc v1.12 (GPL-3.0-or-later, https://ignisdisc.tetherworks.dev)",
+  "engine": "IgnisDisc v1.13 (GPL-3.0-or-later, https://ignisdisc.tetherworks.dev)",
   "success": true,
   ...
   "vendorId": "HL-DT-ST",
@@ -174,7 +174,7 @@ PS C:\&gt; ignisdisc-cli.exe burn-audio --drive H: --tracks album\album.cue --da
                 <tr><td>Bootable discs (El Torito BIOS + UEFI)</td><td><span class="badge-pass">[ PASS ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders</td></tr>
                 <tr><td>DVD-Video authoring</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Requires <code>ffmpeg.exe</code>; test on a standalone player before relying on it</td></tr>
                 <tr><td>Blu-ray (BD-R / BD-RE)</td><td><span class="badge-na">[ N/A ]</span></td><td><span class="badge-na">[ N/A ]</span></td><td>Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, but burning one has never been tried on a real drive</td></tr>
-                <tr><td>Burn CDs with direct drive commands (experimental, off by default)</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (<code>--native</code>, or "Direct drive commands" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way. On real hardware so far two DVD-Rs on the same drive (Verbatim): one closed in one pass (372 MB), one left open, after which Windows' own writer added a second session; every file of each session identical when read through Windows. One DVD+RW too (Verbatim, written over with leave to replace its data, 372 MB, every file identical; a new DVD+RW is formatted first, which has run only in the simulator). DVD+R, DVD-RW (sequential or in overwrite mode) and DVD-RAM have run only in the built-in drive simulator. Dual-layer DVDs and Blu-ray discs still use the Windows writer</td></tr>
+                <tr><td>Burn CDs with direct drive commands (experimental, off by default)</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (<code>--native</code>, or "Direct drive commands" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way. On real hardware so far two DVD-Rs on the same drive (Verbatim): one closed in one pass (372 MB), one left open, after which Windows' own writer added a second session; every file of each session identical when read through Windows. Two DVD+RWs too (Verbatim, 372 MB each, every file identical): a used one written over with leave to replace its data, and a new one, formatted first by the drive. DVD+R, DVD-RW (sequential or in overwrite mode) and DVD-RAM have run only in the built-in drive simulator. Dual-layer DVDs and Blu-ray discs still use the Windows writer</td></tr>
                 <tr><td>CD-Text / ISRC on burned audio CDs</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (<code>--native</code>, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly</td></tr>
                 <tr><td>DVD+R book type (bitsetting)</td><td><span class="badge-na">[ N/A ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>Needs drive-vendor-specific commands; reports "not supported" instead of pretending</td></tr>
                 <tr><td>Test write (simulation)</td><td><span class="badge-warn">[ PARTIAL ]</span></td><td><span class="badge-pass">[ PASS ]</span></td><td>With the experimental direct writer (<code>--native --test-write</code>): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. DVD-R has passed a test write on the same drive (a Verbatim DVD-R, still blank after a reload); DVD-RW only in the drive simulator so far; DVD+R discs have none. The Windows writer has no test write</td></tr>
@@ -402,7 +402,7 @@ PS C:\&gt; ignisdisc-cli.exe burn-audio --drive H: --tracks album\album.cue --da
     <!-- Footer Strip -->
     <footer class="datasheet-footer">
       <div>
-        <strong>IgnisDisc v1.12</strong> · Published by <a href="https://tetherworks.dev">tetherworks</a> · GPL-3.0-or-later License · Zero Telemetry, Zero Cookies, Zero Third-Party Requests
+        <strong>IgnisDisc v1.13</strong> · Published by <a href="https://tetherworks.dev">tetherworks</a> · GPL-3.0-or-later License · Zero Telemetry, Zero Cookies, Zero Third-Party Requests
       </div>
       <div class="footer-links">
         <a href="#download">DOWNLOAD</a>

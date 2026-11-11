@@ -5,10 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>1.12</Version>
-    <InformationalVersion>1.12</InformationalVersion>
-    <AssemblyVersion>1.0.12.0</AssemblyVersion>
-    <FileVersion>1.0.12.0</FileVersion>
+    <Version>1.13</Version>
+    <InformationalVersion>1.13</InformationalVersion>
+    <AssemblyVersion>1.0.13.0</AssemblyVersion>
+    <FileVersion>1.0.13.0</FileVersion>
     <Product>IgnisDisc Optical Studio</Product>
     <Company>tetherworks</Company>
     <Copyright>Copyright (c) 2026 tetherworks</Copyright>
