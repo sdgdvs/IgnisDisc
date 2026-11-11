@@ -1,0 +1,646 @@
+using System.Buffers.Binary;
+using System.Diagnostics;
+using CdBurner.Core.Abstractions;
+using CdBurner.Hardware.Scsi;
+
+namespace CdBurner.Hardware.NativeWriting;
+
+/// <summary>What to write: a 2,048-byte-sector data image.</summary>
+/// <param name="Image">The image, read from <paramref name="StartPosition"/>. Must be seekable so a test write and the
+/// real write can both read it from the start.</param>
+/// <param name="StartPosition">Where the image starts in the stream.</param>
+/// <param name="ImageBytes">Bytes of image from <paramref name="StartPosition"/>; the last sector is padded with zeros.</param>
+/// <param name="TestWrite">True: laser off, the disc stays blank.</param>
+/// <param name="CloseDisc">True: no more sessions can be added afterwards.</param>
+/// <param name="WriteSpeedKiloBytesPerSecond">Speed to set (176.4 kB/s per 1x), or null for the fastest the drive lists
+/// for this disc.</param>
+public sealed record NativeDataWriteRequest(
+    Stream Image,
+    long StartPosition,
+    long ImageBytes,
+    bool TestWrite,
+    bool CloseDisc = true,
+    int? WriteSpeedKiloBytesPerSecond = null);
+
+/// <summary>Outcome of a native Track-at-Once data write.</summary>
+public sealed record NativeDataWriteResult
+{
+    public bool Success { get; init; }
+    public bool Cancelled { get; init; }
+
+    /// <summary>True when the writer stopped before the first WRITE command: the disc was not touched.</summary>
+    public bool StoppedBeforeWriting { get; init; }
+
+    /// <summary>True when the disc is not a CD-R or CD-RW, which this writer does not handle yet.</summary>
+    public bool UnsupportedDisc { get; init; }
+
+    public string Message { get; init; } = string.Empty;
+
+    /// <summary>Image sectors sent (without the padding to the minimum track length).</summary>
+    public int DataSectorsWritten { get; init; }
+
+    /// <summary>Zero sectors added after the image because a track must be at least 300 sectors long.</summary>
+    public int PaddingSectors { get; init; }
+
+    public TimeSpan Elapsed { get; init; }
+
+    /// <summary>Time spent sending the data alone (no lead-in, lead-out or closing), for the speed figure.</summary>
+    public TimeSpan WritingTime { get; init; }
+
+    /// <summary>The write speed asked for with SET CD SPEED, in kB/s; null when none was set.</summary>
+    public int? SpeedSetKiloBytesPerSecond { get; init; }
+
+    /// <summary>The drive's own write speeds for this disc (GET PERFORMANCE), fastest first, in kB/s.</summary>
+    public IReadOnlyList<int> DriveSpeedsKiloBytesPerSecond { get; init; } = Array.Empty<int>();
+
+    /// <summary>True when a real write sent every sector and the session was closed.</summary>
+    public bool DiscRecorded { get; init; }
+
+    public bool TestWriteNotOffered { get; init; }
+    public bool? DiscStillBlankAfterTestWrite { get; init; }
+}
+
+/// <summary>
+/// Writes one Mode 1 data track to a blank CD-R or CD-RW Track-at-Once with MMC commands: mode page 0x05 (write
+/// type 1, data block type 8), SET CD SPEED from the drive's own list, WRITE (10) of 2,048-byte sectors from the next
+/// writable address, SYNCHRONIZE CACHE, then CLOSE SESSION. The same write / close-track / close-session order is what
+/// DVD±R uses, so this is the base for those discs too. Like the audio writer, every check runs before the first WRITE
+/// and a failure up to there leaves the disc untouched. The sector-by-sector read-back check is done afterwards by
+/// <see cref="CdBurner.Core.Burning.DataBurnService"/> (READ (10) with FUA), as for the Windows writer.
+/// </summary>
+public sealed class NativeTaoDataWriter
+{
+    public const ushort SectorsPerWrite = 31;       // 63,488 bytes, under the common 64 KiB transfer limit
+    public const int MinimumTrackSectors = 300;     // a CD track is at least 4 seconds
+    public const int RunOutSectors = 2;             // Track-at-Once ends each track with 2 run-out blocks
+    public const int SectorSize = 2048;
+
+    private static readonly TimeSpan ShortTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan FlushTimeout = TimeSpan.FromMinutes(10);
+
+    private readonly IScsiTransport _transport;
+    private readonly Action<string> _note;
+    private readonly Action<TimeSpan> _sleep;
+
+    public NativeTaoDataWriter(IScsiTransport transport, Action<string>? note = null, Action<TimeSpan>? sleep = null)
+    {
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _note = note ?? (_ => { });
+        _sleep = sleep ?? Thread.Sleep;
+    }
+
+    public NativeDataWriteResult Write(NativeDataWriteRequest request, IProgress<BurnProgressSnapshot>? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var clock = Stopwatch.StartNew();
+        var state = new RunState();
+        try
+        {
+            return Run(request, progress, cancellationToken, clock, state);
+        }
+        catch (WriteStop stop)
+        {
+            _note(stop.Message);
+            if (state.WritingStarted)
+            {
+                TryFlush();
+            }
+            return new NativeDataWriteResult
+            {
+                Success = false,
+                Cancelled = stop.Cancelled,
+                StoppedBeforeWriting = !state.WritingStarted,
+                UnsupportedDisc = state.UnsupportedDisc,
+                TestWriteNotOffered = state.TestWriteNotOffered,
+                Message = stop.Message,
+                DataSectorsWritten = Math.Min(state.SectorsSent, state.ImageSectors),
+                Elapsed = clock.Elapsed,
+                SpeedSetKiloBytesPerSecond = state.SpeedSet,
+                DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds
+            };
+        }
+    }
+
+    private NativeDataWriteResult Run(NativeDataWriteRequest request, IProgress<BurnProgressSnapshot>? progress, CancellationToken ct, Stopwatch clock, RunState state)
+    {
+        if (!request.Image.CanSeek || !request.Image.CanRead)
+        {
+            throw Stop("The image cannot be read from the start again (not a seekable file).");
+        }
+        if (request.ImageBytes <= 0)
+        {
+            throw Stop("The image is empty.");
+        }
+        if (request.ImageBytes > (long)int.MaxValue * SectorSize)
+        {
+            throw Stop("The image is too large for a CD.");
+        }
+
+        state.ImageSectors = (int)((request.ImageBytes + SectorSize - 1) / SectorSize);
+        int trackSectors = Math.Max(state.ImageSectors, MinimumTrackSectors);
+        Check(ct, state);
+
+        // 1. Drive ready, disc type, Track-at-Once support.
+        WaitUntilReady(TimeSpan.FromSeconds(30), ct, state, "before writing");
+        var tao = ReadTrackAtOnceFeature();
+        if (tao.Profile is not (NativeSaoAudioWriter.ProfileCdR or NativeSaoAudioWriter.ProfileCdRw))
+        {
+            state.UnsupportedDisc = true;
+            throw Stop($"Direct writing of data discs covers CD-R and CD-RW so far (the disc in the drive has profile 0x{tao.Profile:X4}).");
+        }
+        if (!tao.Present || !tao.Current)
+        {
+            throw Stop("The drive does not offer Track-at-Once writing for this disc.");
+        }
+        if (request.TestWrite && !tao.TestWrite)
+        {
+            state.TestWriteNotOffered = true;
+            throw Stop("The drive does not offer test writes in Track-at-Once mode.");
+        }
+
+        // 2. Blank disc; where writing starts and how much fits.
+        var disc = ReadDiscInformation() ?? throw Stop("The drive did not return disc information.");
+        if (disc.Status != 0)
+        {
+            throw Stop("The disc is not blank. Direct writing needs a blank CD-R or an erased CD-RW.");
+        }
+
+        var track = ReadTrackInformation(1);
+        int startLba = 0;
+        long freeSectors;
+        if (track is { NextWritableAddressValid: true } t)
+        {
+            if (t.NextWritableAddress != 0)
+            {
+                throw Stop($"The blank disc's first writable sector is {t.NextWritableAddress}, not 0; the image would not be readable.");
+            }
+            startLba = t.NextWritableAddress;
+            freeSectors = t.FreeBlocks;
+        }
+        else
+        {
+            // No track information: fall back on the disc's last possible lead-out.
+            freeSectors = disc.LastLeadOutStart.Minute < 90 ? disc.LastLeadOutStart.ToLba() : 0;
+            _note($"No next writable address from READ TRACK INFORMATION; using the last lead-out start {disc.LastLeadOutStart} ({freeSectors} sectors).");
+        }
+
+        if (freeSectors > 0 && trackSectors + RunOutSectors > freeSectors)
+        {
+            throw Stop($"The image ({state.ImageSectors:N0} sectors) does not fit on this disc ({freeSectors:N0} sectors free).");
+        }
+        _note($"Disc blank; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
+              (trackSectors > state.ImageSectors ? $" + {trackSectors - state.ImageSectors} padding" : "") + $"; {freeSectors} free.");
+
+        // 3. Write parameters, then read them back.
+        var current = ReadWriteParameters() ?? throw Stop("The drive did not return its write parameters (mode page 0x05).");
+        var wanted = current.ForTrackAtOnceData(request.TestWrite, tao.BufferUnderrunFree, request.CloseDisc);
+        if (!SelectWriteParameters(wanted))
+        {
+            throw Stop("The drive rejected the Track-at-Once data write parameters.");
+        }
+        var confirmed = ReadWriteParameters() ?? throw Stop("The drive did not report its write parameters after they were set.");
+        if (confirmed.WriteType != WriteParametersPage.WriteTypeTrackAtOnce || confirmed.DataBlockType != WriteParametersPage.DataBlockTypeMode1)
+        {
+            throw Stop($"The drive did not switch to Track-at-Once Mode 1 (write type {confirmed.WriteType}, data block type {confirmed.DataBlockType}).");
+        }
+        if (confirmed.TestWrite != request.TestWrite)
+        {
+            throw Stop("The drive did not confirm test-write mode, so nothing was written.");
+        }
+        _note($"Write parameters confirmed: TAO, Mode 1, test write {confirmed.TestWrite}, BUFE {confirmed.BufferUnderrunFree}, multi-session {confirmed.MultiSession}.");
+
+        // 4. Speed from the drive's own list for this disc, never left to chance.
+        ChooseAndSetSpeed(request.WriteSpeedKiloBytesPerSecond, state);
+        Check(ct, state);
+
+        // 5. The data. From here on the drive is writing (laser at read power during a test write).
+        request.Image.Position = request.StartPosition;
+        var reporter = new ProgressReporter(this, progress, clock, trackSectors);
+        var writing = Stopwatch.StartNew();
+        WriteTrack(request, startLba, trackSectors, state, reporter, ct);
+        writing.Stop();
+
+        // 6. Flush: the drive empties its buffer and writes the run-out.
+        reporter.Report(trackSectors, "Finishing the track");
+        Flush("after the data");
+        WaitUntilReady(FlushTimeout, CancellationToken.None, state, "after writing");
+
+        if (request.TestWrite)
+        {
+            bool stillBlank = CheckUnwrittenAfterTestWrite(out string extra);
+            reporter.Report(trackSectors, "Done");
+            return new NativeDataWriteResult
+            {
+                Success = stillBlank,
+                Message = stillBlank
+                    ? "Test write finished; the disc was not written." + extra
+                    : "The drive reported a recorded disc after a test write: it did not honour the test-write setting. Do not use direct writing with this drive.",
+                DataSectorsWritten = state.ImageSectors,
+                PaddingSectors = trackSectors - state.ImageSectors,
+                Elapsed = clock.Elapsed,
+                WritingTime = writing.Elapsed,
+                SpeedSetKiloBytesPerSecond = state.SpeedSet,
+                DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
+                DiscStillBlankAfterTestWrite = stillBlank
+            };
+        }
+
+        // 7. Close the session: the drive writes the lead-in and lead-out. Cancelling is no longer offered.
+        reporter.Report(trackSectors, request.CloseDisc ? "Closing the disc" : "Closing the session");
+        var close = _transport.ExecuteCommand(NativeWriteCommands.BuildCloseTrackSession(NativeWriteCommands.CloseFunctionSession),
+            Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, FlushTimeout);
+        if (!close.IsSuccess)
+        {
+            throw Stop($"The data was written, but the drive could not close the session: {Describe(close)}. The disc may not be readable.");
+        }
+        WaitUntilReady(FlushTimeout, CancellationToken.None, state, "while closing the session");
+
+        // 8. A quick look at what the drive now reports: one data track from LBA 0.
+        string tocNote = CheckTableOfContents(startLba, state.ImageSectors);
+        reporter.Report(trackSectors, "Done");
+        return new NativeDataWriteResult
+        {
+            Success = true,
+            Message = "The data track was written and the " + (request.CloseDisc ? "disc closed. " : "session closed. ") + tocNote,
+            DataSectorsWritten = state.ImageSectors,
+            PaddingSectors = trackSectors - state.ImageSectors,
+            Elapsed = clock.Elapsed,
+            WritingTime = writing.Elapsed,
+            SpeedSetKiloBytesPerSecond = state.SpeedSet,
+            DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
+            DiscRecorded = true
+        };
+    }
+
+    private void WriteTrack(NativeDataWriteRequest request, int startLba, int trackSectors, RunState state, ProgressReporter reporter, CancellationToken ct)
+    {
+        byte[] buffer = new byte[SectorsPerWrite * SectorSize];
+        long remainingImage = request.ImageBytes;
+        int lba = startLba;
+        int end = startLba + trackSectors;
+        while (lba < end)
+        {
+            Check(ct, state);
+            int n = Math.Min(SectorsPerWrite, end - lba);
+            int bytes = n * SectorSize;
+            int fromImage = (int)Math.Min(bytes, Math.Max(0, remainingImage));
+            try
+            {
+                ReadExactly(request.Image, buffer.AsSpan(0, fromImage));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or EndOfStreamException)
+            {
+                throw Stop($"Could not read the image at sector {lba - startLba}: {ex.Message}");
+            }
+            Array.Clear(buffer, fromImage, bytes - fromImage);
+            remainingImage -= fromImage;
+
+            WriteBlocks(lba, (ushort)n, buffer.AsSpan(0, bytes), state);
+            lba += n;
+            state.SectorsSent += n;
+            reporter.Report(state.SectorsSent, "Writing data");
+        }
+    }
+
+    private static void ReadExactly(Stream stream, Span<byte> destination)
+    {
+        int done = 0;
+        while (done < destination.Length)
+        {
+            int n = stream.Read(destination[done..]);
+            if (n <= 0)
+            {
+                throw new EndOfStreamException("The image ended early.");
+            }
+            done += n;
+        }
+    }
+
+    private void WriteBlocks(int lba, ushort count, Span<byte> data, RunState state)
+    {
+        byte[] cdb = NativeWriteCommands.BuildWrite10(lba, count);
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            state.WritingStarted = true;
+            var r = _transport.ExecuteCommand(cdb, data, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, WriteTimeout);
+            if (r.IsSuccess)
+            {
+                return;
+            }
+            if (r.SenseInfo is { SenseKey: 0x02, Asc: 0x04, Ascq: 0x07 or 0x08 } && deadline.Elapsed < WriteTimeout)
+            {
+                _sleep(TimeSpan.FromMilliseconds(20)); // drive buffer full
+                continue;
+            }
+            throw Stop($"The drive reported an error while writing at LBA {lba}: {Describe(r)}");
+        }
+    }
+
+    /// <summary>
+    /// Asks the drive which write speeds it offers for this disc and sets the one wanted: the user's choice rounded down
+    /// to a listed speed, or the fastest listed. A drive that lists nothing or refuses keeps its own speed (logged).
+    /// </summary>
+    private void ChooseAndSetSpeed(int? requested, RunState state)
+    {
+        var report = MmcMediaReport.Query(_transport, ShortTimeout);
+        state.DriveSpeeds = report.WriteSpeeds.Select(s => s.KilobytesPerSecond).Where(k => k > 0).Distinct().OrderByDescending(k => k).ToList();
+        _note(state.DriveSpeeds.Count > 0
+            ? $"Drive's write speeds for this disc: {string.Join(", ", state.DriveSpeeds.Select(k => $"{k} kB/s ({k / 176.4:F0}x)"))}."
+            : "The drive listed no write speeds for this disc.");
+
+        int? speed = requested is > 0 && state.DriveSpeeds.Count > 0
+            ? state.DriveSpeeds.Where(k => k <= requested.Value + 1).DefaultIfEmpty(state.DriveSpeeds[^1]).First()
+            : requested is > 0 ? requested
+            : state.DriveSpeeds.Count > 0 ? state.DriveSpeeds[0] : null;
+        if (speed is not int kb)
+        {
+            _note("No write speed set; the drive uses its own.");
+            return;
+        }
+
+        var r = _transport.ExecuteCommand(NativeWriteCommands.BuildSetCdSpeed(kb), Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, ShortTimeout);
+        if (r.IsSuccess)
+        {
+            state.SpeedSet = kb;
+            _note($"Write speed set to {kb} kB/s ({kb / 176.4:F0}x).");
+        }
+        else
+        {
+            _note($"The drive did not accept a write speed of {kb} kB/s and keeps its own: {Describe(r)}");
+        }
+    }
+
+    /// <summary>READ TOC format 0 after closing: track 1 must be a data track at the start LBA, ending after the image.</summary>
+    private string CheckTableOfContents(int startLba, int imageSectors)
+    {
+        byte[] buffer = new byte[804];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadTocPmaAtipCdb(0x00, 1, (ushort)buffer.Length), buffer,
+            ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (!r.IsSuccess || r.DataTransferLength < 20)
+        {
+            _note($"READ TOC after closing failed: {Describe(r)}");
+            return "The drive did not return the table of contents.";
+        }
+
+        var first = buffer.AsSpan(4, 8);
+        var leadOut = buffer.AsSpan(12, 8);
+        bool data = (first[1] & 0x04) != 0;
+        int trackStart = BinaryPrimitives.ReadInt32BigEndian(first[4..]);
+        int leadOutLba = BinaryPrimitives.ReadInt32BigEndian(leadOut[4..]);
+        _note($"TOC: track {first[2]} {(data ? "data" : "audio")} at LBA {trackStart}, lead-out at {leadOutLba}.");
+        return data && trackStart == startLba && leadOutLba >= startLba + imageSectors
+            ? $"Table of contents: one data track, {leadOutLba - trackStart:N0} sectors."
+            : $"Unexpected table of contents (track {first[2]} {(data ? "data" : "audio")} at {trackStart}, lead-out {leadOutLba}).";
+    }
+
+    internal readonly record struct TrackAtOnceFeature(ushort Profile, bool Present, bool Current, bool TestWrite, bool BufferUnderrunFree);
+
+    /// <summary>GET CONFIGURATION with RT = 2: the current profile and just the Track at Once feature (0x002D).</summary>
+    private TrackAtOnceFeature ReadTrackAtOnceFeature()
+    {
+        byte[] cdb = MmcCommandBuilder.BuildGetConfigurationCdb(MmcCommandBuilder.FeatureTrackAtOnce, 64);
+        cdb[1] = 0x02;
+        byte[] buffer = new byte[64];
+        var r = _transport.ExecuteCommand(cdb, buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (!r.IsSuccess || r.DataTransferLength < 8)
+        {
+            throw Stop($"The drive did not answer GET CONFIGURATION: {Describe(r)}");
+        }
+
+        ushort profile = BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(6, 2));
+        int length = (int)Math.Min(r.DataTransferLength, (uint)buffer.Length);
+        if (length < 13 || BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(8, 2)) != MmcCommandBuilder.FeatureTrackAtOnce)
+        {
+            return new TrackAtOnceFeature(profile, false, false, false, false);
+        }
+
+        byte flags = buffer[12];
+        return new TrackAtOnceFeature(profile, true, (buffer[10] & 0x01) != 0, TestWrite: (flags & 0x04) != 0, BufferUnderrunFree: (flags & 0x40) != 0);
+    }
+
+    internal readonly record struct DiscInformation(int Status, Msf LastLeadOutStart);
+
+    private DiscInformation? ReadDiscInformation()
+    {
+        byte[] buffer = new byte[34];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadDiscInformationCdb(34), buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (!r.IsSuccess || r.DataTransferLength < 24)
+        {
+            return null;
+        }
+        return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[21], buffer[22], buffer[23]));
+    }
+
+    internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank);
+
+    private TrackInformation? ReadTrackInformation(int trackNumber)
+    {
+        byte[] buffer = new byte[36];
+        var r = _transport.ExecuteCommand(NativeWriteCommands.BuildReadTrackInformation(trackNumber), buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (!r.IsSuccess || r.DataTransferLength < 20)
+        {
+            _note($"READ TRACK INFORMATION failed: {Describe(r)}");
+            return null;
+        }
+        return new TrackInformation(
+            NextWritableAddressValid: (buffer[7] & 0x01) != 0,
+            NextWritableAddress: BinaryPrimitives.ReadInt32BigEndian(buffer.AsSpan(12, 4)),
+            FreeBlocks: BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(16, 4)),
+            Blank: (buffer[6] & 0x40) != 0);
+    }
+
+    private bool SelectWriteParameters(WriteParametersPage page)
+    {
+        byte[] list = page.ToModeSelect10ParameterList();
+        var r = _transport.ExecuteCommand(NativeWriteCommands.BuildModeSelect10((ushort)list.Length), list, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, ShortTimeout);
+        if (!r.IsSuccess)
+        {
+            _note($"MODE SELECT rejected: {Describe(r)}");
+        }
+        return r.IsSuccess;
+    }
+
+    private WriteParametersPage? ReadWriteParameters()
+    {
+        byte[] buffer = new byte[255];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildModeSense10Cdb(WriteParametersPage.PageCode, (ushort)buffer.Length, disableBlockDescriptors: true),
+            buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        return r.IsSuccess ? WriteParametersPage.FromModeSense10(buffer.AsSpan(0, (int)Math.Min(r.DataTransferLength, (uint)buffer.Length))) : null;
+    }
+
+    /// <summary>True when the drive reports a blank disc. Sends no write command.</summary>
+    public bool DiscReadsBlank() => ReadDiscInformation() is { Status: 0 };
+
+    /// <summary>
+    /// After a test write: a blank status settles it. A drive that shows the simulated session (status 1) is checked by
+    /// reading sector 0: a recorded disc returns it, an unwritten one cannot.
+    /// </summary>
+    private bool CheckUnwrittenAfterTestWrite(out string extra)
+    {
+        extra = string.Empty;
+        var after = ReadDiscInformation();
+        if (after is null)
+        {
+            _note("WARNING: no disc information after the test write.");
+            return false;
+        }
+        if (after.Value.Status == 0)
+        {
+            return true;
+        }
+        if (after.Value.Status != 1)
+        {
+            _note($"Disc status {after.Value.Status} after the test write.");
+            return false;
+        }
+
+        byte[] sector = new byte[SectorSize];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildRead10Cdb(0, 1, forceUnitAccess: true), sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (r.IsSuccess && r.DataTransferLength > 0)
+        {
+            _note("WARNING: sector 0 could be read back after the test write.");
+            return false;
+        }
+        _note($"The drive reports the simulated session until the disc is reloaded; sector 0 is unreadable ({Describe(r)}), so nothing was written.");
+        extra = " The drive still shows the simulated session: eject and reload the disc before writing to it.";
+        return true;
+    }
+
+    private void WaitUntilReady(TimeSpan limit, CancellationToken ct, RunState state, string when)
+    {
+        var clock = Stopwatch.StartNew();
+        int unitAttentions = 0;
+        while (true)
+        {
+            Check(ct, state);
+            var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildTestUnitReadyCdb(), Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, ShortTimeout);
+            if (r.IsSuccess)
+            {
+                return;
+            }
+
+            var s = r.SenseInfo;
+            if (s is { SenseKey: 0x02, Asc: 0x3A })
+            {
+                throw Stop("There is no disc in the drive.");
+            }
+            if (s is { SenseKey: 0x06 } && ++unitAttentions <= 3)
+            {
+                continue;
+            }
+            if (s is { SenseKey: 0x02, Asc: 0x04 } && clock.Elapsed < limit)
+            {
+                _sleep(TimeSpan.FromMilliseconds(500));
+                continue;
+            }
+            throw Stop($"The drive is not ready {when}: {Describe(r)}");
+        }
+    }
+
+    private void Flush(string when)
+    {
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildSynchronizeCacheCdb(), Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, FlushTimeout);
+        if (!r.IsSuccess && r.SenseInfo is not { SenseKey: 0x02, Asc: 0x04 })
+        {
+            throw Stop($"SYNCHRONIZE CACHE failed {when}: {Describe(r)}");
+        }
+    }
+
+    private void TryFlush()
+    {
+        try
+        {
+            _transport.ExecuteCommand(MmcCommandBuilder.BuildSynchronizeCacheCdb(), Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, FlushTimeout);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            _note($"SYNCHRONIZE CACHE after the failure also failed: {ex.Message}");
+        }
+    }
+
+    private double? ReadBufferPercent()
+    {
+        byte[] buffer = new byte[12];
+        var r = _transport.ExecuteCommand(NativeWriteCommands.BuildReadBufferCapacity(), buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        if (!r.IsSuccess || NativeWriteCommands.ParseBufferCapacity(buffer) is not { Length: > 0 } cap)
+        {
+            return null;
+        }
+        return Math.Clamp(100.0 * (cap.Length - Math.Min(cap.Blank, cap.Length)) / cap.Length, 0, 100);
+    }
+
+    private static void Check(CancellationToken ct, RunState state)
+    {
+        if (ct.IsCancellationRequested)
+        {
+            throw new WriteStop(state.WritingStarted
+                ? "Cancelled while writing; the disc is incomplete."
+                : "Cancelled before writing; nothing was written.", cancelled: true);
+        }
+    }
+
+    private static string Describe(ScsiExecutionResult r) =>
+        r.SenseInfo?.ToString() ?? r.ErrorMessage ?? $"status 0x{r.ScsiStatus:X2}";
+
+    private static WriteStop Stop(string message) => new(message, cancelled: false);
+
+    private sealed class RunState
+    {
+        public bool WritingStarted;
+        public bool UnsupportedDisc;
+        public bool TestWriteNotOffered;
+        public int ImageSectors;
+        public int SectorsSent;
+        public int? SpeedSet;
+        public IReadOnlyList<int> DriveSpeeds = Array.Empty<int>();
+    }
+
+    private sealed class WriteStop : Exception
+    {
+        public WriteStop(string message, bool cancelled) : base(message) => Cancelled = cancelled;
+        public bool Cancelled { get; }
+    }
+
+    private sealed class ProgressReporter
+    {
+        private readonly NativeTaoDataWriter _writer;
+        private readonly IProgress<BurnProgressSnapshot>? _progress;
+        private readonly Stopwatch _clock;
+        private readonly int _total;
+        private TimeSpan? _lastBufferPoll;
+        private double _buffer;
+
+        public ProgressReporter(NativeTaoDataWriter writer, IProgress<BurnProgressSnapshot>? progress, Stopwatch clock, int total)
+        {
+            _writer = writer;
+            _progress = progress;
+            _clock = clock;
+            _total = total;
+        }
+
+        public void Report(int done, string action)
+        {
+            if (_lastBufferPoll is null || _clock.Elapsed - _lastBufferPoll.Value >= TimeSpan.FromSeconds(1))
+            {
+                _lastBufferPoll = _clock.Elapsed;
+                _buffer = _writer.ReadBufferPercent() ?? _buffer;
+            }
+            if (_progress == null) return;
+            double seconds = _clock.Elapsed.TotalSeconds;
+            double rate = seconds > 0 ? done / seconds : 0;
+            _progress.Report(new BurnProgressSnapshot
+            {
+                CurrentLba = done,
+                TotalLba = _total,
+                ElapsedTime = _clock.Elapsed,
+                RemainingTime = rate > 0 ? TimeSpan.FromSeconds((_total - done) / rate) : TimeSpan.Zero,
+                BufferLevelPercent = _buffer,
+                CurrentSpeedMultiplier = rate / Msf.FramesPerSecond,
+                CurrentBytesPerSecond = (long)(rate * SectorSize),
+                CurrentActionDescription = action
+            });
+        }
+    }
+}

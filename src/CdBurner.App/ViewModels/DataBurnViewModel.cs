@@ -108,6 +108,25 @@ public class DataBurnViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Burn with IgnisDisc's own drive commands instead of the Windows writer. Off by default, chosen per burn. Covers
+    /// blank CD-R and CD-RW so far; other discs are burned by the Windows writer as before. The speed comes from the
+    /// drive's own list for the disc, and the disc is always read back afterwards.
+    /// </summary>
+    public bool UseDirectDriveCommands
+    {
+        get => _useDirectDriveCommands;
+        set => SetProperty(ref _useDirectDriveCommands, value);
+    }
+
+    private bool _useDirectDriveCommands;
+
+    /// <summary>Folder for the command logs of direct burns; null for the default under %LOCALAPPDATA%.</summary>
+    public string? DirectBurnLogDirectory { get; set; }
+
+    /// <summary>Which writer burned the last disc made with <see cref="UseDirectDriveCommands"/>, and its log.</summary>
+    public CdBurner.Hardware.NativeWriting.NativeDataBurnEngine? LastDirectBurnEngine { get; private set; }
+
+    /// <summary>
     /// Whether to add a SHA256SUMS file to the disc root so anyone can check every file later with standard tools.
     /// </summary>
     public bool WriteSha256Manifest
@@ -824,13 +843,17 @@ public class DataBurnViewModel : ObservableObject
             {
                 VolumeLabel = VolumeLabel,
                 CloseDisc = CloseDisc,
-                VerifyAfterBurn = VerifyAfterBurn,
+                VerifyAfterBurn = VerifyAfterBurn || UseDirectDriveCommands, // a direct burn is always read back
                 EjectAfterBurn = EjectAfterBurn,
                 Speed = SelectedWriteSpeed,
                 OverwriteExistingData = replaceAllowed
             };
 
-            var burnService = new DataBurnService(_burnEngine);
+            var directEngine = UseDirectDriveCommands
+                ? new CdBurner.Hardware.NativeWriting.NativeDataBurnEngine(_burnEngine, DirectBurnLogDirectory)
+                : null;
+            LastDirectBurnEngine = directEngine;
+            var burnService = new DataBurnService(directEngine ?? _burnEngine);
             var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
             {
                 if (!_isBusy) return;
@@ -853,7 +876,8 @@ public class DataBurnViewModel : ObservableObject
             if (result.Success)
             {
                 BurnProgress = 100.0;
-                StatusMessage = $"Data burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath}).";
+                StatusMessage = $"Data burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath})."
+                    + (directEngine?.LastSummary is { } how ? " " + how : "");
             }
             else
             {

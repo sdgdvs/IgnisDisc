@@ -452,6 +452,56 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(_recorder.CurrentMedium?.IsFinalized);
     }
 
+    [Fact]
+    public async Task BurnIso_Native_WritesDirectly_ReadsBack_AndReportsTheWriter()
+    {
+        string inputFolder = CreateSampleDataFolder("NativeIsoSource");
+        string outputIso = Path.Combine(_tempDir, "native.iso");
+        Assert.Equal(0, await CliCommandRunner.RunAsync(new[] { "build-iso", "--input", inputFolder, "--output", outputIso },
+            new StringWriter(), new StringWriter(), _deviceService, _burnEngine));
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+        string logs = Path.Combine(_tempDir, "native-logs");
+
+        var (burnOut, burnErr) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "burn-iso", "--drive", "VDRV-01", "--iso", outputIso, "--native", "--log-dir", logs, "--json" },
+            burnOut, burnErr, _deviceService, _burnEngine);
+
+        Assert.True(code == 0, burnErr.ToString());
+        using var doc = ParseJsonOutput(burnOut);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("verified").GetBoolean()); // --native always reads back
+        var direct = root.GetProperty("directWrite");
+        Assert.Equal("direct", direct.GetProperty("writer").GetString());
+        Assert.True(File.Exists(direct.GetProperty("commandLog").GetString()));
+        Assert.True(medium.IsFinalized);
+    }
+
+    [Fact]
+    public async Task BurnData_NativeTestWrite_LeavesTheDiscBlank_AndOptionsNeedNative()
+    {
+        string inputFolder = CreateSampleDataFolder("NativeDataSource");
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", inputFolder, "--native", "--test-write", "--log-dir", Path.Combine(_tempDir, "nl") },
+            outText, errText, _deviceService, _burnEngine);
+        Assert.True(code == 0, errText.ToString());
+        Assert.Contains("direct drive commands", outText.ToString());
+        Assert.True(medium.IsBlank);
+
+        var (_, err2) = CreateStringWriters();
+        int refused = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", inputFolder, "--test-write" },
+            new StringWriter(), err2, _deviceService, _burnEngine);
+        Assert.NotEqual(0, refused);
+        Assert.Contains("need --native", err2.ToString());
+        Assert.True(medium.IsBlank);
+    }
+
     #endregion
 
     #region 5. scan command tests

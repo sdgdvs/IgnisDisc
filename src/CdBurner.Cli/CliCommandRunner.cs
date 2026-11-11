@@ -586,7 +586,8 @@ public static class CliCommandRunner
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
         string isoPath = cmd.GetRequiredOption("iso", "--iso <file.iso>");
         string? speedStr = cmd.GetOption("speed");
-        bool verify = cmd.HasFlag("verify");
+        var (nativeEngine, testWrite) = ResolveNativeDataEngine(cmd, burnEngine);
+        bool verify = cmd.HasFlag("verify") || (nativeEngine != null && !testWrite); // a direct burn is always read back
         bool closeDisc = !cmd.HasFlag("no-close");
         bool overwrite = cmd.HasFlag("overwrite");
 
@@ -603,12 +604,13 @@ public static class CliCommandRunner
         var burnOptions = new DataBurnOptions
         {
             Speed = speedDesc,
+            Simulate = testWrite,
             VerifyAfterBurn = verify,
             CloseDisc = closeDisc,
             OverwriteExistingData = overwrite
         };
 
-        var burnService = new DataBurnService(burnEngine);
+        var burnService = new DataBurnService(nativeEngine ?? burnEngine);
         DataBurnResult result;
         if (LegacyDiscImageConverter.IsLegacyImageFile(isoPath))
         {
@@ -634,6 +636,7 @@ public static class CliCommandRunner
                 averageSpeedMultiplier = result.AverageSpeedMultiplier,
                 verified = result.Verified,
                 verificationNote = result.VerificationNote,
+                directWrite = NativeDataJson(nativeEngine),
                 error = result.ErrorMessage
             };
 
@@ -650,10 +653,12 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Average Speed:  {result.AverageSpeedMultiplier:F1}x");
             stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
             if (result.VerificationNote != null) stdout.WriteLine($"  Verify Note:    {result.VerificationNote}");
+            WriteNativeDataSummary(stdout, nativeEngine);
             return 0;
         }
 
         stderr.WriteLine($"Burn failed: {result.ErrorMessage}");
+        WriteNativeDataSummary(stderr, nativeEngine);
         return 1;
     }
 
@@ -670,7 +675,8 @@ public static class CliCommandRunner
         string? speedStr = cmd.GetOption("speed");
         string? bootBiosPath = cmd.GetOption("boot-bios");
         string? bootUefiPath = cmd.GetOption("boot-uefi");
-        bool verify = cmd.HasFlag("verify");
+        var (nativeEngine, testWrite) = ResolveNativeDataEngine(cmd, burnEngine);
+        bool verify = cmd.HasFlag("verify") || (nativeEngine != null && !testWrite); // a direct burn is always read back
         bool closeDisc = !cmd.HasFlag("no-close");
         bool overwrite = cmd.HasFlag("overwrite");
 
@@ -723,6 +729,7 @@ public static class CliCommandRunner
         {
             VolumeLabel = effectiveLabel,
             Speed = speedDesc,
+            Simulate = testWrite,
             VerifyAfterBurn = verify,
             CloseDisc = closeDisc,
             OverwriteExistingData = overwrite
@@ -740,7 +747,7 @@ public static class CliCommandRunner
             WriteBlake3Manifest: cmd.HasFlag("blake3sums"));
 
         var phases = new PhaseTimingProgress(cmd.IsJson ? null : stdout);
-        var burnService = new DataBurnService(burnEngine);
+        var burnService = new DataBurnService(nativeEngine ?? burnEngine);
         var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions, phases).ConfigureAwait(false);
         phases.Complete();
 
@@ -759,6 +766,7 @@ public static class CliCommandRunner
                 verified = result.Verified,
                 verificationNote = result.VerificationNote,
                 phases = phases.Phases.Select(p => new { phase = p.Name, seconds = Math.Round(p.Duration.TotalSeconds, 1) }),
+                directWrite = NativeDataJson(nativeEngine),
                 error = result.ErrorMessage
             };
 
@@ -775,13 +783,86 @@ public static class CliCommandRunner
             stdout.WriteLine($"  Duration:       {result.TotalTime}");
             stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
             if (result.VerificationNote != null) stdout.WriteLine($"  Verify Note:    {result.VerificationNote}");
+            WriteNativeDataSummary(stdout, nativeEngine);
             phases.WriteSummary(stdout);
             return 0;
         }
 
         stderr.WriteLine($"Data burn failed: {result.ErrorMessage}");
+        WriteNativeDataSummary(stderr, nativeEngine);
         phases.WriteSummary(stderr);
         return 1;
+    }
+
+    /// <summary>
+    /// <c>--native [--test-write | --test-first] [--log-dir]</c> for data burns: the direct writer, with the given
+    /// engine kept for discs it does not cover yet, reading and erasing. Null without <c>--native</c>.
+    /// </summary>
+    private static (NativeDataBurnEngine? Engine, bool TestWrite) ResolveNativeDataEngine(CommandLineArgs cmd, IBurnEngineBackend fallback)
+    {
+        bool native = cmd.HasFlag("native");
+        bool testWrite = cmd.HasFlag("test-write");
+        bool testFirst = cmd.HasFlag("test-first");
+        if ((testWrite || testFirst || cmd.GetOption("log-dir") != null) && !native)
+        {
+            throw new CommandLineException("--test-write, --test-first and --log-dir need --native.");
+        }
+        if (testFirst && testWrite)
+        {
+            throw new CommandLineException("--test-first only applies to a real --native burn (without --test-write).");
+        }
+        return native
+            ? (new NativeDataBurnEngine(fallback, cmd.GetOption("log-dir")) { TestWriteFirst = testFirst }, testWrite)
+            : (null, false);
+    }
+
+    private static object? NativeDataJson(NativeDataBurnEngine? engine)
+    {
+        if (engine == null)
+        {
+            return null;
+        }
+        var r = engine.LastResult;
+        return new
+        {
+            writer = engine.LastFallbackReason != null ? "windows" : "direct",
+            fallbackReason = engine.LastFallbackReason,
+            testWritePassedFirst = engine.LastTestWritePassed,
+            writeMode = "track-at-once, mode 1",
+            speedSetKiloBytesPerSecond = r?.SpeedSetKiloBytesPerSecond,
+            driveSpeedsKiloBytesPerSecond = r?.DriveSpeedsKiloBytesPerSecond,
+            dataSectors = r?.DataSectorsWritten,
+            paddingSectors = r?.PaddingSectors,
+            writingSeconds = r == null ? (double?)null : Math.Round(r.WritingTime.TotalSeconds, 1),
+            writerSeconds = r == null ? (double?)null : Math.Round(r.Elapsed.TotalSeconds, 1),
+            writerMessage = r?.Message,
+            commandLog = engine.LastLogPath
+        };
+    }
+
+    private static void WriteNativeDataSummary(TextWriter output, NativeDataBurnEngine? engine)
+    {
+        if (engine == null)
+        {
+            return;
+        }
+        if (engine.LastFallbackReason != null)
+        {
+            output.WriteLine($"  Writer:         {engine.LastFallbackReason}");
+            return;
+        }
+        var r = engine.LastResult;
+        output.WriteLine("  Writer:         direct drive commands (Track-at-Once, Mode 1)");
+        if (engine.TestWriteFirst) output.WriteLine($"  Test write:     {(engine.LastTestWritePassed ? "passed first" : "not passed")}");
+        if (r != null)
+        {
+            string speed = r.SpeedSetKiloBytesPerSecond is int kb ? $"{kb} kB/s ({kb / 176.4:F0}x)" : "drive's own";
+            output.WriteLine($"  Speed set:      {speed}; drive offers {(r.DriveSpeedsKiloBytesPerSecond.Count > 0 ? string.Join(", ", r.DriveSpeedsKiloBytesPerSecond.Select(k => $"{k / 176.4:F0}x")) : "no list")}");
+            double rate = r.WritingTime.TotalSeconds > 0 ? (r.DataSectorsWritten + r.PaddingSectors) / r.WritingTime.TotalSeconds / 75.0 : 0;
+            output.WriteLine($"  Writing time:   {r.WritingTime.TotalSeconds:F0} s for the data ({rate:F1}x average), {r.Elapsed.TotalSeconds:F0} s with closing");
+            output.WriteLine($"  Drive reports:  {r.Message}");
+        }
+        if (engine.LastLogPath != null) output.WriteLine($"  Command log:    {engine.LastLogPath}");
     }
 
     /// <summary>
@@ -2311,9 +2392,9 @@ public static class CliCommandRunner
         stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
         stdout.WriteLine("  media-info --drive <id> [--json]");
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
-        stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--json]");
+        stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
-        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite] [--json]");
+        stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");

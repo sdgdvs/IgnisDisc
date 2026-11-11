@@ -13,6 +13,44 @@ public static class NativeWriteCommands
     public const byte OpCodeModeSelect10 = 0x55;
     public const byte OpCodeReadBufferCapacity = 0x5C;
     public const byte OpCodeSendCueSheet = 0x5D;
+    public const byte OpCodeCloseTrackSession = 0x5B;
+    public const byte OpCodeSetCdSpeed = 0xBB;
+
+    /// <summary>CLOSE TRACK/SESSION close function 010b: close the session (writes its lead-in and lead-out).</summary>
+    public const byte CloseFunctionSession = 0x02;
+
+    /// <summary>CLOSE TRACK/SESSION. With <paramref name="immediate"/> the drive answers at once and reports "not ready"
+    /// until it has finished.</summary>
+    public static byte[] BuildCloseTrackSession(byte closeFunction, ushort trackNumber = 0, bool immediate = true)
+    {
+        byte[] cdb = new byte[10];
+        cdb[0] = OpCodeCloseTrackSession;
+        cdb[1] = (byte)(immediate ? 0x01 : 0x00);
+        cdb[2] = (byte)(closeFunction & 0x07);
+        BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(4, 2), trackNumber);
+        return cdb;
+    }
+
+    /// <summary>SET CD SPEED (0xBB): read speed "fastest", write speed in kB/s (1,000 bytes; 176.4 per 1x).</summary>
+    public static byte[] BuildSetCdSpeed(int writeKiloBytesPerSecond)
+    {
+        byte[] cdb = new byte[12];
+        cdb[0] = OpCodeSetCdSpeed;
+        cdb[2] = 0xFF; cdb[3] = 0xFF;
+        BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(4, 2), (ushort)Math.Clamp(writeKiloBytesPerSecond, 1, 0xFFFF));
+        return cdb;
+    }
+
+    /// <summary>READ TRACK INFORMATION for a track number (address type 01b); 0xFF asks for the invisible track.</summary>
+    public static byte[] BuildReadTrackInformation(int trackNumber, ushort allocationLength = 36)
+    {
+        byte[] cdb = new byte[10];
+        cdb[0] = Scsi.MmcCommandBuilder.OpCodeReadTrackInformation;
+        cdb[1] = 0x01;
+        BinaryPrimitives.WriteInt32BigEndian(cdb.AsSpan(2, 4), trackNumber);
+        BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(7, 2), allocationLength);
+        return cdb;
+    }
 
     /// <summary>WRITE (10): <paramref name="blockCount"/> blocks starting at <paramref name="lba"/> (negative in the lead-in).</summary>
     public static byte[] BuildWrite10(int lba, ushort blockCount)

@@ -50,6 +50,10 @@
                 Padding="16,12"
                 Margin="0,0,0,12">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="220" />
@@ -96,8 +100,8 @@
                     </ComboBox.ItemTemplate>
                 </ComboBox>
 
-                <!-- Options Checkboxes -->
-                <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Options Checkboxes: their own row, wrapping on narrow windows -->
+                <WrapPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="7" Orientation="Horizontal" Margin="0,10,0,0">
                     <CheckBox Content="Close / Finalize Disc"
                               AutomationProperties.Name="Close / Finalize Disc"
                               IsChecked="{Binding CloseDisc}"
@@ -106,6 +110,12 @@
                     <CheckBox Content="Verify After Burn"
                               AutomationProperties.Name="Verify After Burn"
                               IsChecked="{Binding VerifyAfterBurn}"
+                              VerticalAlignment="Center"
+                              Margin="0,0,16,0" />
+                    <CheckBox Content="Direct drive commands (experimental)"
+                              AutomationProperties.Name="Direct drive commands (experimental)"
+                              IsChecked="{Binding UseDirectDriveCommands}"
+                              ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R and CD-RW so far; other discs are burned by the Windows writer as before."
                               VerticalAlignment="Center"
                               Margin="0,0,16,0" />
                     <CheckBox Content="Add SHA256SUMS"
@@ -119,7 +129,7 @@
                               ToolTip="Adds a BLAKE3SUMS file to the disc root. 'b3sum -c BLAKE3SUMS' (the official BLAKE3 tool) can check every file later. Can be used together with SHA256SUMS."
                               IsChecked="{Binding WriteBlake3Manifest}"
                               VerticalAlignment="Center" />
-                </StackPanel>
+                </WrapPanel>
             </Grid>
         </Border>
 

@@ -227,6 +227,25 @@ public class ImageStudioViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Burn with IgnisDisc's own drive commands instead of the Windows writer. Off by default, chosen per burn. Covers
+    /// blank CD-R and CD-RW so far; other discs are burned by the Windows writer as before. The speed comes from the
+    /// drive's own list for the disc, and the disc is always read back afterwards.
+    /// </summary>
+    public bool UseDirectDriveCommands
+    {
+        get => _useDirectDriveCommands;
+        set => SetProperty(ref _useDirectDriveCommands, value);
+    }
+
+    private bool _useDirectDriveCommands;
+
+    /// <summary>Folder for the command logs of direct burns; null for the default under %LOCALAPPDATA%.</summary>
+    public string? DirectBurnLogDirectory { get; set; }
+
+    /// <summary>Which writer burned the last disc made with <see cref="UseDirectDriveCommands"/>, and its log.</summary>
+    public CdBurner.Hardware.NativeWriting.NativeDataBurnEngine? LastDirectBurnEngine { get; private set; }
+
+    /// <summary>
     /// Target file path where ripped disc images will be saved (.iso or .bin).
     /// </summary>
     public string RipTargetFilePath
@@ -1296,9 +1315,17 @@ public class ImageStudioViewModel : ObservableObject
             string ext = Path.GetExtension(SourceImagePath).ToLowerInvariant();
             BurnOperationResult burnResult;
 
+            // Direct drive commands cover data images (ISO and legacy images); a CUE image keeps the Windows path.
+            var directEngine = UseDirectDriveCommands && ext != ".cue"
+                ? new CdBurner.Hardware.NativeWriting.NativeDataBurnEngine(_burnEngine, DirectBurnLogDirectory)
+                : null;
+            LastDirectBurnEngine = directEngine;
+            IBurnEngineBackend dataEngine = directEngine ?? _burnEngine;
+
             if (ext == ".iso")
             {
-                var dataResult = await _dataBurnService.BurnIsoFileAsync(
+                var dataService = directEngine != null ? new DataBurnService(directEngine) : _dataBurnService;
+                var dataResult = await dataService.BurnIsoFileAsync(
                     recorder,
                     SourceImagePath,
                     new DataBurnOptions
@@ -1327,7 +1354,7 @@ public class ImageStudioViewModel : ObservableObject
                 // Stream the 2048-byte user data straight from the image (no in-memory copy: DVD images exceed 2 GB).
                 await using var isoMem = LegacyDiscImageConverter.OpenIsoUserDataStream(legacyInfo);
 
-                burnResult = await _burnEngine.BurnDataStreamAsync(
+                burnResult = await dataEngine.BurnDataStreamAsync(
                     recorder,
                     isoMem,
                     new DataBurnOptions
@@ -1343,7 +1370,7 @@ public class ImageStudioViewModel : ObservableObject
             else // .bin or raw stream
             {
                 await using var fs = new FileStream(SourceImagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                burnResult = await _burnEngine.BurnDataStreamAsync(
+                burnResult = await dataEngine.BurnDataStreamAsync(
                     recorder,
                     fs,
                     new DataBurnOptions { CloseDisc = true, Speed = SelectedWriteSpeed, OverwriteExistingData = replaceAllowed },
@@ -1356,15 +1383,16 @@ public class ImageStudioViewModel : ObservableObject
 
             if (burnResult.Success)
             {
-                StatusMessage = $"Image burned successfully ({burnResult.SectorsWritten:N0} sectors, {burnResult.TotalTime}).";
+                string how = directEngine?.LastSummary is { } summary ? " " + summary : "";
+                StatusMessage = $"Image burned successfully ({burnResult.SectorsWritten:N0} sectors, {burnResult.TotalTime}).{how}";
                 BurnProgress = 100.0;
 
-                // Automatic verification
-                if (VerifyAfterBurn)
+                // Automatic verification; a direct burn is always read back.
+                if (VerifyAfterBurn || directEngine?.LastResult is { DiscRecorded: true })
                 {
                     StatusMessage = "Burn complete. Verifying disc bit-for-bit against image...";
                     await VerifyDiscAgainstImageAsync(recorder.UniqueId, linkedToken);
-                    StatusMessage = VerificationStatusText;
+                    StatusMessage = VerificationStatusText + how;
                 }
 
                 // After verification, never before it: ejecting first would leave nothing to verify.

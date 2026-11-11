@@ -75,9 +75,10 @@ ignisdisc-cli <command> [options]
                                                --sha256sums adds a root SHA256SUMS that `sha256sum -c` can check;
                                                --blake3sums adds a BLAKE3SUMS that `b3sum -c` can check
   burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X>] [--verify] [--no-close] [--overwrite]
+             [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--verify] [--no-close] [--overwrite] [--fixed-time <...>]
-             [--sha256sums] [--blake3sums] [--udf-rev <...>]
+             [--sha256sums] [--blake3sums] [--udf-rev <...>] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-audio --drive <id> --tracks <a.wav,b.flac,album.cue,list.m3u,...> [--title <album>] [--artist <name>]
              [--speed <X>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--overwrite]
@@ -122,6 +123,14 @@ Status: experimental. On real hardware it has run on one drive (an LG GP60NB50):
 one real burn of a two-track CD-RW with CD-Text, which read back identical to the source. Other drives, CD-R, and
 the ISRC, catalog, pre-emphasis, gap and hidden-audio features have only been run against the built-in drive
 simulator.
+
+`--native` on `burn-iso` and `burn-data` (experimental, also "Direct drive commands" on the app's Data Disc and Disc
+Image screens) writes the image to a blank CD-R or CD-RW with IgnisDisc's own drive commands: one Mode 1 data track,
+Track-at-Once, at a speed picked from the drive's own list for that disc (the fastest, or the `--speed` you give
+rounded down to one the drive offers), never left to Windows. The disc is always read back sector by sector from the
+disc itself afterwards, `--verify` or not. Any other disc (DVD, Blu-ray) and a disc that already holds a session are
+burned by the Windows writer as before, and the result says so. `--test-write` and `--test-first` work as for audio.
+On real hardware it has run on one drive and one CD-RW so far; CD-R and other drives are still to be tried.
 
 Examples:
 

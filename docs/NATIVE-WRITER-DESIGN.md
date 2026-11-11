@@ -58,9 +58,20 @@ way (`Win32ScsiTransport`, `IOCTL_SCSI_PASS_THROUGH_DIRECT`); this proposal adds
 **Common setup:** take exclusive access (`IOCTL_CDROM_EXCLUSIVE_ACCESS`, so Windows and IMAPIv2 keep out), `TEST UNIT
 READY`, `GET CONFIGURATION` (current profile), `READ DISC INFORMATION` (blank? appendable?), `MODE SENSE` page 0x05.
 
-**Data CD, Track-at-Once:** `MODE SELECT` page 0x05 (write type TAO, data block type Mode 1, multisession and test
-write as chosen) → `READ TRACK INFORMATION` (next writable address) → `WRITE(10)` in 32 KB–64 KB chunks →
-`SYNCHRONIZE CACHE` → `CLOSE TRACK/SESSION` (close track, then close session or finalize).
+**Data CD, Track-at-Once** (built 2026-11-10, `NativeTaoDataWriter`, `NativeDataBurnEngine`): `GET CONFIGURATION`
+RT=2 feature 0x002D (profile CD-R/CD-RW, Track at Once current, test write offered) → `READ DISC INFORMATION`
+(status must be blank) → `READ TRACK INFORMATION` track 1 (next writable address must be valid and 0; free blocks
+must hold the image, padded to at least 300 sectors, plus 2 run-out blocks; without an answer the last possible
+lead-out is used) → `MODE SELECT` page 0x05 (write type 1, track mode 4, data block type 8 = 2,048-byte Mode 1,
+multi-session 00 to close the disc or 11 to leave it open, test write as chosen), read back with `MODE SENSE` →
+`GET PERFORMANCE` type 3 (the drive's write speeds for this disc) and `SET CD SPEED` with the fastest, or the
+user's choice rounded down to a listed speed → `WRITE(10)` of 31 sectors (63,488 bytes) at a time from the next
+writable address → `SYNCHRONIZE CACHE` (the track closes) → `CLOSE TRACK/SESSION` close function 010b with Immed,
+then `TEST UNIT READY` until the drive is ready → `READ TOC` format 0 (one data track from LBA 0). No `CLOSE TRACK`
+is sent: on CD the flush closes a Track-at-Once track. The read-back check is `DataBurnService`'s: `READ (10)` with
+FUA over every sector, compared with the image. A test write skips the close and must leave sector 0 unreadable. A
+disc that is not blank is never erased by the writer: an image for a second session is built to follow the first
+one, so those discs go to the Windows writer until multi-session is built.
 
 **Audio CD, Session-at-Once with CD-Text:**
 
@@ -145,6 +156,8 @@ Results:
 | 2026-11-10 | GP60NB50 | same CD-RW, not reloaded | Attempts to clear the simulated session | Stop/start, load, sleep/wake and BLANK (minimal) all left status 1. |
 | 2026-11-10 | GP60NB50 | same CD-RW, not reloaded | Real write attempted over the simulated session | Mode page accepted (SAO, test write off, block type 3); SEND CUE SHEET rejected twice with 5/30/06. Stopped before any WRITE; disc unchanged. |
 | 2026-11-10 | GP60NB50 | same CD-RW, reloaded (blank again, status 0) | Real write, 2 tracks of 20 s, CD-Text, no test write | Cue sheet accepted, 135 WRITEs, 14,077 sectors with the CD-Text lead-in; closing the session took 20 s. Read-back check passed: table of contents, 9 CD-Text packs and 1,764,000 audio samples identical, combined drive offset 0 samples. 67 s in all. A separate `rip-audio` of the disc gave files identical to the sources and took its names from CD-Text. Disc reports one closed session of 3,000 sectors. |
+| 2026-11-10 | GP60NB50 | same CD-RW, quick-erased | Data, Track-at-Once, 24 MB ISO (12,237 sectors), no test write | Feature 0x002D current, track 1 NWA 0 with 359,847 free; mode page TAO / track mode 4 / block type 8 confirmed; GET PERFORMANCE listed 1,764 kB/s and SET CD SPEED 10x was accepted. WRITEs 24 s, SYNCHRONIZE CACHE 5 s, CLOSE SESSION with Immed about 30 s of 2/04/07. TOC: one data track, lead-out at 12,239 (2 run-out blocks). FUA read-back of every sector passed. 61 s in all. |
+| 2026-11-10 | GP60NB50 | same CD-RW, quick-erased | Data, Track-at-Once, 690 MB ISO (352,787 sectors) | Data written in 477 s (9.9x average), with close 8 min 52 s; FUA read-back of every sector passed (7 min 15 s). The same image through IMAPI on the same disc and drive the same day took 12 min 42 s to write. |
 
 Media on hand: CD-RW, CD-R, DVD±R / DVD±RW, DVD±R DL.
 

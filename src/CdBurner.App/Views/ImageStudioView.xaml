@@ -85,6 +85,12 @@
                                           IsChecked="{Binding VerifyAfterBurn}"
                                           VerticalAlignment="Center"
                                           Margin="0,0,20,0" />
+                                            <CheckBox Content="Direct drive commands (experimental)"
+                                                      AutomationProperties.Name="Direct drive commands (experimental)"
+                                                      IsChecked="{Binding UseDirectDriveCommands}"
+                                                      ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R and CD-RW so far; other discs are burned by the Windows writer as before."
+                                                      VerticalAlignment="Center"
+                                                      Margin="0,0,20,0" />
                                 <Button Content="🔄 Convert Image (BIN/CUE ↔ ISO, Legacy)..."
                                         AutomationProperties.Name="Convert Legacy Image to ISO"
                                         Command="{Binding ConvertLegacyImageToIsoCommand}"

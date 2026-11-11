@@ -97,6 +97,31 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>SET CD SPEED fails with 5/24/00.</summary>
     public bool RejectsSetSpeed { get; set; }
 
+    // ---- Track-at-Once data writing ----
+
+    /// <summary>READ TRACK INFORMATION fails with 5/20/00, as on drives that do not offer it.</summary>
+    public bool RejectsReadTrackInformation { get; set; }
+
+    /// <summary>READ TRACK INFORMATION of a blank disc reports this next writable address instead of 0.</summary>
+    public int? NextWritableAddressOverride { get; set; }
+
+    /// <summary>CLOSE TRACK/SESSION fails with 3/0C/00.</summary>
+    public bool RejectsCloseSession { get; set; }
+
+    /// <summary>With the Immed bit, TEST UNIT READY answers "not ready" this many times while the session is closed.</summary>
+    public int CloseSessionBusyPolls { get; set; } = 3;
+
+    /// <summary>The data track sent with WRITE (10) in Track-at-Once mode (2,048 bytes per sector).</summary>
+    public MemoryStream DataTrackWritten { get; } = new();
+
+    /// <summary>The last CLOSE TRACK/SESSION close function received.</summary>
+    public byte? LastCloseFunction { get; private set; }
+
+    private bool _taoArmed;        // MODE SELECT set Track-at-Once since the last track
+    private int _taoNextLba;       // next writable address of the open track
+    private int _taoClosedSectors; // sectors of a track flushed with SYNCHRONIZE CACHE, waiting for CLOSE SESSION
+    private bool _taoTestWrite;
+
     // ---- Data discs (READ (10)) ----
 
     /// <summary>
@@ -194,6 +219,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             MmcMediaReport.OpCodeGetPerformance when cdb.Length >= 11 && cdb[10] == MmcMediaReport.PerformanceTypeWriteSpeed
                 => CannedResponse(WriteSpeedPerformanceResponse, dataBuffer),
             0xBB => SetCdSpeed(cdb),
+            MmcCommandBuilder.OpCodeReadTrackInformation => ReadTrackInformation(cdb, dataBuffer),
+            NativeWriteCommands.OpCodeCloseTrackSession => CloseTrackSession(cdb),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
     }
@@ -331,6 +358,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x05, 0x26, 0x00);
         }
 
+        if (writeType == WriteParametersPage.WriteTypeTrackAtOnce && blockType == WriteParametersPage.DataBlockTypeMode1 &&
+            (page[3] & 0x0F) != WriteParametersPage.TrackModeData)
+        {
+            return Sense(0x05, 0x26, 0x00); // Mode 1 blocks need a data track mode
+        }
+
         _testWriteRequested = (page[2] & 0x10) != 0;
         if (DropsTestWriteBit || RecordsDuringTestWrite)
         {
@@ -339,6 +372,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
         _modePage05 = page;
         _cue = null; // new parameters need a new cue sheet
+        _taoArmed = writeType == WriteParametersPage.WriteTypeTrackAtOnce;
         return Good(0);
     }
 
@@ -380,6 +414,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
     private ScsiExecutionResult Write(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
         WriteCommandCount++;
+        if (_cue == null && _taoArmed)
+        {
+            return WriteTrackAtOnce(cdb, data);
+        }
         if (_cue == null)
         {
             return Sense(0x05, 0x2C, 0x00);
@@ -602,6 +640,28 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private ScsiExecutionResult SynchronizeCache()
     {
+        if (_taoArmed && _taoNextLba > 0 && _taoClosedSectors == 0)
+        {
+            // The drive empties its buffer and writes the run-out; the track is complete.
+            if (_taoTestWrite)
+            {
+                if (ShowsSimulatedSessionAfterTestWrite)
+                {
+                    DiscStatus = 1;
+                }
+                DataTrackWritten.SetLength(0);
+            }
+            else
+            {
+                _taoClosedSectors = _taoNextLba;
+                DiscStatus = 1; // an open session until it is closed
+                DataDiscImage = DataTrackWritten.ToArray(); // the recorded track reads back even before the close
+            }
+            _taoNextLba = 0;
+            _taoArmed = false;
+            return Good(0);
+        }
+
         if (_cue != null && _nextLba == _cue.LeadOutLba)
         {
             bool recorded = !TestWriteActive || RecordsDuringTestWrite;
@@ -630,6 +690,130 @@ public sealed class VirtualMmcDrive : IScsiTransport
                 DiscStatus = 2;
             }
             _cue = null;
+        }
+        return Good(0);
+    }
+
+    private ScsiExecutionResult WriteTrackAtOnce(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
+    {
+        int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
+        int count = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(7, 2));
+        if (_taoNextLba == 0 && DiscStatus != 0)
+        {
+            return Sense(0x05, 0x21, 0x02); // not blank: no writable address
+        }
+        if (lba != _taoNextLba)
+        {
+            return Sense(0x05, 0x21, 0x02);
+        }
+        if (count == 0)
+        {
+            return Good(0);
+        }
+        int blockSize = (_modePage05[4] & 0x0F) == WriteParametersPage.DataBlockTypeMode1 ? 2048 : 2352;
+        if (data.Length != count * blockSize)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (lba + count > LastLeadOutStart.ToLba())
+        {
+            return Sense(0x05, 0x21, 0x00);
+        }
+        if (BufferFullEveryNWrites > 0 && ++_writesSinceBufferFull >= BufferFullEveryNWrites)
+        {
+            _writesSinceBufferFull = 0;
+            WriteCommandCount--;
+            return Sense(0x02, 0x04, 0x08);
+        }
+        if (WriteErrorAtLba is int bad && bad >= lba && bad < lba + count)
+        {
+            return Sense(0x03, 0x0C, 0x00);
+        }
+
+        if (lba == 0)
+        {
+            DataTrackWritten.SetLength(0);
+            // A drive that ignores the test-write bit (RecordsDuringTestWrite) records for real.
+            _taoTestWrite = TestWriteActive && !RecordsDuringTestWrite;
+        }
+        if (CaptureWrites)
+        {
+            DataTrackWritten.Write(data);
+        }
+        _taoNextLba = lba + count;
+        return Good((uint)data.Length);
+    }
+
+    /// <summary>READ TRACK INFORMATION (36 bytes): the invisible track of a blank disc, or track 1 once written.</summary>
+    private ScsiExecutionResult ReadTrackInformation(ReadOnlySpan<byte> cdb, Span<byte> data)
+    {
+        if (RejectsReadTrackInformation)
+        {
+            return Sense(0x05, 0x20, 0x00);
+        }
+        int number = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
+        if ((cdb[1] & 0x03) != 0x01 || number is not (1 or 0xFF))
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+
+        int capacity = LastLeadOutStart.ToLba();
+        byte[] r = new byte[36];
+        BinaryPrimitives.WriteUInt16BigEndian(r, 34);
+        r[2] = 1; r[3] = 1; // track 1, session 1
+        if (Recorded || _taoClosedSectors > 0 || DiscStatus != 0)
+        {
+            int size = Recorded ? RecordedLeadOutLba : _taoClosedSectors + 2;
+            r[5] = 0x04; // data track
+            r[6] = 0x01; // data mode 1, not blank, no next writable address
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), size);
+        }
+        else
+        {
+            int nwa = NextWritableAddressOverride ?? _taoNextLba;
+            r[6] = 0x40 | 0x01; // blank
+            r[7] = 0x01;        // next writable address valid
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(12), nwa);
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(16), Math.Max(0, capacity - nwa));
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), capacity);
+        }
+        return CopyOut(r, data);
+    }
+
+    /// <summary>
+    /// CLOSE TRACK/SESSION. Closing the session of a flushed Track-at-Once track records the disc: READ (10) then reads
+    /// the data back and READ TOC lists one data track. Multi-session 11b in the write parameters leaves it appendable.
+    /// </summary>
+    private ScsiExecutionResult CloseTrackSession(ReadOnlySpan<byte> cdb)
+    {
+        byte function = (byte)(cdb[2] & 0x07);
+        LastCloseFunction = function;
+        if (RejectsCloseSession)
+        {
+            return Sense(0x03, 0x0C, 0x00);
+        }
+        if (function != NativeWriteCommands.CloseFunctionSession || _taoClosedSectors == 0)
+        {
+            return Sense(0x05, 0x2C, 0x00); // command sequence error: nothing to close
+        }
+
+        int sectors = _taoClosedSectors;
+        byte[] image = DataTrackWritten.ToArray();
+        if (image.Length < sectors * 2048)
+        {
+            Array.Resize(ref image, sectors * 2048);
+        }
+        DataDiscImage = image;
+        Recorded = true;
+        _recordedTracks = new() { (1, 0, 0x40) };
+        _recordedCdText = false;
+        RecordedLeadOutLba = sectors + 2; // two run-out blocks
+        DiscStatus = (_modePage05[3] >> 6) == 3 ? 1 : 2;
+        _taoClosedSectors = 0;
+        SessionClosed = true;
+        if ((cdb[1] & 0x01) != 0)
+        {
+            NotReadyResponses += CloseSessionBusyPolls;
         }
         return Good(0);
     }

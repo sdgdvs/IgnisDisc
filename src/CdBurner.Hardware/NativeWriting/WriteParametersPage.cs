@@ -71,6 +71,30 @@ public sealed class WriteParametersPage
         return new WriteParametersPage(p);
     }
 
+    public const byte WriteTypeTrackAtOnce = 0x01;
+    public const byte DataBlockTypeMode1 = 0x08;        // 2,048 bytes of user data; the drive adds sync, header and ECC
+    public const byte TrackModeData = 0x04;             // data track, recorded uninterrupted
+
+    public byte TrackMode => (byte)(_page[3] & 0x0F);
+
+    /// <summary>
+    /// A copy of this page set up for one Mode 1 data track written Track-at-Once. <paramref name="closeDisc"/> false
+    /// leaves room for another session (multi-session 11b); true closes the disc.
+    /// </summary>
+    public WriteParametersPage ForTrackAtOnceData(bool testWrite, bool bufferUnderrunFree, bool closeDisc)
+    {
+        byte[] p = (byte[])_page.Clone();
+        p[0] &= 0x3F;
+        p[2] = (byte)((p[2] & 0xA0) | WriteTypeTrackAtOnce);
+        if (testWrite) p[2] |= 0x10;
+        if (bufferUnderrunFree) p[2] |= 0x40;
+        p[3] = (byte)((closeDisc ? 0x00 : 0xC0) | TrackModeData); // FP and Copy off: not packet writing
+        p[4] = (byte)((p[4] & 0xF0) | DataBlockTypeMode1);
+        p[8] = 0x00;                                    // session format: CD-ROM
+        p[10] = p[11] = p[12] = p[13] = 0;              // packet size: unused
+        return new WriteParametersPage(p);
+    }
+
     /// <summary>The same settings with data block type 0, for drives that reject block type 3 (cdrdao's fallback).</summary>
     public WriteParametersPage WithRawDataBlockType()
     {
