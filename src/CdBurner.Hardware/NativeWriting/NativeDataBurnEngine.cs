@@ -8,8 +8,8 @@ namespace CdBurner.Hardware.NativeWriting;
 
 /// <summary>
 /// Burns data images (ISO files, data discs) with IgnisDisc's own drive commands instead of Windows' burning service.
-/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW (sequential) and single-layer DVD+R, and DVD+RW (blank, or written
-/// over when the user allowed replacing its data), so far
+/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW and single-layer DVD+R, and the overwritable DVD+RW, DVD-RW in
+/// restricted overwrite mode and DVD-RAM (blank, or written over when the user allowed replacing their data), so far
 /// (<see cref="NativeTaoDataWriter"/>); any other disc, and a disc that already holds a session, is handed to the Windows
 /// writer (<see cref="LastFallbackReason"/> says so). Reading (the read-back check), erasing and audio go to the Windows
 /// engine. Every direct run saves a full SCSI command log.
@@ -66,8 +66,8 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
             : status.MediaType is DiscMediaType.DvdMinusRDualLayer or DiscMediaType.DvdPlusRDualLayer
                 ? "direct writing does not cover dual-layer DVDs yet, because IgnisDisc does not set the layer break on the drive yet"
                 : !IsCovered(status.MediaType)
-                    ? $"direct writing covers CD-R, CD-RW, DVD-R, DVD-RW, DVD+R and DVD+RW so far, and this disc is {status.MediaType.GetDisplayName()}"
-                    : !status.IsBlank && !(status.MediaType == DiscMediaType.DvdPlusRw && options.OverwriteExistingData)
+                    ? $"direct writing covers CD-R, CD-RW, DVD-R, DVD-RW, DVD+R, DVD+RW and DVD-RAM so far, and this disc is {status.MediaType.GetDisplayName()}"
+                    : !status.IsBlank && !(status.IsOverwriteOnly && options.OverwriteExistingData)
                         ? "the disc already holds data, and direct writing adds no sessions yet"
                         : null;
         if (reason != null)
@@ -136,7 +136,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
 
         using var log = new LoggingScsiTransport(device, ownsInner: true);
         string kind = request.TestWrite ? "test write only" : TestWriteFirst ? "test write, then real write" : "real write";
-        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R, DVD+RW), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
+        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R, DVD+RW, DVD-RW overwrite, DVD-RAM), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
         log.Note($"Image: {request.ImageBytes:N0} bytes, close disc {request.CloseDisc}, speed asked {(request.WriteSpeedKiloBytesPerSecond?.ToString() ?? "fastest listed")}.");
 
         IDisposable? exclusive = null;
@@ -214,7 +214,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
     private static void CommitToVirtualMedium(VirtualDiscMedium medium, byte[] image, bool closeDisc)
     {
         medium.Raw2352Mode = false;
-        bool overwriteOnly = medium.MediaType == DiscMediaType.DvdPlusRw;
+        bool overwriteOnly = medium.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam;
         if (overwriteOnly)
         {
             medium.Sessions.Clear(); // written over from sector 0: one volume, no session history
@@ -237,7 +237,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
     /// <summary>Discs the direct writer handles (blank, single layer).</summary>
     private static bool IsCovered(DiscMediaType type) =>
         type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR
-            or DiscMediaType.DvdPlusRw;
+            or DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam;
 
     private static NativeDataWriteResult Stopped(string message) =>
         new() { Success = false, StoppedBeforeWriting = true, Message = message };

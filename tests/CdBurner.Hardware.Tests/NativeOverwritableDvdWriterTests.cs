@@ -10,19 +10,19 @@ using Xunit;
 namespace CdBurner.Hardware.Tests;
 
 /// <summary>
-/// Direct writing to DVD+RW on the simulated drive. Expected behaviour from libburn's cookbook and mmc.c: FORMAT UNIT
+/// Direct writing to the overwritable DVDs (DVD+RW, DVD-RW in restricted overwrite mode, DVD-RAM) on the simulated drive. Expected behaviour from libburn's cookbook and mmc.c: FORMAT UNIT
 /// type 26h (0xFFFFFFFF blocks, FOV and Immed) only on a never-formatted disc, no mode page and no test write, WRITE
 /// (10) from LBA 0 on 2 KiB boundaries, SYNCHRONIZE CACHE, then CLOSE SESSION (010b). A disc holding a file system
 /// is only written over with leave to replace its data.
 /// </summary>
-public sealed class NativeDvdPlusRwWriterTests : IDisposable
+public sealed class NativeOverwritableDvdWriterTests : IDisposable
 {
     private const int Capacity = OpticalConstants.DvdPlusR5Sectors;
     private const int Speed4x = 5_540;
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "cdburner-test-" + Guid.NewGuid().ToString("N"));
 
-    public NativeDvdPlusRwWriterTests() => Directory.CreateDirectory(_dir);
+    public NativeOverwritableDvdWriterTests() => Directory.CreateDirectory(_dir);
 
     public void Dispose()
     {
@@ -285,5 +285,157 @@ public sealed class NativeDvdPlusRwWriterTests : IDisposable
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Verified);
         Assert.True(OnDisc(medium, 800).SequenceEqual(second)); // not appended after the old data
+    }
+
+    // ---- DVD-RW in restricted overwrite mode ----
+
+    private static VirtualMmcDrive RestrictedOverwrite(VirtualMmcDrive.RestrictedOverwriteState state, byte[]? formatCapacities) => new()
+    {
+        Profile = NativeTaoDataWriter.ProfileDvdMinusRwRestricted,
+        CapacitySectors = Capacity,
+        OverwriteState = state,
+        FormatCapacitiesResponse = formatCapacities,
+        WriteSpeedPerformanceResponse = Speeds(Speed4x)
+    };
+
+    [Fact]
+    public void FormattedDvdMinusRw_IsWrittenFrom0InWhole32KiBBlocks_AndTheSessionClosed()
+    {
+        var drive = RestrictedOverwrite(VirtualMmcDrive.RestrictedOverwriteState.Formatted, VirtualMmcDrive.BuildFormatCapacities(Capacity, formatted: true));
+        byte[] image = Image(1000);
+
+        var result = Write(drive, image);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("restricted overwrite (DVD-RW)", result.WriteMode);
+        Assert.Equal(8, result.PaddingSectors);
+        Assert.Equal(1008 * 2048, drive.DataDiscImage!.Length);
+        Assert.True(drive.DataDiscImage.AsSpan(0, image.Length).SequenceEqual(image));
+        Assert.True(drive.DataDiscImage.AsSpan(image.Length).IndexOfAnyExcept((byte)0) < 0);
+        Assert.Equal(0, drive.FormatUnitCount);
+        Assert.Equal(NativeWriteCommands.CloseFunctionSession, drive.LastCloseFunction);
+        Assert.DoesNotContain(NativeWriteCommands.OpCodeModeSelect10, drive.CommandsReceived);
+    }
+
+    [Fact]
+    public void PartlyFormattedDvdMinusRw_IsExpandedWithFormat13h_ThenWrittenAndClosed()
+    {
+        var drive = RestrictedOverwrite(VirtualMmcDrive.RestrictedOverwriteState.PartlyFormatted,
+            VirtualMmcDrive.BuildFormatCapacities(1024, formatted: true, (NativeWriteCommands.FormatTypeDvdMinusRwExpand, Capacity - 1024)));
+        drive.PartlyFormattedSectors = 1024;
+        byte[] image = Image(3000); // more than the formatted part
+
+        var result = Write(drive, image);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("expanded", result.Message);
+        Assert.Equal(new byte[] { 0x00, 0x82, 0x00, 0x08, 0, 0, 0, 0, 0x4C, 0x00, 0x00, 0x10 }, drive.LastFormatParameters);
+        Assert.True(drive.DataDiscImage!.AsSpan(0, image.Length).SequenceEqual(image));
+        Assert.Equal(VirtualMmcDrive.RestrictedOverwriteState.Formatted, drive.OverwriteState); // the close ended the intermediate state
+    }
+
+    [Fact]
+    public void IntermediateDvdMinusRw_IsWrittenInSequence_AndTheCloseEndsTheIntermediateState()
+    {
+        var drive = RestrictedOverwrite(VirtualMmcDrive.RestrictedOverwriteState.Intermediate, formatCapacities: null);
+        byte[] image = Image(640);
+
+        var result = Write(drive, image);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(0, drive.FormatUnitCount);
+        Assert.Equal(image, drive.DataDiscImage);
+        Assert.Equal(VirtualMmcDrive.RestrictedOverwriteState.Formatted, drive.OverwriteState);
+    }
+
+    [Fact]
+    public void DvdMinusRwWithAFileSystem_IsLeftAlone_WithoutLeaveToReplaceIt()
+    {
+        var drive = RestrictedOverwrite(VirtualMmcDrive.RestrictedOverwriteState.Formatted, VirtualMmcDrive.BuildFormatCapacities(Capacity, formatted: true));
+        byte[] old = IsoLikeImage(400, seed: 8);
+        drive.DataDiscImage = (byte[])old.Clone();
+
+        var result = Write(drive, Image(320));
+
+        Assert.True(result.StoppedBeforeWriting);
+        Assert.Contains("DVD-RW holds data", result.Message);
+        Assert.Equal(old, drive.DataDiscImage);
+    }
+
+    // ---- DVD-RAM ----
+
+    private static VirtualMmcDrive DvdRam(bool formatted) => new()
+    {
+        Profile = NativeTaoDataWriter.ProfileDvdRam,
+        CapacitySectors = Capacity,
+        RamFormatted = formatted,
+        FormatCapacitiesResponse = VirtualMmcDrive.BuildFormatCapacities(Capacity, formatted),
+        WriteSpeedPerformanceResponse = Speeds(Speed4x)
+    };
+
+    [Fact]
+    public void DvdRam_IsWrittenFrom0_WithNothingToClose()
+    {
+        var drive = DvdRam(formatted: true);
+        byte[] image = Image(777);
+
+        var result = Write(drive, image);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("overwrite (DVD-RAM)", result.WriteMode);
+        Assert.Equal(0, result.PaddingSectors);
+        Assert.Equal(image, drive.DataDiscImage);
+        Assert.DoesNotContain(NativeWriteCommands.OpCodeCloseTrackSession, drive.CommandsReceived);
+        Assert.Equal(0, drive.FormatUnitCount);
+    }
+
+    [Fact]
+    public void UnformattedDvdRam_IsRefusedBeforeWriting()
+    {
+        var drive = DvdRam(formatted: false);
+
+        var result = Write(drive, Image(320));
+
+        Assert.True(result.StoppedBeforeWriting);
+        Assert.Contains("not formatted", result.Message);
+        Assert.Equal(0, drive.WriteCommandCount);
+    }
+
+    [Theory]
+    [InlineData(NativeTaoDataWriter.ProfileDvdRam)]
+    [InlineData(NativeTaoDataWriter.ProfileDvdMinusRwRestricted)]
+    public void OverwritableDvds_HaveNoTestWrite(ushort profile)
+    {
+        var drive = profile == NativeTaoDataWriter.ProfileDvdRam
+            ? DvdRam(formatted: true)
+            : RestrictedOverwrite(VirtualMmcDrive.RestrictedOverwriteState.Formatted, VirtualMmcDrive.BuildFormatCapacities(Capacity, formatted: true));
+
+        var result = Write(drive, Image(320), testWrite: true);
+
+        Assert.True(result.TestWriteNotOffered);
+        Assert.Equal(0, drive.WriteCommandCount);
+    }
+
+    [Fact]
+    public async Task DvdRam_IsWrittenDirectly_ThenWrittenOverWithLeave()
+    {
+        var engine = Engine();
+        using var medium = VirtualDiscMedium.CreateBlankDvdRam();
+        var recorder = Recorder(medium);
+        var service = new DataBurnService(engine);
+
+        byte[] first = IsoLikeImage(900, seed: 9);
+        var r1 = await service.BurnStreamAsync(recorder, new MemoryStream(first), new DataBurnOptions { VerifyAfterBurn = true });
+        Assert.True(r1.Success, r1.ErrorMessage);
+        Assert.True(r1.Verified);
+        Assert.Null(engine.LastFallbackReason);
+
+        byte[] second = IsoLikeImage(500, seed: 10);
+        var r2 = await service.BurnStreamAsync(recorder, new MemoryStream(second),
+            new DataBurnOptions { VerifyAfterBurn = true, OverwriteExistingData = true });
+        Assert.True(r2.Success, r2.ErrorMessage);
+        Assert.True(r2.Verified);
+        Assert.Null(engine.LastFallbackReason);
+        Assert.True(OnDisc(medium, 500).SequenceEqual(second));
     }
 }

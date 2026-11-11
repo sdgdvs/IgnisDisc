@@ -16,7 +16,7 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <item>DVD+R: no mode page; WRITE (10); SYNCHRONIZE CACHE; CLOSE TRACK; then CLOSE SESSION (left open) or the
 /// finalize function 101b (disc closed), falling back to CLOSE SESSION if the drive refuses to finalize.</item>
 /// </list>
-/// DVD+RW has its own path (NativeTaoDataWriter.DvdPlusRw.cs). Data goes out in whole 32 KiB ECC blocks, two per WRITE (one if the adapter refuses 64 KiB); the last block is padded
+/// DVD+RW, DVD-RW in restricted overwrite mode and DVD-RAM have their own path (NativeTaoDataWriter.Overwritable.cs). Data goes out in whole 32 KiB ECC blocks, two per WRITE (one if the adapter refuses 64 KiB); the last block is padded
 /// with zeros. Speed is set
 /// with SET STREAMING from the drive's GET PERFORMANCE list. Only DVD-R/-RW have a test write. Dual-layer discs are left
 /// to the Windows writer until IgnisDisc sets the layer break itself.
@@ -57,8 +57,8 @@ public sealed partial class NativeTaoDataWriter
     {
         0x0010 => "a DVD-ROM",
         ProfileDvdMinusR => "a DVD-R",
-        0x0012 => "a DVD-RAM",
-        0x0013 => "a DVD-RW in restricted overwrite mode",
+        ProfileDvdRam => "a DVD-RAM",
+        ProfileDvdMinusRwRestricted => "a DVD-RW in restricted overwrite mode",
         ProfileDvdMinusRwSequential => "a DVD-RW",
         ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump => "a DVD-R DL",
         ProfileDvdPlusRw => "a DVD+RW",
@@ -73,9 +73,9 @@ public sealed partial class NativeTaoDataWriter
     {
         state.IsDvd = true;
         string discName = DvdProfileName(profile);
-        if (profile == ProfileDvdPlusRw)
+        if (OverwritableKindOf(profile) is OverwritableKind overwritable)
         {
-            return RunDvdPlusRw(request, progress, ct, clock, state);
+            return RunOverwritable(request, overwritable, progress, ct, clock, state);
         }
         if (profile is ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump or ProfileDvdPlusRDualLayer)
         {
@@ -85,7 +85,7 @@ public sealed partial class NativeTaoDataWriter
         if (profile is not (ProfileDvdMinusR or ProfileDvdMinusRwSequential or ProfileDvdPlusR))
         {
             state.UnsupportedDisc = true;
-            throw Stop($"Direct writing of DVDs covers DVD-R, DVD-RW in sequential mode, DVD+R and DVD+RW so far; the disc in the drive is {discName}.");
+            throw Stop($"Direct writing of DVDs covers DVD-R, DVD-RW, DVD+R, DVD+RW and DVD-RAM so far; the disc in the drive is {discName}.");
         }
 
         bool plusR = profile == ProfileDvdPlusR;

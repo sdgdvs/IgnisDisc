@@ -158,8 +158,16 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   and makes the disc readable elsewhere; a refusal is logged, not fatal. Sectors past a shorter new image keep their
   old contents, as with any overwrite; the new file system ends before them. `DataBurnService` now verifies from
   sector 0 whenever an overwrite-only disc's data is replaced.
-- Dual-layer DVD±R, DVD-RAM and DVD-RW in restricted overwrite mode go to the Windows writer with a stated
-  reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
+- *DVD-RW in restricted overwrite mode and DVD-RAM* (built 2026-11-11, simulator only; shared with DVD+RW in
+  `NativeTaoDataWriter.Overwritable.cs`). DVD-RW: 32 KiB alignment, so the image is padded to whole 16-sector
+  blocks. `READ FORMAT CAPACITIES` decides the state (cookbook): formatted with format 13h or 11h still offering
+  blocks = partly formatted, expanded first with `FORMAT UNIT` type 13h (list byte 1 0x82, byte 3 = 8, blocks 0,
+  byte 8 = 13h << 2, byte 11 = 16, the packet size libburn sets for types 10h–15h), which leaves the intermediate
+  state; no current capacity = intermediate already. `CLOSE SESSION` (010b) after writing ends the intermediate
+  state. DVD-RAM: must be formatted (an unformatted one is refused rather than formatted with defect management
+  here); 2 KiB alignment; no close command. Both: no test write, same leave-to-replace rule. The size is the format
+  capacity; the track size is used only when the drive reports no format information.
+- Dual-layer DVD±R goes to the Windows writer with a stated reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
 
 ## Buffer and underrun handling
 

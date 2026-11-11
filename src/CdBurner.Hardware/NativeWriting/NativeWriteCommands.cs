@@ -21,6 +21,24 @@ public static class NativeWriteCommands
     /// <summary>FORMAT UNIT format type 26h: DVD+RW full format, run by the drive in the background.</summary>
     public const byte FormatTypeDvdPlusRw = 0x26;
 
+    /// <summary>FORMAT UNIT format type 13h: expand a partly formatted DVD-RW (restricted overwrite).</summary>
+    public const byte FormatTypeDvdMinusRwExpand = 0x13;
+
+    /// <summary>
+    /// FORMAT UNIT parameter list that expands a partly formatted DVD-RW: FOV | Immed, descriptor length 8, number of
+    /// blocks 0 (libburn's cookbook: writing can then begin soon, the disc in the intermediate state), type 13h &lt;&lt;
+    /// 2 in byte 8, and 16 in byte 11 (the packet size libburn sets for format types 10h–15h).
+    /// </summary>
+    public static byte[] BuildDvdMinusRwExpandParameters()
+    {
+        byte[] list = new byte[12];
+        list[1] = 0x82;
+        list[3] = 8;
+        list[8] = FormatTypeDvdMinusRwExpand << 2;
+        list[11] = 16;
+        return list;
+    }
+
     /// <summary>FORMAT UNIT (0x04) with FmtData = 1 and format code 001b: a parameter list of 12 bytes follows.</summary>
     public static byte[] BuildFormatUnit()
     {

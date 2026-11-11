@@ -89,9 +89,9 @@ public sealed class DirectDataBurnViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task DataScreen_WithADvdRam_UsesTheWindowsWriterAndSaysSo()
+    public async Task DataScreen_WithADualLayerDvd_UsesTheWindowsWriterAndSaysSo()
     {
-        Insert(VirtualDiscMedium.CreateBlankDvdRam());
+        Insert(VirtualDiscMedium.CreateBlankDvdPlusRDL85());
         var vm = DataScreen();
         vm.UseDirectDriveCommands = true;
 

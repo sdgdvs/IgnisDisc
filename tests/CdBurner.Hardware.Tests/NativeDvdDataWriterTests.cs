@@ -399,20 +399,6 @@ public sealed class NativeDvdDataWriterTests : IDisposable
         Assert.Equal(0, drive.WriteCommandCount);
     }
 
-    [Theory]
-    [InlineData((ushort)0x0012)] // DVD-RAM
-    [InlineData((ushort)0x0013)] // DVD-RW, restricted overwrite
-    public void OverwritableDvd_IsReportedAsNotCovered(ushort profile)
-    {
-        var drive = BlankDvd(profile);
-
-        var result = Write(drive, Image(320));
-
-        Assert.True(result.UnsupportedDisc);
-        Assert.Equal(0, drive.WriteCommandCount);
-        Assert.DoesNotContain(NativeWriteCommands.OpCodeModeSelect10, drive.CommandsReceived);
-    }
-
     // ---- Command builders ----
 
     [Fact]

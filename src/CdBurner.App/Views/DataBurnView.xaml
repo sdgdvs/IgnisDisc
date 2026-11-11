@@ -115,7 +115,7 @@
                     <CheckBox Content="Direct drive commands (experimental)"
                               AutomationProperties.Name="Direct drive commands (experimental)"
                               IsChecked="{Binding UseDirectDriveCommands}"
-                              ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R, CD-RW, DVD-R, DVD-RW, single-layer DVD+R and DVD+RW so far; other discs are burned by the Windows writer as before."
+                              ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R, CD-RW, DVD-R, DVD-RW, single-layer DVD+R, DVD+RW and DVD-RAM so far; other discs are burned by the Windows writer as before."
                               VerticalAlignment="Center"
                               Margin="0,0,16,0" />
                     <CheckBox Content="Add SHA256SUMS"

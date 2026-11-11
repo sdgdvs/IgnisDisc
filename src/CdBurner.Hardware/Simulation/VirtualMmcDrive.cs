@@ -182,6 +182,38 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private bool IsDvdPlusRw => Profile == NativeTaoDataWriter.ProfileDvdPlusRw;
 
+    /// <summary>DVD+RW, DVD-RW in restricted overwrite mode and DVD-RAM: written anywhere, no sessions.</summary>
+    private bool IsOverwritable => Profile is NativeTaoDataWriter.ProfileDvdPlusRw or NativeTaoDataWriter.ProfileDvdMinusRwRestricted
+        or NativeTaoDataWriter.ProfileDvdRam;
+
+    /// <summary>State of a DVD-RW in restricted overwrite mode (libburn's cookbook).</summary>
+    public enum RestrictedOverwriteState { Formatted, PartlyFormatted, Intermediate }
+
+    /// <summary>DVD-RW restricted overwrite: formatted, partly formatted (format 13h expands it) or intermediate.</summary>
+    public RestrictedOverwriteState OverwriteState { get; set; } = RestrictedOverwriteState.Formatted;
+
+    /// <summary>DVD-RW partly formatted: sectors that can be written before it is expanded.</summary>
+    public int PartlyFormattedSectors { get; set; }
+
+    /// <summary>DVD-RAM: false makes it an unformatted disc that refuses writes.</summary>
+    public bool RamFormatted { get; set; } = true;
+
+    /// <summary>A READ FORMAT CAPACITIES reply: the current/maximum descriptor plus the formattable descriptors given.</summary>
+    public static byte[] BuildFormatCapacities(int blocks, bool formatted, params (byte Type, int Blocks)[] formattable)
+    {
+        byte[] r = new byte[4 + 8 + 8 * formattable.Length];
+        r[3] = (byte)(8 + 8 * formattable.Length);
+        BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(4), blocks);
+        r[8] = (byte)(formatted ? 2 : 1);
+        r[10] = 0x08; // block length 2,048
+        for (int i = 0; i < formattable.Length; i++)
+        {
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(12 + 8 * i), formattable[i].Blocks);
+            r[16 + 8 * i] = (byte)(formattable[i].Type << 2);
+        }
+        return r;
+    }
+
     /// <summary>
     /// A READ FORMAT CAPACITIES reply for a DVD+RW: the current/maximum descriptor (formatted or not, 2,048-byte
     /// blocks) and one formattable descriptor of type 26h.
@@ -427,7 +459,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x1A, 0x00); // parameter list length error
         }
-        if (IsDvdPlusR || IsDvdPlusRw)
+        if (IsDvdPlusR || IsOverwritable)
         {
             // libburn's cookbook: no mode page 05h is sent for DVD+R (nor needed for DVD+RW). Stricter than most
             // drives, to catch one being sent.
@@ -535,7 +567,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
     private ScsiExecutionResult Write(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
         WriteCommandCount++;
-        if (_cue == null && IsDvdPlusRw)
+        if (_cue == null && IsOverwritable)
         {
             return WriteOverwrite(cdb, data);
         }
@@ -1066,6 +1098,24 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult CloseDvd(ReadOnlySpan<byte> cdb, byte function)
     {
+        if (Profile == NativeTaoDataWriter.ProfileDvdRam)
+        {
+            return Sense(0x05, 0x2C, 0x00); // nothing to close on DVD-RAM
+        }
+        if (Profile == NativeTaoDataWriter.ProfileDvdMinusRwRestricted)
+        {
+            // CLOSE SESSION brings a DVD-RW out of the intermediate state; harmless otherwise (libburn's cookbook).
+            if (function != NativeWriteCommands.CloseFunctionSession)
+            {
+                return Sense(0x05, 0x24, 0x00);
+            }
+            if (OverwriteState == RestrictedOverwriteState.Intermediate)
+            {
+                OverwriteState = RestrictedOverwriteState.Formatted;
+            }
+            SessionClosed = true;
+            return Good(0);
+        }
         if (IsDvdPlusRw)
         {
             // CLOSE SESSION on a DVD+RW stops a background format (libburn's cookbook); nothing else is accepted.
@@ -1131,12 +1181,29 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult WriteOverwrite(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
-        if (BackgroundFormatStatus == 0)
+        if ((IsDvdPlusRw && BackgroundFormatStatus == 0) || (Profile == NativeTaoDataWriter.ProfileDvdRam && !RamFormatted))
         {
             return Sense(0x05, 0x30, 0x10);
         }
         int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
         int count = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(7, 2));
+        if (Profile == NativeTaoDataWriter.ProfileDvdMinusRwRestricted)
+        {
+            // 32 KiB alignment; a partly formatted disc takes nothing past its formatted part; the intermediate
+            // state is written in sequence, without gaps.
+            if (lba % WriteParametersPage.DvdPacketBlocks != 0 || count % WriteParametersPage.DvdPacketBlocks != 0)
+            {
+                return Sense(0x05, 0x24, 0x00);
+            }
+            if (OverwriteState == RestrictedOverwriteState.PartlyFormatted && lba + count > PartlyFormattedSectors)
+            {
+                return Sense(0x05, 0x21, 0x00);
+            }
+            if (OverwriteState == RestrictedOverwriteState.Intermediate && lba * 2048L > (DataDiscImage?.Length ?? 0))
+            {
+                return Sense(0x05, 0x21, 0x02);
+            }
+        }
         if (count == 0)
         {
             return Good(0);
@@ -1184,13 +1251,26 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult FormatUnit(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> list)
     {
-        if (!IsDvdPlusRw)
-        {
-            return Sense(0x05, 0x20, 0x00); // only DVD+RW formatting is simulated
-        }
         if (RejectsFormatUnit)
         {
             return Sense(0x05, 0x24, 0x00);
+        }
+        if (Profile == NativeTaoDataWriter.ProfileDvdMinusRwRestricted)
+        {
+            // Format 13h with 0 blocks and packet size 16 expands a partly formatted DVD-RW to the intermediate state.
+            if (cdb[1] != 0x11 || list.Length < 12 || list[3] != 8 || (list[8] >> 2) != NativeWriteCommands.FormatTypeDvdMinusRwExpand ||
+                list[11] != 16 || OverwriteState != RestrictedOverwriteState.PartlyFormatted)
+            {
+                return Sense(0x05, 0x26, 0x00);
+            }
+            FormatUnitCount++;
+            LastFormatParameters = list[..12].ToArray();
+            OverwriteState = RestrictedOverwriteState.Intermediate;
+            return Good(0);
+        }
+        if (!IsDvdPlusRw)
+        {
+            return Sense(0x05, 0x20, 0x00); // only DVD+RW and DVD-RW formatting are simulated
         }
         if (cdb[1] != 0x11 || list.Length < 12 || list[3] != 8 || (list[8] >> 2) != NativeWriteCommands.FormatTypeDvdPlusRw)
         {

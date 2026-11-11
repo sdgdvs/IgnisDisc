@@ -183,7 +183,7 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     [Fact]
     public void RewritableDvdInTheDrive_IsReportedAsNotCovered()
     {
-        var drive = BlankCd(profile: 0x0012); // DVD-RAM: not built yet
+        var drive = BlankCd(profile: 0x0041); // BD-R: not built yet
         var result = Write(drive, Image(400));
 
         Assert.True(result.StoppedBeforeWriting);
@@ -357,17 +357,17 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task DvdRam_IsHandedToTheWindowsWriter()
+    public async Task DualLayerDvd_IsHandedToTheWindowsWriter_WithTheReason()
     {
         var (engine, drive) = Engine();
-        using var medium = VirtualDiscMedium.CreateBlankDvdRam();
+        using var medium = VirtualDiscMedium.CreateBlankDvdPlusRDL85();
         var recorder = Recorder(medium);
 
         var result = await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(Image(400)), new DataBurnOptions { VerifyAfterBurn = true });
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Verified);
-        Assert.Contains("DVD+RW so far", engine.LastFallbackReason);
+        Assert.Contains("dual-layer", engine.LastFallbackReason);
         Assert.Null(drive()); // the direct writer never opened the drive
     }
 
