@@ -88,7 +88,7 @@
                                             <CheckBox Content="Direct drive commands (experimental)"
                                                       AutomationProperties.Name="Direct drive commands (experimental)"
                                                       IsChecked="{Binding UseDirectDriveCommands}"
-                                                      ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R, CD-RW, DVD-R, DVD-RW, single-layer DVD+R, DVD+RW, DVD-RAM, and single-layer BD-R and BD-RE so far; other discs are burned by the Windows writer as before."
+                                                      ToolTip="Burn with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R, CD-RW, DVD-R, DVD-RW, DVD+R (single and dual layer), DVD+RW, DVD-RAM, and single-layer BD-R and BD-RE so far; other discs are burned by the Windows writer as before."
                                                       VerticalAlignment="Center"
                                                       Margin="0,0,20,0" />
                                 <Button Content="🔄 Convert Image (BIN/CUE ↔ ISO, Legacy)..."

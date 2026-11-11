@@ -342,6 +342,12 @@ public class DataBurnOptions
     /// is never destroyed without the user agreeing to it.
     /// </summary>
     public bool OverwriteExistingData { get; init; }
+
+    /// <summary>
+    /// Dual-layer DVD+R with the direct writer: the sectors to put on layer 0 (a multiple of 16, at least half the image).
+    /// Null lets the writer choose. Windows' writer cannot set a layer break and ignores this.
+    /// </summary>
+    public int? LayerBreakSectors { get; init; }
 }
 
 /// <summary>

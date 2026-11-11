@@ -17,6 +17,48 @@ public static class NativeWriteCommands
     public const byte OpCodeSetCdSpeed = 0xBB;
     public const byte OpCodeReserveTrack = 0x53;
     public const byte OpCodeFormatUnit = 0x04;
+    public const byte OpCodeSendDiscStructure = 0xBF;
+
+    /// <summary>READ/SEND DISC STRUCTURE format 20h: DVD+R double layer boundary (layer 0 data zone capacity).</summary>
+    public const byte FormatLayerBoundary = 0x20;
+
+    /// <summary>Length of the format 20h structure, header included (growisofs: 4 + 8).</summary>
+    public const int LayerBoundaryLength = 12;
+
+    /// <summary>SEND DISC STRUCTURE (0xBF) with the format code in byte 7 and the parameter length in bytes 8–9.</summary>
+    public static byte[] BuildSendDiscStructure(byte formatCode, ushort parameterLength)
+    {
+        byte[] cdb = new byte[12];
+        cdb[0] = OpCodeSendDiscStructure;
+        cdb[7] = formatCode;
+        BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(8, 2), parameterLength);
+        return cdb;
+    }
+
+    /// <summary>
+    /// The format 20h parameters that set a DVD+R DL layer break, as growisofs sends them: byte 1 = 10 (the length after
+    /// the length field), bytes 8–11 = the layer 0 data zone capacity in sectors.
+    /// </summary>
+    public static byte[] BuildLayerBoundaryParameters(int layer0Sectors)
+    {
+        byte[] list = new byte[LayerBoundaryLength];
+        list[1] = LayerBoundaryLength - 2;
+        BinaryPrimitives.WriteInt32BigEndian(list.AsSpan(8, 4), layer0Sectors);
+        return list;
+    }
+
+    /// <summary>
+    /// Reads a format 20h reply (growisofs): bytes 0–1 the length (at least 10), byte 4 bit 7 set when the layer 0
+    /// capacity is fixed already, bytes 8–11 the layer 0 data zone capacity. Null when the reply is too short.
+    /// </summary>
+    public static (bool Fixed, int Layer0Sectors)? ParseLayerBoundary(ReadOnlySpan<byte> reply)
+    {
+        if (reply.Length < LayerBoundaryLength || BinaryPrimitives.ReadUInt16BigEndian(reply) < LayerBoundaryLength - 2)
+        {
+            return null;
+        }
+        return ((reply[4] & 0x80) != 0, BinaryPrimitives.ReadInt32BigEndian(reply.Slice(8, 4)));
+    }
 
     /// <summary>FORMAT UNIT format type 26h: DVD+RW full format, run by the drive in the background.</summary>
     public const byte FormatTypeDvdPlusRw = 0x26;

@@ -77,25 +77,26 @@ public sealed partial class NativeTaoDataWriter
         {
             return RunOverwritable(request, overwritable, progress, ct, clock, state);
         }
-        if (profile is ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump or ProfileDvdPlusRDualLayer)
+        if (profile is ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump)
         {
             state.UnsupportedDisc = true;
-            throw Stop($"Direct writing does not cover dual-layer DVDs yet, because IgnisDisc does not set the layer break on the drive yet (the disc is {discName}).");
+            throw Stop($"Direct writing covers dual-layer DVD+R but not dual-layer DVD-R yet (the disc is {discName}).");
         }
-        if (profile is not (ProfileDvdMinusR or ProfileDvdMinusRwSequential or ProfileDvdPlusR))
+        if (profile is not (ProfileDvdMinusR or ProfileDvdMinusRwSequential or ProfileDvdPlusR or ProfileDvdPlusRDualLayer))
         {
             state.UnsupportedDisc = true;
             throw Stop($"Direct writing of DVDs covers DVD-R, DVD-RW, DVD+R, DVD+RW and DVD-RAM so far; the disc in the drive is {discName}.");
         }
 
-        bool plusR = profile == ProfileDvdPlusR;
+        bool dualLayer = profile == ProfileDvdPlusRDualLayer;
+        bool plusR = profile is ProfileDvdPlusR or ProfileDvdPlusRDualLayer;
         var mode = plusR ? DvdWriteMode.PlusR : request.CloseDisc ? DvdWriteMode.DiscAtOnce : DvdWriteMode.Incremental;
-        string kind = plusR ? "DVD+R" : profile == ProfileDvdMinusR ? "DVD-R" : "DVD-RW";
+        string kind = dualLayer ? "DVD+R DL" : plusR ? "DVD+R" : profile == ProfileDvdMinusR ? "DVD-R" : "DVD-RW";
         state.WriteMode = mode switch
         {
             DvdWriteMode.DiscAtOnce => $"disc-at-once ({kind})",
             DvdWriteMode.Incremental => $"incremental ({kind})",
-            _ => "sequential (DVD+R)"
+            _ => $"sequential ({kind})"
         };
         int trackSectors = (state.ImageSectors + WriteParametersPage.DvdPacketBlocks - 1) / WriteParametersPage.DvdPacketBlocks * WriteParametersPage.DvdPacketBlocks;
         _note($"Disc: {discName}; write mode {state.WriteMode}.");
@@ -179,6 +180,12 @@ public sealed partial class NativeTaoDataWriter
                 throw Stop("The drive did not confirm test-write mode, so nothing was written.");
             }
             _note($"Write parameters confirmed: {state.WriteMode}, test write {confirmed.TestWrite}, BUFE {confirmed.BufferUnderrunFree}, multi-session {confirmed.MultiSession}.");
+        }
+
+        // 3b. Dual-layer DVD+R: where layer 0 ends. Set before the first WRITE; a refusal stops with nothing written.
+        if (dualLayer)
+        {
+            ApplyLayerBreak(trackSectors, request.LayerBreakSectors, state);
         }
 
         // 4. Speed from the drive's own list, set with SET STREAMING over the whole disc.
@@ -286,6 +293,7 @@ public sealed partial class NativeTaoDataWriter
         DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
         IsDvd = !state.IsBluRay,
         IsBluRay = state.IsBluRay,
+        Layer0Sectors = state.Layer0Sectors,
         WriteMode = state.WriteMode
     };
 
@@ -312,6 +320,78 @@ public sealed partial class NativeTaoDataWriter
             }
             return r;
         }
+    }
+
+    /// <summary>
+    /// Sets the layer break of a dual-layer DVD+R, the way growisofs does: READ DISC STRUCTURE format 20h gives the
+    /// current layer 0 capacity and whether it is fixed already. An image that fits on layer 0 as it is leaves it alone.
+    /// Otherwise layer 0 gets half the image rounded up to 16 sectors (so it is never smaller than layer 1), or the
+    /// size asked for, sent with SEND DISC STRUCTURE format 20h and read back. Some drives answer with an error yet
+    /// set the break (cdwrite list, 2006), so the read-back decides.
+    /// </summary>
+    private void ApplyLayerBreak(int trackSectors, int? requested, RunState state)
+    {
+        var boundary = ReadLayerBoundary() ?? throw Stop("The drive did not report the layer boundary of this dual-layer disc.");
+        state.Layer0Sectors = boundary.Layer0Sectors;
+        _note($"Layer 0 capacity {boundary.Layer0Sectors} sectors{(boundary.Fixed ? ", fixed already" : "")}; image {trackSectors} sectors.");
+
+        int wanted;
+        if (requested is int asked)
+        {
+            if (asked <= 0 || asked % WriteParametersPage.DvdPacketBlocks != 0)
+            {
+                throw Stop($"The layer break must be a positive multiple of 16 sectors; {asked} is not.");
+            }
+            if (asked > boundary.Layer0Sectors)
+            {
+                throw Stop($"The layer break ({asked:N0} sectors) is beyond the end of layer 0 ({boundary.Layer0Sectors:N0} sectors).");
+            }
+            if (2L * asked < trackSectors)
+            {
+                throw Stop($"The layer break ({asked:N0} sectors) would put more on layer 1 than on layer 0; it must be at least half the image ({(trackSectors + 1) / 2:N0} sectors).");
+            }
+            wanted = asked;
+        }
+        else if (trackSectors <= boundary.Layer0Sectors)
+        {
+            _note("The image fits on layer 0; the layer break is left as it is.");
+            return;
+        }
+        else
+        {
+            wanted = (trackSectors / WriteParametersPage.DvdPacketBlocks + 1) / 2 * WriteParametersPage.DvdPacketBlocks;
+        }
+
+        if (wanted == boundary.Layer0Sectors)
+        {
+            _note($"Layer break already at {wanted} sectors.");
+            return;
+        }
+        if (boundary.Fixed)
+        {
+            throw Stop($"The layer break of this disc is fixed at {boundary.Layer0Sectors:N0} sectors and cannot be moved to {wanted:N0}.");
+        }
+
+        byte[] parameters = NativeWriteCommands.BuildLayerBoundaryParameters(wanted);
+        var send = _transport.ExecuteCommand(NativeWriteCommands.BuildSendDiscStructure(NativeWriteCommands.FormatLayerBoundary, (ushort)parameters.Length),
+            parameters, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, TimeSpan.FromMinutes(3)); // growisofs: some drives calibrate here
+        var after = ReadLayerBoundary();
+        if (after?.Layer0Sectors != wanted)
+        {
+            throw Stop($"The drive did not set the layer break to {wanted:N0} sectors: {(send.IsSuccess ? "it reports " + (after?.Layer0Sectors.ToString("N0") ?? "nothing") : Describe(send))}.");
+        }
+        state.Layer0Sectors = wanted;
+        _note(send.IsSuccess
+            ? $"Layer break set: {wanted} sectors on layer 0, {trackSectors - wanted} on layer 1."
+            : $"The drive answered {Describe(send)} but reports the layer break at {wanted} sectors; going on.");
+    }
+
+    private (bool Fixed, int Layer0Sectors)? ReadLayerBoundary()
+    {
+        byte[] reply = new byte[NativeWriteCommands.LayerBoundaryLength];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadDiscStructureCdb(NativeWriteCommands.FormatLayerBoundary, (ushort)reply.Length),
+            reply, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        return r.IsSuccess ? NativeWriteCommands.ParseLayerBoundary(reply) : null;
     }
 
     internal readonly record struct FeatureState(bool Present, bool Current, byte Flags);

@@ -384,7 +384,6 @@ public sealed class NativeDvdDataWriterTests : IDisposable
     // ---- Discs not covered ----
 
     [Theory]
-    [InlineData(NativeTaoDataWriter.ProfileDvdPlusRDualLayer)]
     [InlineData(NativeTaoDataWriter.ProfileDvdMinusRDualLayer)]
     [InlineData(NativeTaoDataWriter.ProfileDvdMinusRDualLayerJump)]
     public void DualLayerDisc_IsReportedAsNotCovered(ushort profile)
@@ -482,10 +481,10 @@ public sealed class NativeDvdDataWriterTests : IDisposable
     }
 
     [Fact]
-    public async Task DualLayerDvd_IsHandedToTheWindowsWriter()
+    public async Task DualLayerDvdMinusR_IsHandedToTheWindowsWriter()
     {
         var (engine, drive) = Engine();
-        using var medium = VirtualDiscMedium.CreateBlankDvdPlusRDL85();
+        using var medium = new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors);
         var recorder = Recorder(medium);
 
         var result = await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(Image(320)), new DataBurnOptions { VerifyAfterBurn = true });

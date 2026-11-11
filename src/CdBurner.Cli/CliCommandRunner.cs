@@ -838,6 +838,7 @@ public static class CliCommandRunner
             speedSetKiloBytesPerSecond = r?.SpeedSetKiloBytesPerSecond,
             driveSpeedsKiloBytesPerSecond = r?.DriveSpeedsKiloBytesPerSecond,
             dataSectors = r?.DataSectorsWritten,
+            layer0Sectors = r?.Layer0Sectors,
             paddingSectors = r?.PaddingSectors,
             writingSeconds = r == null ? (double?)null : Math.Round(r.WritingTime.TotalSeconds, 1),
             writerSeconds = r == null ? (double?)null : Math.Round(r.Elapsed.TotalSeconds, 1),

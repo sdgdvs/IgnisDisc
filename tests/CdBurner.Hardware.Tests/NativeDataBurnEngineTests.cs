@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using CdBurner.Core.Primitives;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Burning;
 using CdBurner.Hardware.NativeWriting;
@@ -360,7 +361,7 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     public async Task DualLayerDvd_IsHandedToTheWindowsWriter_WithTheReason()
     {
         var (engine, drive) = Engine();
-        using var medium = VirtualDiscMedium.CreateBlankDvdPlusRDL85();
+        using var medium = new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors);
         var recorder = Recorder(medium);
 
         var result = await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(Image(400)), new DataBurnOptions { VerifyAfterBurn = true });

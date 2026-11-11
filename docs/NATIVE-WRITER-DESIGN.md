@@ -176,7 +176,16 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   gets `FORMAT UNIT` type 00h with the block count the drive offered for it in `READ FORMAT CAPACITIES` and the
   block length 2,048 in bytes 9–11 (libburn's `mmc_format_unit`); 2 KiB alignment; no close command. Random
   recording BD-R (42h) and BD-ROM are refused; multi-layer Blu-ray goes to the Windows writer.
-- Dual-layer DVD±R goes to the Windows writer with a stated reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
+- *DVD+R DL layer break* (built 2026-11-11, simulator only). Written like DVD+R, with the layer break set first, as
+  growisofs' `plus_r_dl_split` does (`growisofs_mmc.cpp`, Debian source archive): `READ DISC STRUCTURE` format 20h,
+  12 bytes (bytes 0-1 length >= 10, byte 4 bit 7 = break fixed already, bytes 8-11 = layer 0 data zone capacity).
+  An image (rounded to 16 sectors) that fits on layer 0 leaves the break alone. Otherwise layer 0 gets
+  (blocks / 16 + 1) / 2 * 16 sectors, half rounded up so layer 0 is never smaller than layer 1, or the size given in
+  `DataBurnOptions.LayerBreakSectors` (a multiple of 16, at least half the image, within layer 0). It is sent with
+  `SEND DISC STRUCTURE` (0xBF) format 20h (byte 1 = 10, bytes 8-11 = layer 0 size) and read back; the read-back
+  decides, because some drives answer 5/26/00 yet set the break (cdwrite list). A break fixed elsewhere that would
+  have to move, or one the drive will not take, stops the burn before the first `WRITE`.
+- Dual-layer DVD-R goes to the Windows writer with a stated reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
 
 ## Buffer and underrun handling
 

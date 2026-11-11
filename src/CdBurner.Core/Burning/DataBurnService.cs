@@ -330,7 +330,8 @@ public class DataBurnService
             StrictVerify = burnOptions.StrictVerify,
             CloseDisc = burnOptions.CloseDisc,
             VolumeLabel = burnOptions.VolumeLabel,
-            OverwriteExistingData = burnOptions.OverwriteExistingData
+            OverwriteExistingData = burnOptions.OverwriteExistingData,
+            LayerBreakSectors = burnOptions.LayerBreakSectors
         };
 
         BurnOperationResult burnResult;

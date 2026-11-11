@@ -1,4 +1,5 @@
 using System.IO;
+using CdBurner.Core.Primitives;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Compilation;
 using CdBurner.Core.Iso;
@@ -91,7 +92,7 @@ public sealed class DirectDataBurnViewModelTests : IDisposable
     [Fact]
     public async Task DataScreen_WithADualLayerDvd_UsesTheWindowsWriterAndSaysSo()
     {
-        Insert(VirtualDiscMedium.CreateBlankDvdPlusRDL85());
+        Insert(new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors));
         var vm = DataScreen();
         vm.UseDirectDriveCommands = true;
 

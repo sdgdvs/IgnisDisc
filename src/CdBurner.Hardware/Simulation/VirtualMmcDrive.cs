@@ -58,6 +58,27 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private bool IsBdR => Profile == NativeTaoDataWriter.ProfileBdR;
 
+    // ---- DVD+R DL layer break ----
+
+    /// <summary>DVD+R DL: layer 0 capacity in sectors; null means half of <see cref="CapacitySectors"/>.</summary>
+    public int? Layer0CapacitySectors { get; set; }
+
+    /// <summary>DVD+R DL: the layer break is fixed already (READ DISC STRUCTURE 20h byte 4 bit 7) and cannot be sent.</summary>
+    public bool LayerBreakFixed { get; set; }
+
+    /// <summary>SEND DISC STRUCTURE 20h fails with 5/26/00.</summary>
+    public bool RejectsLayerBreak { get; set; }
+
+    /// <summary>With <see cref="RejectsLayerBreak"/>: the drive sets the break anyway, as reported on the cdwrite list.</summary>
+    public bool SetsLayerBreakDespiteError { get; set; }
+
+    /// <summary>The layer 0 size received with SEND DISC STRUCTURE 20h; null when none was sent.</summary>
+    public int? LayerBreakSent { get; private set; }
+
+    private bool IsDvdPlusRDualLayer => Profile == NativeTaoDataWriter.ProfileDvdPlusRDualLayer;
+
+    private int Layer0Capacity => Layer0CapacitySectors ?? Capacity / 2;
+
     /// <summary>DVD+R and BD-R: written in sequence with no mode page, then CLOSE TRACK and close or finalize.</summary>
     private bool IsPlusRLike => IsDvdPlusR || IsBdR;
 
@@ -358,6 +379,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             NativeWriteCommands.OpCodeCloseTrackSession => CloseTrackSession(cdb),
             NativeWriteCommands.OpCodeReserveTrack => ReserveTrack(cdb),
             NativeWriteCommands.OpCodeFormatUnit => FormatUnit(cdb, dataBuffer),
+            MmcCommandBuilder.OpCodeReadDiscStructure => ReadDiscStructure(cdb, dataBuffer),
+            NativeWriteCommands.OpCodeSendDiscStructure => SendDiscStructure(cdb, dataBuffer),
             NativeWriteCommands.OpCodeSetStreaming => SetStreaming(cdb, dataBuffer),
             _ => Sense(0x05, 0x20, 0x00) // invalid command operation code
         };
@@ -1326,6 +1349,51 @@ public sealed class VirtualMmcDrive : IScsiTransport
             NotReadyResponses += 1;
         }
         return Good(0);
+    }
+
+    /// <summary>READ DISC STRUCTURE: only format 20h (DVD+R DL layer boundary) is simulated, the growisofs layout.</summary>
+    private ScsiExecutionResult ReadDiscStructure(ReadOnlySpan<byte> cdb, Span<byte> data)
+    {
+        if (cdb[7] != NativeWriteCommands.FormatLayerBoundary || !IsDvdPlusRDualLayer)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        byte[] r = new byte[NativeWriteCommands.LayerBoundaryLength];
+        BinaryPrimitives.WriteUInt16BigEndian(r, NativeWriteCommands.LayerBoundaryLength - 2);
+        r[4] = (byte)(LayerBreakFixed ? 0x80 : 0x00);
+        BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(8), Layer0Capacity);
+        return CopyOut(r, data);
+    }
+
+    /// <summary>
+    /// SEND DISC STRUCTURE format 20h on a blank DVD+R DL: sets layer 0's capacity (a multiple of 16, no larger than
+    /// it was). Refused once fixed or after writing has begun.
+    /// </summary>
+    private ScsiExecutionResult SendDiscStructure(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> list)
+    {
+        int length = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(8, 2));
+        if (cdb[7] != NativeWriteCommands.FormatLayerBoundary || !IsDvdPlusRDualLayer || length != NativeWriteCommands.LayerBoundaryLength ||
+            list.Length < length || list[1] != NativeWriteCommands.LayerBoundaryLength - 2)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (LayerBreakFixed || DiscStatus != 0 || _taoNextLba != 0)
+        {
+            return Sense(0x05, 0x2C, 0x00);
+        }
+        int layer0 = BinaryPrimitives.ReadInt32BigEndian(list.Slice(8, 4));
+        if (layer0 <= 0 || layer0 % WriteParametersPage.DvdPacketBlocks != 0 || layer0 > Layer0Capacity)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        if (RejectsLayerBreak && !SetsLayerBreakDespiteError)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        LayerBreakSent = layer0;
+        Layer0CapacitySectors = layer0;
+        LayerBreakFixed = true;
+        return RejectsLayerBreak ? Sense(0x05, 0x26, 0x00) : Good(0);
     }
 
     /// <summary>RESERVE TRACK (ARSV 0, RMZ 0) on a blank DVD-R/-RW set to Disc-At-Once: the size in CDB bytes 5–8.</summary>

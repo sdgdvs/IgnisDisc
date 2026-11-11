@@ -16,6 +16,8 @@ namespace CdBurner.Hardware.NativeWriting;
 /// for the fastest the drive lists for this disc.</param>
 /// <param name="OverwriteExistingData">True: the user allowed replacing what is on an overwritable disc (DVD+RW). Without
 /// it, a DVD+RW that holds a file system is left alone.</param>
+/// <param name="LayerBreakSectors">Dual-layer DVD+R: the sectors to put on layer 0 (a multiple of 16, at least half the
+/// image). Null: chosen automatically, as growisofs does.</param>
 public sealed record NativeDataWriteRequest(
     Stream Image,
     long StartPosition,
@@ -23,7 +25,8 @@ public sealed record NativeDataWriteRequest(
     bool TestWrite,
     bool CloseDisc = true,
     int? WriteSpeedKiloBytesPerSecond = null,
-    bool OverwriteExistingData = false);
+    bool OverwriteExistingData = false,
+    int? LayerBreakSectors = null);
 
 /// <summary>Outcome of a native Track-at-Once data write.</summary>
 public sealed record NativeDataWriteResult
@@ -67,6 +70,9 @@ public sealed record NativeDataWriteResult
 
     /// <summary>True when the disc was a Blu-ray disc (speeds then count 4,495.5 kB/s per 1x).</summary>
     public bool IsBluRay { get; init; }
+
+    /// <summary>Dual-layer DVD+R: the sectors on layer 0 as the drive reported them before writing; null otherwise.</summary>
+    public int? Layer0Sectors { get; init; }
 
     /// <summary>How the disc was written, for logs and JSON (for example "disc-at-once (DVD-R)").</summary>
     public string WriteMode { get; init; } = "track-at-once, mode 1";
@@ -152,6 +158,7 @@ public sealed partial class NativeTaoDataWriter
                 DriveSpeedsKiloBytesPerSecond = state.DriveSpeeds,
                 IsDvd = state.IsDvd,
                 IsBluRay = state.IsBluRay,
+                Layer0Sectors = state.Layer0Sectors,
                 WriteMode = state.WriteMode
             };
         }
@@ -684,6 +691,7 @@ public sealed partial class NativeTaoDataWriter
         public IReadOnlyList<int> DriveSpeeds = Array.Empty<int>();
         public bool IsDvd;
         public bool IsBluRay;
+        public int? Layer0Sectors;
         public string WriteMode = "track-at-once, mode 1";
     }
 
