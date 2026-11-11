@@ -24,8 +24,8 @@
                     BorderBrush="{DynamicResource CardBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
-                    Margin="16"
-                    Padding="24">
+                    Margin="12"
+                    Padding="20,14,20,16">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -33,22 +33,32 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <!-- Workspace Header -->
-                    <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                        <TextBlock Text="{Binding Title}"
-                                   FontSize="22"
+                    <!-- Workspace Header: title and description on one line, so the workspace below keeps its height -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding Title}"
+                                   FontSize="18"
                                    FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="{Binding Description}"
-                                   FontSize="13"
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding Description}"
+                                   ToolTip="{Binding Description}"
+                                   FontSize="12"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                   Margin="0,4,0,0" />
-                    </StackPanel>
+                                   Margin="14,2,0,0" />
+                    </Grid>
 
                     <!-- Workspace Separator -->
                     <Separator Grid.Row="1"
                                Background="{DynamicResource CardBorderBrush}"
-                               Margin="0,0,0,20" />
+                               Margin="0,0,0,12" />
 
                     <!-- Workspace Content or Placeholder Surface -->
                     <Grid Grid.Row="2">
