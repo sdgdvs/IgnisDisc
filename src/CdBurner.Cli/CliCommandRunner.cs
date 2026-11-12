@@ -15,10 +15,12 @@ using CdBurner.Core.Images;
 using CdBurner.Core.Iso;
 using CdBurner.Core.Primitives;
 using CdBurner.Core.Utilities;
+using CdBurner.Core.Verification;
 using CdBurner.Hardware.Audio;
 using CdBurner.Hardware.Burning;
 using CdBurner.Hardware.Devices;
 using CdBurner.Hardware.NativeWriting;
+using CdBurner.Hardware.Scsi;
 using CdBurner.Hardware.Simulation;
 
 namespace CdBurner.Cli;
@@ -197,6 +199,7 @@ public static class CliCommandRunner
             "rip" or "rip-disc" => await HandleRipAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "rip-audio" or "ripaudio" => await HandleRipAudioAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "detect-offset" or "detectoffset" => await HandleDetectOffsetAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
+            "check-disc" or "checkdisc" => HandleCheckDisc(cmd, stdout, deviceService),
             "archive-stage" or "archivestage" => await HandleArchiveStageAsync(cmd, stdout).ConfigureAwait(false),
             "archive-verify" or "archiveverify" => await HandleArchiveVerifyAsync(cmd, stdout).ConfigureAwait(false),
             "recover" or "archive-recover" => await HandleRecoverAsync(cmd, stdout, deviceService, burnEngine).ConfigureAwait(false),
@@ -1177,6 +1180,67 @@ public static class CliCommandRunner
             stderr.WriteLine("To burn anyway, run the same command with --allow-damaged.");
         }
         return 1;
+    }
+
+    /// <summary>
+    /// check-disc: reads every sector of the CD in the drive once with C2 error pointers and says where it is weak (read-only).
+    /// </summary>
+    private static int HandleCheckDisc(CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService)
+    {
+        string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        var recorder = FindRecorder(deviceService, driveId);
+        if (recorder.IsVirtual || string.IsNullOrWhiteSpace(recorder.VolumePath))
+        {
+            throw new CommandLineException("check-disc reads a real disc: choose a physical drive.");
+        }
+
+        DiscHealthReport report;
+        using (var transport = Win32ScsiTransport.Open(recorder.VolumePath, FileAccess.ReadWrite))
+        {
+            int lastPercent = -1;
+            report = new DiscHealthScanner(transport).Scan((done, total) =>
+            {
+                int percent = (int)(100L * done / Math.Max(1, total));
+                if (!cmd.IsJson && percent / 10 != lastPercent / 10)
+                {
+                    stdout.WriteLine($"  Reading: {percent}%");
+                }
+                lastPercent = percent;
+            });
+        }
+
+        if (cmd.IsJson)
+        {
+            WriteJsonResult(stdout, new
+            {
+                success = true,
+                driveId = recorder.UniqueId,
+                verdict = report.Verdict.ToString(),
+                summary = report.Describe(),
+                sectorsRead = report.TotalSectors,
+                flaggedSectors = report.FlaggedSectors,
+                unreadableSectors = report.UnreadableSectors,
+                c2Available = report.C2Available,
+                problemsPerMinute = report.ProblemsPerMinute,
+                outerFifthShare = report.FlaggedShareInOuterFifth,
+                seconds = report.Elapsed.TotalSeconds,
+                tracks = report.Tracks.Select(t => new { number = t.TrackNumber, audio = t.IsAudio, startLba = t.StartLba, sectors = t.Sectors, flagged = t.FlaggedSectors, unreadable = t.UnreadableSectors })
+            });
+            return 0;
+        }
+
+        stdout.WriteLine();
+        stdout.WriteLine(report.Describe());
+        foreach (var t in report.Tracks.Where(t => t.FlaggedSectors + t.UnreadableSectors > 0))
+        {
+            stdout.WriteLine($"  Track {t.TrackNumber:D2}: {t.FlaggedSectors} with uncorrectable errors, {t.UnreadableSectors} unreadable (of {t.Sectors:N0})");
+        }
+        if (report.FlaggedSectors + report.UnreadableSectors > 0)
+        {
+            stdout.WriteLine("  By minute of the disc: " + string.Join(" ", report.ProblemsPerMinute.Select((n, m) => n == 0 ? "." : $"{m}:{n}")));
+        }
+        stdout.WriteLine($"  Took {report.Elapsed.TotalSeconds:F0} s.");
+        return 0;
     }
 
     private static async Task<int> HandleBurnDvdAsync(
@@ -2533,6 +2597,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
         stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--json]");
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+        stdout.WriteLine("  check-disc --drive <id> [--json]");
+        stdout.WriteLine("      Reads a CD once with C2 error pointers and says where it is weak (where a player may skip). Read-only.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
         stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--json]");

@@ -90,6 +90,7 @@ ignisdisc-cli <command> [options]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
              [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--continue-on-error] [--cover <image>]
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
+  check-disc --drive <id>                      Read a CD once with C2 error pointers: where it is weak (may skip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
              [--redundancy <min %>] [--no-fill]      Recovery data fills each disc; --no-fill keeps exactly that %
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest

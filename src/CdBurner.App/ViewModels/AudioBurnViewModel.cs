@@ -1759,6 +1759,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             {
                 StatusMessage = $"Audio CD burned with direct drive commands and read back correctly ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
                 BurnProgress = 100.0;
+                if (directEngine?.LastWriteOffsetPlan is { } offsetPlan)
+                {
+                    // Say whether the audio sits sample-exact for offset-corrected rippers, or why not yet.
+                    StatusMessage += " " + offsetPlan.Explanation;
+                }
                 if (directEngine?.LastResult?.Verification?.Warning is { } readWarning)
                 {
                     // Right audio, but parts of the disc needed careful re-reads: say so before it goes in a car.
