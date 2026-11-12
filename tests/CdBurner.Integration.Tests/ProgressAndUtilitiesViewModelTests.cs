@@ -434,6 +434,55 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
         Assert.Equal(ThemeMode.System, CdBurner.App.Themes.ThemeManager.CurrentMode);
     }
 
+
+    /// <summary>A CD burned on the simulated drive, with three weak sectors in track 2 (as on the old CD-R batch).</summary>
+    private static VirtualMmcDrive WeakBurnedCd()
+    {
+        var drive = new VirtualMmcDrive();
+        static byte[] Pcm(int seed) { var b = new byte[300 * 2352]; new Random(seed).NextBytes(b); return b; }
+        var request = new CdBurner.Hardware.NativeWriting.NativeSaoWriteRequest(
+            new[] { new CdBurner.Hardware.NativeWriting.SaoTrack(1, 300, 150), new CdBurner.Hardware.NativeWriting.SaoTrack(2, 300) },
+            i => new MemoryStream(Pcm(i + 1)), null, null, TestWrite: false);
+        Assert.True(new CdBurner.Hardware.NativeWriting.NativeSaoAudioWriter(drive, sleep: _ => { }).Write(request).Success);
+        drive.MarginalBadReads = int.MaxValue;
+        drive.MarginalLbas.UnionWith([320, 321, 450]);
+        return drive;
+    }
+
+    [Fact]
+    public async Task DriveUtilities_CheckDisc_ShowsWhereTheDiscIsWeak()
+    {
+        var vm = new DriveUtilitiesViewModel(_deviceManager, _burnEngine)
+        {
+            OpenDriveForCheck = _ => WeakBurnedCd()
+        };
+        vm.SelectedRecorder = _deviceManager.GetRecorders().First();
+        Assert.False(vm.HasDiscHealth);
+        Assert.True(vm.CheckDiscCommand.CanExecute(null));
+
+        await vm.CheckDiscCommand.ExecuteAsync(null);
+
+        Assert.False(vm.IsBusy);
+        Assert.True(vm.HasDiscHealth);
+        Assert.Equal(CdBurner.Core.Verification.DiscHealthVerdict.Weak, vm.LastDiscHealth!.Verdict);
+        Assert.Contains("track 2", vm.DiscHealthSummary);
+        Assert.Contains("weak in places", vm.StatusMessage);
+        Assert.Equal(100.0, vm.OperationProgress);
+    }
+
+    [Fact]
+    public async Task DriveUtilities_CheckDisc_OnTheVirtualDrive_SaysItNeedsARealOne()
+    {
+        var vm = new DriveUtilitiesViewModel(_deviceManager, _burnEngine);
+        vm.SelectedRecorder = _deviceManager.GetRecorders().First(r => r.IsVirtual);
+
+        var result = await vm.CheckDiscAsync();
+
+        Assert.Null(result);
+        Assert.False(vm.HasDiscHealth);
+        Assert.Contains("choose a physical drive", vm.StatusMessage);
+        Assert.False(vm.IsBusy);
+    }
     [Fact]
     public void MainViewModel_DefaultWriteSpeed_IsRecommended_AndAChosenSpeedIsKept()
     {

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Verification;
 using CdBurner.Core.Primitives;
 using CdBurner.Core.Utilities;
 using CdBurner.Hardware.Devices;
@@ -107,6 +108,7 @@ public class DriveUtilitiesViewModel : ObservableObject
                 EraseDiscCommand.RaiseCanExecuteChanged();
                 ApplyBookTypeCommand.RaiseCanExecuteChanged();
                 StartSurfaceScanCommand.RaiseCanExecuteChanged();
+                CheckDiscCommand?.RaiseCanExecuteChanged();
                 GenerateCompatibilityReportCommand?.RaiseCanExecuteChanged();
             }
         }
@@ -185,6 +187,7 @@ public class DriveUtilitiesViewModel : ObservableObject
                 EraseDiscCommand.RaiseCanExecuteChanged();
                 ApplyBookTypeCommand.RaiseCanExecuteChanged();
                 StartSurfaceScanCommand.RaiseCanExecuteChanged();
+                CheckDiscCommand?.RaiseCanExecuteChanged();
                 ExportScanCsvCommand?.RaiseCanExecuteChanged();
                 GenerateCompatibilityReportCommand?.RaiseCanExecuteChanged();
                 CancelCommand?.RaiseCanExecuteChanged();
@@ -258,6 +261,41 @@ public class DriveUtilitiesViewModel : ObservableObject
 
     public RelayCommand CancelCommand { get; }
 
+    /// <summary>
+    /// Reads the CD once with C2 error pointers and says where it is weak (where a player may skip). Read-only.
+    /// </summary>
+    public AsyncRelayCommand CheckDiscCommand { get; }
+
+    /// <summary>The last disc check, or null.</summary>
+    public DiscHealthReport? LastDiscHealth
+    {
+        get => _lastDiscHealth;
+        private set
+        {
+            if (SetProperty(ref _lastDiscHealth, value))
+            {
+                OnPropertyChanged(nameof(DiscHealthSummary));
+                OnPropertyChanged(nameof(HasDiscHealth));
+            }
+        }
+    }
+
+    /// <summary>The last disc check in plain words, for the screen.</summary>
+    public string? DiscHealthSummary => _lastDiscHealth?.Describe();
+
+    public bool HasDiscHealth => _lastDiscHealth != null;
+
+    /// <summary>
+    /// Opens a drive for the disc check. The default opens a physical drive by its volume; tests pass the simulated one.
+    /// Null for a drive that cannot be checked (the virtual drive).
+    /// </summary>
+    public Func<IDiscRecorderBackend, CdBurner.Hardware.Scsi.IScsiTransport?> OpenDriveForCheck { get; set; } = recorder =>
+        recorder.IsVirtual || string.IsNullOrWhiteSpace(recorder.VolumePath)
+            ? null
+            : CdBurner.Hardware.Scsi.Win32ScsiTransport.Open(recorder.VolumePath);
+
+    private DiscHealthReport? _lastDiscHealth;
+
     private CancellationTokenSource? _activeCts;
 
     #endregion
@@ -298,6 +336,9 @@ public class DriveUtilitiesViewModel : ObservableObject
             execute: async param => await ExportScanCsvAsync(param),
             canExecute: _ => LatestScanReport != null && LatestScanReport.Blocks.Count > 0 && !IsBusy);
         CancelCommand = new RelayCommand(_ => CancelActiveOperation(), _ => IsBusy);
+        CheckDiscCommand = new AsyncRelayCommand(
+            execute: async param => await CheckDiscAsync(param),
+            canExecute: _ => SelectedRecorder != null && !IsBusy);
 
         RefreshRecorders();
     }
@@ -511,6 +552,72 @@ public class DriveUtilitiesViewModel : ObservableObject
             var fallbackReport = new SurfaceScanReport(0, 0, 0, 0, 0, 0, 0, Array.Empty<SurfaceScanBlockResult>());
             LatestScanReport = fallbackReport;
             return fallbackReport;
+        }
+        finally
+        {
+            _activeCts?.Dispose();
+            _activeCts = null;
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Reads every sector of the CD once with C2 error pointers (<see cref="CdBurner.Hardware.Scsi.DiscHealthScanner"/>)
+    /// and puts the verdict in <see cref="DiscHealthSummary"/>. Read-only; cancellable.
+    /// </summary>
+    public async Task<DiscHealthReport?> CheckDiscAsync(object? parameter = null, CancellationToken cancellationToken = default)
+    {
+        var targetRecorder = ResolveTargetRecorder(parameter);
+        if (targetRecorder == null)
+        {
+            StatusMessage = "No drive selected for the disc check.";
+            return null;
+        }
+
+        _activeCts?.Dispose();
+        _activeCts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource();
+        var ct = _activeCts.Token;
+
+        IsBusy = true;
+        LastDiscHealth = null;
+        OperationProgress = 0.0;
+        StatusMessage = "Checking the disc: reading every sector once, as a player would...";
+        try
+        {
+            var progress = new Progress<double>(percent =>
+            {
+                OperationProgress = percent;
+                StatusMessage = $"Checking the disc: {percent:F0}%";
+            });
+            IProgress<double> report = progress;
+            var result = await Task.Run(() =>
+            {
+                using var transport = OpenDriveForCheck(targetRecorder)
+                    ?? throw new InvalidOperationException("The disc check reads a real disc: choose a physical drive.");
+                return new CdBurner.Hardware.Scsi.DiscHealthScanner(transport).Scan((done, total) => report.Report(100.0 * done / Math.Max(1, total)), ct);
+            }, ct);
+
+            LastDiscHealth = result;
+            OperationProgress = 100.0;
+            StatusMessage = result.Verdict switch
+            {
+                DiscHealthVerdict.ReadsCleanly => "Disc check finished: reads cleanly.",
+                DiscHealthVerdict.Weak => "Disc check finished: weak in places (see below).",
+                _ => "Disc check finished: damaged (see below)."
+            };
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Disc check cancelled.";
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.IO.IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            StatusMessage = $"Disc check could not run: {ex.Message}";
+            return null;
         }
         finally
         {
