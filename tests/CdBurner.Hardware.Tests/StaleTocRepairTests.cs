@@ -1,3 +1,4 @@
+using CdBurner.Core.Abstractions;
 using CdBurner.Hardware.Scsi;
 using Xunit;
 
@@ -57,5 +58,42 @@ public class StaleTocRepairTests
 
         Assert.Equal((2, 0, true, (int?)null), result[1]);
         Assert.Equal((1, 0, true, (int?)102_464), result[0]);
+    }
+
+    // ---- Session length on DVD (the CD gap rule gave 119,752 for a 102,464-sector track) ----
+
+    private static readonly DiscTocTrack[] TwoSessionDvdR =
+    [
+        new(1, 0, 131_152 - PhysicalSectorReader.CdInterSessionGap, false), // from the 11,400 rule: 119,752
+        new(2, 131_152, 14_464, false)
+    ];
+
+    [Fact]
+    public void SessionEndFromTheCdGapRule_TakesTheDrivesTrackSize()
+    {
+        var result = PhysicalSectorReader.CorrectSessionEnds(TwoSessionDvdR, n => n == 1 ? (0, 102_464) : (131_152, 14_464));
+
+        Assert.Equal(102_464, result[0].SectorCount); // as measured on the Verbatim DVD-R, 2026-11-10
+        Assert.Equal(14_464, result[1].SectorCount);
+    }
+
+    [Fact]
+    public void TrackInformationThatDisagrees_IsNotUsed()
+    {
+        Assert.Equal(119_752, PhysicalSectorReader.CorrectSessionEnds(TwoSessionDvdR, _ => (16, 102_464))[0].SectorCount); // other start
+        Assert.Equal(119_752, PhysicalSectorReader.CorrectSessionEnds(TwoSessionDvdR, _ => (0, 140_000))[0].SectorCount); // runs into track 2
+        Assert.Equal(119_752, PhysicalSectorReader.CorrectSessionEnds(TwoSessionDvdR, _ => null)[0].SectorCount);       // drive will not say
+    }
+
+    [Fact]
+    public void TracksSizedFromTheirNeighbours_AreLeftAlone_AndTheDriveIsNotAsked()
+    {
+        DiscTocTrack[] cd = [new(1, 0, 20_000, true), new(2, 20_000, 30_000, true), new(3, 50_000, 1_000, true)];
+        int asked = 0;
+
+        var result = PhysicalSectorReader.CorrectSessionEnds(cd, _ => { asked++; return (0, 1); });
+
+        Assert.Same(cd, result);
+        Assert.Equal(0, asked);
     }
 }

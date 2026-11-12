@@ -360,9 +360,9 @@ public static partial class PhysicalSectorReader
                     bool nextStartsNewSession = next.Number != 0xAA &&
                         ((firstTrackOfLastSession != null && next.Number == firstTrackOfLastSession) ||
                          (firstTrackOfLastSession == null && !cur.IsData && next.IsData));
-                    if (cur.Size == null && nextStartsNewSession && count > 11_400)
+                    if (cur.Size == null && nextStartsNewSession && count > CdInterSessionGap)
                     {
-                        count -= 11_400;
+                        count -= CdInterSessionGap;
                     }
 
                     if (count > 0)
@@ -375,7 +375,43 @@ public static partial class PhysicalSectorReader
             }
         }
 
+        parsedTracks = CorrectSessionEnds(parsedTracks, number => ReadTrackInformation(volumePath, number));
         return TrimDataTrackRunOut(volumePath, parsedTracks);
+    }
+
+    /// <summary>Sectors between the end of one CD session and the first track of the next (lead-out, lead-in, pre-gap).</summary>
+    public const int CdInterSessionGap = 11_400;
+
+    /// <summary>
+    /// Where the drive gave no lead-out for a session, its last track was taken to end <see cref="CdInterSessionGap"/>
+    /// sectors before the next session's first track. That is CD geometry; on DVD the gap differs (measured on a
+    /// two-session DVD-R: track 1 is 102,464 sectors, the rule gave 119,752). For exactly those tracks, the drive's own
+    /// READ TRACK INFORMATION size is used when it agrees on the start and still ends before the next track.
+    /// Every other track is returned unchanged, and the drive is not asked.
+    /// </summary>
+    public static IReadOnlyList<DiscTocTrack> CorrectSessionEnds(
+        IReadOnlyList<DiscTocTrack> tracks, Func<int, (int Start, int Size)?> readTrackInformation)
+    {
+        ArgumentNullException.ThrowIfNull(tracks);
+        ArgumentNullException.ThrowIfNull(readTrackInformation);
+        List<DiscTocTrack>? corrected = null;
+        for (int i = 0; i + 1 < tracks.Count; i++)
+        {
+            var cur = tracks[i];
+            var next = tracks[i + 1];
+            if (next.StartLba - (cur.StartLba + cur.SectorCount) != CdInterSessionGap)
+            {
+                continue; // size came from the drive's own lead-out or the next track's start
+            }
+
+            if (readTrackInformation(cur.TrackNumber) is { } info && info.Start == cur.StartLba && info.Size > 0
+                && info.Size != cur.SectorCount && cur.StartLba + info.Size <= next.StartLba)
+            {
+                corrected ??= tracks.ToList();
+                corrected[i] = cur with { SectorCount = info.Size };
+            }
+        }
+        return corrected ?? tracks;
     }
 
     /// <summary>
@@ -568,7 +604,7 @@ public static partial class PhysicalSectorReader
             }
             else if (i + 1 < ordered.Count)
             {
-                endLba = Math.Max(cur.StartLba, ordered[i + 1].StartLba - 11_400);
+                endLba = Math.Max(cur.StartLba, ordered[i + 1].StartLba - CdInterSessionGap);
             }
             else
             {

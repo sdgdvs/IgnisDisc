@@ -57,6 +57,7 @@ public sealed class NativeAudioBurnEngineTests : IDisposable
         var engine = new NativeAudioBurnEngine(_dir)
         {
             TestWriteFirst = testFirst,
+            Wait = _ => { },
             ConfigureVirtualDrive = d =>
             {
                 seen = d;
@@ -118,6 +119,68 @@ public sealed class NativeAudioBurnEngineTests : IDisposable
         Assert.Contains("Nothing was written to the disc", result.ErrorMessage);
         Assert.False(drive()!.Recorded);
         Assert.True(recorder.CurrentMedium!.IsBlank);
+        Assert.Equal(0, drive()!.TrayEjects); // a spring tray (as the GP60NB50 reports) is never opened
+    }
+
+    [Fact]
+    public async Task TestFirst_OnADriveThatClosesItsOwnTray_ReloadsTheDiscAndBurns()
+    {
+        using var recorder = Recorder(VirtualDiscMedium.CreateBlankCdR700());
+        var (engine, drive) = Engine(testFirst: true, configure: d => d.CanLoadTray = true);
+
+        var result = await engine.BurnAudioTracksAsync(recorder, Tracks(), Options(), null, CancellationToken.None);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(engine.LastTestWritePassed);
+        Assert.Equal(1, drive()!.TrayEjects);
+        Assert.Equal(1, drive()!.TrayLoads);
+        Assert.True(engine.LastResult!.Verification!.Passed);
+        Assert.True(recorder.CurrentMedium!.IsFinalized);
+
+        string log = await File.ReadAllTextAsync(engine.LastLogPath!);
+        Assert.Contains("ejecting and reloading the disc", log);
+        Assert.Contains("Disc reloaded; it reads blank again", log);
+        Assert.Contains("Step 2: real write", log);
+    }
+
+    [Theory]
+    [InlineData(2, true)]  // pop-up (spring) tray, even if it claims it can load
+    [InlineData(4, true)]  // changer
+    [InlineData(1, false)] // ordinary tray without the Load bit
+    public async Task TestFirst_NeverCyclesATrayThatCannotSafelyCloseItself(byte mechanism, bool canLoad)
+    {
+        using var recorder = Recorder(VirtualDiscMedium.CreateBlankCdR700());
+        var (engine, drive) = Engine(testFirst: true, configure: d => { d.LoadingMechanism = mechanism; d.CanLoadTray = canLoad; });
+
+        var result = await engine.BurnAudioTracksAsync(recorder, Tracks(), Options(), null, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("reloaded", result.ErrorMessage);
+        Assert.Equal(0, drive()!.TrayEjects);
+        Assert.False(drive()!.Recorded);
+    }
+
+    [Fact]
+    public void RemovableMediumFeature_AsTheGp60nb50ReportsIt_IsATrayThatCannotLoad()
+    {
+        // Captured 2026-11-11: GET CONFIGURATION RT=2 feature 0x0003 from the GP60NB50.
+        byte[] reply = Convert.FromHexString("0000000C0000000800030B042900000000000000");
+        var info = TrayReload.ReadRemovableMedium(new CannedReply(reply));
+
+        Assert.Equal(new RemovableMediumInfo(1, CanLoad: false, CanEject: true), info);
+        Assert.False(info!.CanReloadByItself);
+    }
+
+    private sealed class CannedReply(byte[] reply) : CdBurner.Hardware.Scsi.IScsiTransport
+    {
+        public CdBurner.Hardware.Scsi.ScsiExecutionResult ExecuteCommand(ReadOnlySpan<byte> cdb, Span<byte> data, byte direction, TimeSpan timeout)
+        {
+            int n = Math.Min(reply.Length, data.Length);
+            reply.AsSpan(0, n).CopyTo(data);
+            return CdBurner.Hardware.Scsi.ScsiExecutionResult.Success((uint)n);
+        }
+
+        public void Dispose() { }
     }
 
     [Fact]

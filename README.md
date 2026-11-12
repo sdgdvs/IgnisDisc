@@ -134,7 +134,9 @@ and saves a log of every drive command under `%LOCALAPPDATA%\IgnisDisc\logs` (or
 
 - `--native --test-write`: the same burn with the laser off; the disc stays blank.
 - `--native --test-first`: a test write, then the real burn. Most drives keep showing the simulated session after
-  a test write and refuse to record until the disc is reloaded; the burn then stops after the test and says so.
+  a test write and refuse to record until the disc is reloaded. A drive that says it can close its own tray reloads
+  the disc and goes on to the real burn; any other (slim drives with spring trays included) stops after the test and
+  says so. The automatic reload has run only in the simulator.
 
 Status: experimental. On real hardware it has run on one drive (an LG GP60NB50): test writes on CD-R and CD-RW, a
 two-track CD-RW with CD-Text, and a four-track CD-R with CD-Text, catalog and ISRC codes, pre-emphasis and copy

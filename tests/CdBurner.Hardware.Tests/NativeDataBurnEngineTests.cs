@@ -309,6 +309,7 @@ public sealed class NativeDataBurnEngineTests : IDisposable
         var engine = new NativeDataBurnEngine(logDirectory: _dir)
         {
             TestWriteFirst = testFirst,
+            Wait = _ => { },
             ConfigureVirtualDrive = d =>
             {
                 seen = d;
@@ -411,6 +412,22 @@ public sealed class NativeDataBurnEngineTests : IDisposable
         Assert.Contains("reloaded", result.ErrorMessage);
         Assert.Null(drive()!.DataDiscImage);
         Assert.True(medium.IsBlank);
+        Assert.Equal(0, drive()!.TrayEjects);
+    }
+
+    [Fact]
+    public async Task TestWriteFirst_OnADriveThatClosesItsOwnTray_ReloadsAndWrites()
+    {
+        var (engine, drive) = Engine(testFirst: true, configure: d => d.CanLoadTray = true);
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        var recorder = Recorder(medium);
+
+        var result = await new DataBurnService(engine).BurnStreamAsync(recorder, new MemoryStream(Image(400)), new DataBurnOptions { VerifyAfterBurn = true });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(engine.LastTestWritePassed);
+        Assert.Equal(1, drive()!.TrayLoads);
+        Assert.True(result.Verified);
     }
 
     [Fact]

@@ -27,6 +27,18 @@ public sealed class VirtualMmcDrive : IScsiTransport
     // ---- Disc and drive description ----
 
     public bool MediaPresent { get; set; } = true;
+
+    /// <summary>Removable Medium feature (0x0003) loading mechanism: 0 caddy, 1 tray (the default, as the GP60NB50), 2 pop-up.</summary>
+    public byte LoadingMechanism { get; set; } = 1;
+
+    /// <summary>The drive can close its tray (Load bit). Off by default, as the GP60NB50 reports: a spring tray.</summary>
+    public bool CanLoadTray { get; set; }
+
+    /// <summary>START STOP UNIT ejects (LoEj=1, Start=0) and loads (LoEj=1, Start=1) the drive accepted.</summary>
+    public int TrayEjects { get; private set; }
+
+    /// <inheritdoc cref="TrayEjects"/>
+    public int TrayLoads { get; private set; }
     public ushort Profile { get; set; } = NativeSaoAudioWriter.ProfileCdR;
 
     /// <summary>Disc status from READ DISC INFORMATION: 0 blank, 1 appendable, 2 complete.</summary>
@@ -369,7 +381,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return ScsiExecutionResult.Failed(87, "The parameter is incorrect (transfer larger than the adapter allows).");
         }
 
-        if (!MediaPresent && op is not (0x12 or 0x46 or 0x5A or 0x55 or 0x5C))
+        if (!MediaPresent && op is not (0x12 or 0x1B or 0x46 or 0x5A or 0x55 or 0x5C))
         {
             return Sense(0x02, 0x3A, 0x00);
         }
@@ -377,6 +389,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         return op switch
         {
             0x00 => TestUnitReady(),
+            MmcCommandBuilder.OpCodeStartStopUnit => StartStopUnit(cdb),
             0x46 => GetConfiguration(cdb, dataBuffer),
             0x51 => ReadDiscInformation(dataBuffer),
             0x5A => ModeSense(cdb, dataBuffer),
@@ -435,6 +448,34 @@ public sealed class VirtualMmcDrive : IScsiTransport
         return Good(0);
     }
 
+    /// <summary>
+    /// START STOP UNIT: eject opens the tray (no disc until it is loaded again); load closes it only on a drive that
+    /// can (<see cref="CanLoadTray"/>) and, like a real reload, clears a simulated session. Spin up/down: accepted.
+    /// </summary>
+    private ScsiExecutionResult StartStopUnit(ReadOnlySpan<byte> cdb)
+    {
+        bool loadEject = (cdb[4] & 0x02) != 0, start = (cdb[4] & 0x01) != 0;
+        if (!loadEject)
+        {
+            return Good(0);
+        }
+        if (!start)
+        {
+            MediaPresent = false;
+            TrayEjects++;
+            return Good(0);
+        }
+        if (!CanLoadTray)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        MediaPresent = true;
+        TrayLoads++;
+        Reload();
+        NotReadyResponses = Math.Max(NotReadyResponses, 2); // spinning up after the load
+        return Good(0);
+    }
+
     private ScsiExecutionResult GetConfiguration(ReadOnlySpan<byte> cdb, Span<byte> data)
     {
         int rt = cdb[1] & 0x03;
@@ -446,6 +487,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
             if (rt == 2 ? code != start : code < start) return;
             descriptors.Add(new byte[] { (byte)(code >> 8), (byte)code, (byte)(0x04 | (current ? 0x01 : 0x00)), 4, flags, 0, 0, 0 });
         }
+
+        // Removable Medium: loading mechanism in bits 7-5, Load bit 4, Eject bit 3, Lock bit 0 (as the GP60NB50: 0x29).
+        Add(0x0003, (byte)((LoadingMechanism << 5) | (CanLoadTray ? 0x10 : 0) | 0x08 | 0x01), true);
 
         bool cd = Profile is NativeSaoAudioWriter.ProfileCdR or NativeSaoAudioWriter.ProfileCdRw;
         bool dvdMinus = Profile is NativeTaoDataWriter.ProfileDvdMinusR or NativeTaoDataWriter.ProfileDvdMinusRwSequential

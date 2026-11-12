@@ -25,9 +25,13 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
     /// <summary>
     /// Run a laser-off test write before the real write, on drives that offer one. Off by default: most drives keep
     /// showing the simulated session afterwards and need the disc reloaded before they record it, so on those the
-    /// burn stops after the test with <see cref="NativeSaoAudioWriter.ReloadMessage"/>.
+    /// burn stops after the test with <see cref="NativeSaoAudioWriter.ReloadMessage"/>, unless the drive says it can close
+    /// its own tray (<see cref="TrayReload"/>): then it reloads the disc and goes on to the real write.
     /// </summary>
     public bool TestWriteFirst { get; init; }
+
+    /// <summary>Pauses while a reloaded disc spins up after a test write; tests replace it so they need not wait.</summary>
+    public Action<TimeSpan> Wait { get; init; } = Thread.Sleep;
 
     /// <summary>The command log written by the last burn, if any.</summary>
     public string? LastLogPath { get; private set; }
@@ -254,7 +258,8 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         else
         {
             LastTestWritePassed = true;
-            if (!writer.DiscReadsBlank())
+            // A drive that can close its own tray reloads the disc here; any other stops for a reload by hand.
+            if (!writer.DiscReadsBlank() && !TrayReload.TryReload(log, log.Note, Wait, writer.DiscReadsBlank, ct))
             {
                 log.Note(NativeSaoAudioWriter.ReloadMessage);
                 return new NativeSaoWriteResult

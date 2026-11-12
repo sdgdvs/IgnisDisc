@@ -114,9 +114,12 @@ A closed disc, or audio readable at LBA 0, means the drive recorded: the run fai
 While it shows that simulated session, the GP60NB50 rejects the real cue sheet with 5/30/06 (measured 2026-11-10).
 A spindle stop and start, a load command on the closed tray, a sleep and wake cycle, and a quick blank of a CD-RW
 all leave the state unchanged; only reloading the disc clears it. So a burn with a test write first stops after
-the test with a message to reload the disc and burn again without the test. Nothing is ejected automatically:
-slim drives cannot close their tray. On drives with a motorized tray an automatic reload would be possible; that
-is not built.
+the test with a message to reload the disc and burn again without the test, unless the drive can close its own
+tray. That is read from the Removable Medium feature (0x0003): only a caddy or ordinary tray with both the Load and
+Eject bits is cycled (START STOP UNIT eject, then load, then wait until ready and check the disc reads blank), and
+the real write follows in the same run (`TrayReload`, since 2026-11-11, simulator only). A pop-up (spring) tray, a
+changer, or a tray without the Load bit is never ejected. The GP60NB50 reports tray, Load 0, Eject 1, so it still
+stops for a reload by hand.
 
 **Pre-gap audio and flags.** A track's cue sheet entries carry its control bits (0x10 pre-emphasis, 0x20 digital
 copy permitted); the lead-in, catalog and lead-out entries carry plain audio control. A pre-gap may end in audio

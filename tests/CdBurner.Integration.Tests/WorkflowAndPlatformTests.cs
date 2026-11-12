@@ -412,7 +412,8 @@ public sealed class WorkflowAndPlatformTests : IDisposable
     #region 4. Self-Contained Archive Recovery Scripts & Surface Scan CSV Export
 
     [Fact]
-    public async Task ArchiveStager_WritesStandaloneVerifyScripts_AndVerifyPs1DetectsTampering()
+    // Running VERIFY.PS1 against damaged files is covered by ArchiveDamageTests (CdBurner.Core.Tests).
+    public async Task ArchiveStager_WritesTheVerifyScriptsAndTheRecoveryReadme()
     {
         string srcDir = Path.Combine(_tempDir, "archive_src");
         string stageDir = Path.Combine(_tempDir, "archive_stage");
