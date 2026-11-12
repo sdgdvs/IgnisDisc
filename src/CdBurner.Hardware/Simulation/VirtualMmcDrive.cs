@@ -138,6 +138,24 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>READ CD of this sector fails with 3/11/00 (unrecovered read error).</summary>
     public int? ReadErrorAtLba { get; set; }
 
+    /// <summary>
+    /// Sectors written correctly but hard to read, like the outer edge of a weak CD-R on the GP60NB50: the first
+    /// <see cref="MarginalBadReads"/> reads of each return one sample changed (the drive's interpolation) with GOOD
+    /// status, and with C2 error bits set when C2 pointers were asked for; later reads return the right audio.
+    /// </summary>
+    public HashSet<int> MarginalLbas { get; } = new();
+
+    /// <summary>How many reads of a <see cref="MarginalLbas"/> sector come back wrong; <see cref="int.MaxValue"/> = never clean.</summary>
+    public int MarginalBadReads { get; set; } = 2;
+
+    /// <summary>READ CD asking for C2 error pointers is refused with 5/24/00, like a drive without them.</summary>
+    public bool RejectsC2Pointers { get; set; }
+
+    /// <summary>READ CD commands that asked for C2 error pointers.</summary>
+    public int C2ReadCommands { get; private set; }
+
+    private readonly Dictionary<int, int> _marginalReads = new();
+
     /// <summary>The recorded disc returns no CD-Text although a CD-Text lead-in was sent.</summary>
     public bool LosesCdText { get; set; }
 
@@ -678,7 +696,13 @@ public sealed class VirtualMmcDrive : IScsiTransport
     {
         int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
         int count = (cdb[6] << 16) | (cdb[7] << 8) | cdb[8];
-        if (!Recorded || lba < 0 || count == 0 || data.Length < count * 2352 || lba + count > RecordedLeadOutLba)
+        bool withC2 = (cdb[9] & 0x06) == 0x02; // byte 9 bits 2-1 = 01b: 294-byte C2 error pointer block per sector
+        int stride = withC2 ? 2352 + 294 : 2352;
+        if (withC2 && RejectsC2Pointers)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (!Recorded || lba < 0 || count == 0 || data.Length < count * stride || lba + count > RecordedLeadOutLba)
         {
             return Sense(0x05, 0x21, 0x00);
         }
@@ -686,25 +710,51 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x03, 0x11, 0x00);
         }
+        if (withC2)
+        {
+            C2ReadCommands++;
+        }
 
         // The program area was captured from LBA -150. Sample i read back is sample i - offset as written.
         ReadOnlySpan<byte> program = ProgramAreaWritten.GetBuffer().AsSpan(0, (int)ProgramAreaWritten.Length);
         int n = count * 2352;
         long source = (long)(lba + 150) * 2352 - (long)ReadOffsetSamples * 4;
-        Span<byte> destination = data.Slice(0, n);
-        destination.Clear();
+        Span<byte> audio = new byte[n];
         long from = Math.Max(source, 0);
         long to = Math.Min(source + n, program.Length);
         if (to > from)
         {
-            program.Slice((int)from, (int)(to - from)).CopyTo(destination.Slice((int)(from - source)));
+            program.Slice((int)from, (int)(to - from)).CopyTo(audio.Slice((int)(from - source)));
         }
 
         if (ReadBackDifferenceAtLba is int changed && changed >= lba && changed < lba + count)
         {
-            destination[(changed - lba) * 2352 + 100] ^= 0x01;
+            audio[(changed - lba) * 2352 + 100] ^= 0x01; // written wrong: same every time, no C2 error
         }
-        return Good((uint)n);
+
+        Span<byte> destination = data.Slice(0, count * stride);
+        destination.Clear();
+        for (int i = 0; i < count; i++)
+        {
+            bool misread = false;
+            if (MarginalLbas.Contains(lba + i))
+            {
+                int reads = _marginalReads.GetValueOrDefault(lba + i) + 1;
+                _marginalReads[lba + i] = reads;
+                if (reads <= MarginalBadReads)
+                {
+                    audio[i * 2352 + 200] ^= 0x10; // interpolated, still reported GOOD
+                    misread = true;
+                }
+            }
+
+            audio.Slice(i * 2352, 2352).CopyTo(destination.Slice(i * stride));
+            if (withC2 && misread)
+            {
+                destination[i * stride + 2352 + 200 / 8] = 0x80; // the byte the drive could not correct
+            }
+        }
+        return Good((uint)(count * stride));
     }
 
     /// <summary>

@@ -1737,6 +1737,19 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             {
                 StatusMessage = $"Audio CD burned with direct drive commands and read back correctly ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
                 BurnProgress = 100.0;
+                if (directEngine?.LastResult?.Verification?.Warning is { } readWarning)
+                {
+                    // Right audio, but parts of the disc needed careful re-reads: say so before it goes in a car.
+                    StatusMessage += " " + readWarning;
+                    if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+                    {
+                        System.Windows.MessageBox.Show(
+                            $"The disc holds the right audio, but part of it was hard to read back.\n\n{readWarning}",
+                            "Burned, hard to read in places — IgnisDisc",
+                            System.Windows.MessageBoxButton.OK,
+                            System.Windows.MessageBoxImage.Warning);
+                    }
+                }
             }
             else if (burnResult.Success)
             {

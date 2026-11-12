@@ -1097,6 +1097,10 @@ public static class CliCommandRunner
                 verifyMessage = verification?.Message,
                 readBackOffsetSamples = verification?.OffsetSamples,
                 samplesCompared = verification?.SamplesCompared,
+                hardToReadSectors = verification?.HardToReadSectors,
+                writtenWrongSectors = verification?.WrittenWrongSectors,
+                unreadableSectors = verification?.UnreadableSectors,
+                verifyWarning = verification?.Warning,
                 driveId = recorder.UniqueId,
                 title = compilation.AlbumTitle,
                 artist = compilation.AlbumPerformer,
@@ -1141,6 +1145,10 @@ public static class CliCommandRunner
                 stdout.WriteLine("  Writer:         direct drive commands (Session-at-Once)");
                 stdout.WriteLine($"  Test write:     {(nativeEngine.LastTestWritePassed ? "passed first" : "not run")}");
                 stdout.WriteLine($"  Read-back:      {verification?.Message ?? "not run"}");
+                if (verification?.Warning is { } readWarning)
+                {
+                    stderr.WriteLine($"Warning: {readWarning}");
+                }
                 if (nativeEngine.LastLogPath != null)
                 {
                     stdout.WriteLine($"  Command log:    {nativeEngine.LastLogPath}");

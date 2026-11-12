@@ -10,7 +10,21 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <param name="OffsetSamples">How many samples later than written the audio reads back (the drive's combined
 /// write and read offset); null when the audio was not compared.</param>
 /// <param name="SamplesCompared">Stereo samples compared.</param>
-public sealed record NativeVerifyResult(bool Passed, string Message, int? OffsetSamples = null, long SamplesCompared = 0);
+/// <param name="HardToReadSectors">Sectors that read wrong in the fast pass but right on a careful re-read: the disc
+/// holds the right audio there, but it is hard to read.</param>
+/// <param name="WrittenWrongSectors">Sectors that read back differently every time while the drive reported no
+/// error in them (C2 pointers clean): the disc was written wrong there.</param>
+/// <param name="UnreadableSectors">Sectors that never read right and never read without errors.</param>
+/// <param name="Warning">For a passed check with hard-to-read sectors: what that means for playback.</param>
+public sealed record NativeVerifyResult(
+    bool Passed,
+    string Message,
+    int? OffsetSamples = null,
+    long SamplesCompared = 0,
+    int HardToReadSectors = 0,
+    int WrittenWrongSectors = 0,
+    int UnreadableSectors = 0,
+    string? Warning = null);
 
 /// <summary>
 /// Reads a freshly written Session-at-Once audio disc back and compares it with what was sent: the table of contents
@@ -369,6 +383,8 @@ public sealed class NativeSaoVerifier
         long compared = 0;
         long different = 0;
         long firstDifferent = -1;
+        var suspects = new SortedSet<int>(); // disc sectors holding a differing sample, for the careful re-read
+        bool tooManyToRecheck = false;
 
         while (true)
         {
@@ -397,6 +413,13 @@ public sealed class NativeSaoVerifier
                         {
                             firstDifferent = expectedPosition + i / 4;
                         }
+
+                        // Written sample p reads back as disc sample p + offset.
+                        int discLba = (int)Math.Clamp((expectedPosition + i / 4 + offset) / SamplesPerSector, 0, totalSectors - 1);
+                        if (!tooManyToRecheck && suspects.Add(discLba) && suspects.Count > MaxRecheckSectors)
+                        {
+                            tooManyToRecheck = true;
+                        }
                     }
                 }
             }
@@ -414,13 +437,218 @@ public sealed class NativeSaoVerifier
         if (different > 0)
         {
             int lba = (int)(firstDifferent / SamplesPerSector);
-            int track = layout.Tracks.LastOrDefault(t => t.PreGapLba <= lba)?.TrackNumber ?? 1;
-            return Fail($"{different:N0} of {compared:N0} audio samples read back differently, the first in track {track} near LBA {lba}.");
+            string fastPass = $"{different:N0} of {compared:N0} audio samples read back differently in the fast pass, the first in track {TrackAt(layout, lba)} near LBA {lba}.";
+            if (tooManyToRecheck)
+            {
+                return Fail($"{fastPass} That is more than {MaxRecheckSectors:N0} sectors, too many to re-read one by one.", offset, compared);
+            }
+
+            _note($"{fastPass} Re-reading the {suspects.Count:N0} sector(s) involved with C2 error pointers.");
+            var recheck = Recheck(layout, openTrackAudio, offset, suspects.ToList(), totalSectors, ct);
+            return Classify(layout, recheck, offset, compared);
         }
 
         string message = $"Read-back check passed: {layout.Tracks.Count} track(s), {compared:N0} audio samples identical (drive offset {offset:+0;-0;0} samples).";
         _note(message);
         return new NativeVerifyResult(true, message, offset, compared);
+    }
+
+    private NativeVerifyResult Fail(string message, int offset, long compared)
+    {
+        _note($"Read-back check failed: {message}");
+        return new NativeVerifyResult(false, message, offset, compared);
+    }
+
+    private static int TrackAt(SaoAudioLayout layout, int lba) =>
+        layout.Tracks.LastOrDefault(t => t.PreGapLba <= lba)?.TrackNumber ?? 1;
+
+    private static string TracksAt(SaoAudioLayout layout, IEnumerable<int> lbas) =>
+        string.Join(", ", lbas.Select(l => TrackAt(layout, l)).Distinct().Order());
+
+    // ---- Careful re-read of the sectors that differed ----
+
+    /// <summary>Most sectors re-read one by one; beyond this (about a minute of audio) the disc is not marginal but bad.</summary>
+    public const int MaxRecheckSectors = 4_500;
+
+    /// <summary>Re-read rounds; the drive's cache is flushed before each so the reads come from the disc.</summary>
+    public const int RecheckRounds = 5;
+
+    /// <summary>Sectors read far away to push the re-read sectors out of the drive's read cache (about 2.4 MB).</summary>
+    private const int CacheFlushSectors = 1024;
+
+    private const int C2Bytes = 294;
+
+    private sealed record RecheckOutcome(List<int> HardToRead, List<int> WrittenWrong, List<int> Unreadable, bool C2Available);
+
+    /// <summary>
+    /// Re-reads each suspect sector up to <see cref="RecheckRounds"/> times with C2 error pointers, the way a secure
+    /// rip does. A reading that equals what was written settles it: the data on the disc is right. A sector that
+    /// reads differently at least twice while the drive flags no error in it was written wrong. Anything else never
+    /// read cleanly: unreadable. Without C2 pointers the drive cannot say which, and such sectors count as unreadable.
+    /// </summary>
+    private RecheckOutcome Recheck(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> suspects, int totalSectors, CancellationToken ct)
+    {
+        Dictionary<int, byte[]> expected = ExpectedDiscSectors(layout, openTrackAudio, offset, suspects);
+        var matched = new HashSet<int>();
+        var cleanButDifferent = new Dictionary<int, int>();
+        bool c2 = true;
+
+        for (int round = 0; round < RecheckRounds; round++)
+        {
+            var remaining = suspects.Where(l => !matched.Contains(l)).ToList();
+            if (remaining.Count == 0)
+            {
+                break;
+            }
+
+            FlushReadCache(remaining[0], totalSectors);
+            foreach (var (start, count) in Runs(remaining))
+            {
+                ct.ThrowIfCancellationRequested();
+                int stride = c2 ? SectorSize + C2Bytes : SectorSize;
+                byte[] buffer = new byte[count * stride];
+                var r = _transport.ExecuteCommand(
+                    MmcCommandBuilder.BuildReadCdCdb(start, count, expectedSectorType: 1, mainChannelSelectionBits: (byte)(c2 ? 0x12 : 0x10)),
+                    buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, Timeout);
+                if (!r.IsSuccess && c2 && r.SenseInfo is { SenseKey: 0x05 })
+                {
+                    _note($"The drive refused C2 error pointers ({Describe(r)}); re-reading without them.");
+                    c2 = false;
+                    stride = SectorSize;
+                    buffer = new byte[count * stride];
+                    r = _transport.ExecuteCommand(
+                        MmcCommandBuilder.BuildReadCdCdb(start, count, expectedSectorType: 1, mainChannelSelectionBits: 0x10),
+                        buffer, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, Timeout);
+                }
+                if (!r.IsSuccess || r.DataTransferLength < (uint)buffer.Length)
+                {
+                    continue; // a failed read settles nothing; the next round tries again
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    int lba = start + i;
+                    ReadOnlySpan<byte> audio = buffer.AsSpan(i * stride, SectorSize);
+                    if (audio.SequenceEqual(expected[lba]))
+                    {
+                        matched.Add(lba);
+                    }
+                    else if (c2 && !buffer.AsSpan(i * stride + SectorSize, C2Bytes).ContainsAnyExcept((byte)0))
+                    {
+                        cleanButDifferent[lba] = cleanButDifferent.GetValueOrDefault(lba) + 1;
+                    }
+                }
+            }
+        }
+
+        var hard = suspects.Where(matched.Contains).ToList();
+        var wrong = c2 ? suspects.Where(l => !matched.Contains(l) && cleanButDifferent.GetValueOrDefault(l) >= 2).ToList() : [];
+        var unreadable = suspects.Where(l => !matched.Contains(l) && !wrong.Contains(l)).ToList();
+        _note($"Careful re-read: {hard.Count} sector(s) read right, {wrong.Count} read differently with no error reported, {unreadable.Count} never read cleanly{(c2 ? "" : " (no C2 pointers)")}.");
+        return new RecheckOutcome(hard, wrong, unreadable, c2);
+    }
+
+    private NativeVerifyResult Classify(SaoAudioLayout layout, RecheckOutcome o, int offset, long compared)
+    {
+        if (o.WrittenWrong.Count > 0)
+        {
+            int first = o.WrittenWrong[0];
+            string message = $"{o.WrittenWrong.Count:N0} sector(s) read back differently on every careful re-read while the drive reported no error in them, the first in track {TrackAt(layout, first)} near LBA {first}: the disc was written wrong there.";
+            _note($"Read-back check failed: {message}");
+            return new NativeVerifyResult(false, message, offset, compared, o.HardToRead.Count, o.WrittenWrong.Count, o.Unreadable.Count);
+        }
+
+        if (o.Unreadable.Count > 0)
+        {
+            int first = o.Unreadable[0];
+            string why = o.C2Available
+                ? "the drive reported read errors every time"
+                : "this drive gives no error pointers, so it cannot tell a bad write from a bad read";
+            string message = $"{o.Unreadable.Count:N0} sector(s) never read back right in {RecheckRounds} careful re-reads ({why}), the first in track {TrackAt(layout, first)} near LBA {first}.";
+            _note($"Read-back check failed: {message}");
+            return new NativeVerifyResult(false, message, offset, compared, o.HardToRead.Count, 0, o.Unreadable.Count);
+        }
+
+        string warning = $"{o.HardToRead.Count:N0} sector(s) in track(s) {TracksAt(layout, o.HardToRead)} read wrong in the fast pass and right on a careful re-read: "
+            + "the disc holds the right audio, but those parts are hard to read, so some players may skip there. Discs of another make may do better.";
+        string passed = $"Read-back check passed: {layout.Tracks.Count} track(s), {compared:N0} audio samples identical after re-reading (drive offset {offset:+0;-0;0} samples). {warning}";
+        _note(passed);
+        return new NativeVerifyResult(true, passed, offset, compared, o.HardToRead.Count, Warning: warning);
+    }
+
+    /// <summary>What each listed disc sector should hold: written sample p reads back as disc sample p + offset.</summary>
+    private static Dictionary<int, byte[]> ExpectedDiscSectors(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> lbas)
+    {
+        using var source = new ProgramAreaReader(layout, openTrackAudio);
+        source.Skip(-SaoAudioLayout.FirstWritableLba);
+        var reader = new ChunkReader(buffer =>
+        {
+            int sectors = 0;
+            while (sectors < ReadSectorsPerCommand && source.ReadSector(buffer.AsSpan(sectors * SectorSize, SectorSize)))
+            {
+                sectors++;
+            }
+            return sectors * SectorSize;
+        });
+
+        var result = new Dictionary<int, byte[]>();
+        long position = 0; // bytes consumed from the written audio, counted from LBA 0
+        foreach (int lba in lbas)
+        {
+            byte[] sector = new byte[SectorSize]; // samples from outside the written audio read as silence
+            long start = ((long)lba * SamplesPerSector - offset) * 4;
+            int into = 0;
+            if (start < 0)
+            {
+                into = (int)Math.Min(SectorSize, -start);
+                start = 0;
+            }
+            if (start > position)
+            {
+                reader.Skip((int)(start - position));
+                position = start;
+            }
+            int got = reader.Read(sector.AsSpan(into));
+            position += got;
+            result[lba] = sector;
+        }
+        return result;
+    }
+
+    /// <summary>Groups sorted sector numbers into contiguous runs of at most one READ CD each.</summary>
+    private static IEnumerable<(int Start, int Count)> Runs(List<int> sorted)
+    {
+        int i = 0;
+        while (i < sorted.Count)
+        {
+            int start = sorted[i], count = 1;
+            while (i + count < sorted.Count && sorted[i + count] == start + count && count < ReadSectorsPerCommand)
+            {
+                count++;
+            }
+            yield return (start, count);
+            i += count;
+        }
+    }
+
+    /// <summary>Reads about 2.4 MB half a disc away so the sectors about to be re-read are no longer in the drive's cache.</summary>
+    private void FlushReadCache(int nearLba, int totalSectors)
+    {
+        int span = Math.Min(CacheFlushSectors, totalSectors);
+        int far = Math.Clamp((nearLba + totalSectors / 2) % Math.Max(1, totalSectors), 0, Math.Max(0, totalSectors - span));
+        if (nearLba >= far && nearLba < far + span)
+        {
+            far = nearLba >= span ? 0 : Math.Max(0, totalSectors - span);
+        }
+
+        byte[] buffer = new byte[ReadSectorsPerCommand * SectorSize];
+        for (int done = 0; done < span; done += ReadSectorsPerCommand)
+        {
+            int count = Math.Min(ReadSectorsPerCommand, span - done);
+            _transport.ExecuteCommand(
+                MmcCommandBuilder.BuildReadCdCdb(far + done, count, expectedSectorType: 1, mainChannelSelectionBits: 0x10),
+                buffer.AsSpan(0, count * SectorSize), ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, Timeout);
+        }
     }
 
     /// <summary>

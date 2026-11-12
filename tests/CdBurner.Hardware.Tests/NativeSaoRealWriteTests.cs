@@ -119,8 +119,85 @@ public class NativeSaoRealWriteTests
         Assert.False(result.Success);
         Assert.True(result.DiscRecorded);
         Assert.False(result.Verification!.Passed);
-        Assert.Contains("1 of ", result.Message);
+        // Same wrong data on every careful re-read, with clean C2 pointers: a bad write, not a bad read.
+        Assert.Equal(1, result.Verification.WrittenWrongSectors);
+        Assert.Equal(0, result.Verification.HardToReadSectors);
+        Assert.Contains("written wrong", result.Message);
         Assert.Contains("track 2", result.Message);
+        Assert.True(result.Verification.SamplesCompared > 0); // reported on failure too
+        Assert.Equal(offsetSamples, result.Verification.OffsetSamples);
+    }
+
+    // ---- Hard to read is not written wrong (the old CD-R batch, 2026-11-11) ----
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(123)]
+    [InlineData(-700)]
+    public void MarginalSectors_ThatReadRightOnACarefulReRead_PassWithAWarning(int offsetSamples)
+    {
+        // Like the outer edge of a weak CD-R: the fast pass gets interpolated audio with GOOD status, a careful re-read
+        // gets the right audio.
+        var drive = new VirtualMmcDrive { ReadOffsetSamples = offsetSamples, MarginalBadReads = 2 };
+        drive.MarginalLbas.UnionWith([TrackSectors + 40, TrackSectors + 41, TrackSectors + 90]);
+
+        var result = Run(drive, TwoTracks());
+
+        Assert.True(result.Success, result.Message);
+        var v = result.Verification!;
+        Assert.True(v.Passed);
+        Assert.Equal(3, v.HardToReadSectors);
+        Assert.Equal(0, v.WrittenWrongSectors);
+        Assert.Equal(0, v.UnreadableSectors);
+        Assert.NotNull(v.Warning);
+        Assert.Contains("hard to read", v.Warning);
+        Assert.Contains("track(s) 2", v.Warning);
+        Assert.Contains(v.Warning, result.Message);
+        Assert.True(drive.C2ReadCommands > 0);
+    }
+
+    [Fact]
+    public void MarginalSector_ThatNeverReadsRight_FailsAsUnreadable()
+    {
+        var drive = new VirtualMmcDrive { MarginalBadReads = int.MaxValue };
+        drive.MarginalLbas.Add(TrackSectors + 40);
+
+        var result = Run(drive, TwoTracks());
+
+        Assert.False(result.Success);
+        Assert.Equal(1, result.Verification!.UnreadableSectors);
+        Assert.Equal(0, result.Verification.WrittenWrongSectors);
+        Assert.Contains("never read back right", result.Message);
+        Assert.Contains("read errors every time", result.Message);
+    }
+
+    [Fact]
+    public void WithoutC2Pointers_AMarginalSectorStillResolves_ButAPermanentDifferenceIsNotCalledABadWrite()
+    {
+        var marginal = new VirtualMmcDrive { RejectsC2Pointers = true, MarginalBadReads = 2 };
+        marginal.MarginalLbas.Add(TrackSectors + 40);
+        var passed = Run(marginal, TwoTracks());
+        Assert.True(passed.Success, passed.Message);
+        Assert.Equal(1, passed.Verification!.HardToReadSectors);
+
+        var changed = Run(new VirtualMmcDrive { RejectsC2Pointers = true, ReadBackDifferenceAtLba = TrackSectors + 40 }, TwoTracks());
+        Assert.False(changed.Success);
+        Assert.Equal(0, changed.Verification!.WrittenWrongSectors);
+        Assert.Equal(1, changed.Verification.UnreadableSectors);
+        Assert.Contains("cannot tell a bad write from a bad read", changed.Message);
+    }
+
+    [Fact]
+    public void BothKindsOnOneDisc_FailAsWrittenWrong_AndCountTheHardToReadOnes()
+    {
+        var drive = new VirtualMmcDrive { ReadBackDifferenceAtLba = TrackSectors + 10, MarginalBadReads = 1 };
+        drive.MarginalLbas.Add(TrackSectors + 90);
+
+        var result = Run(drive, TwoTracks());
+
+        Assert.False(result.Success);
+        Assert.Equal(1, result.Verification!.WrittenWrongSectors);
+        Assert.Equal(1, result.Verification.HardToReadSectors);
     }
 
     [Fact]
