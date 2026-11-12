@@ -544,9 +544,13 @@ public sealed class NativeSaoVerifier
         var hard = suspects.Where(matched.Contains).ToList();
         var wrong = c2 ? suspects.Where(l => !matched.Contains(l) && cleanButDifferent.GetValueOrDefault(l) >= 2).ToList() : [];
         var unreadable = suspects.Where(l => !matched.Contains(l) && !wrong.Contains(l)).ToList();
-        _note($"Careful re-read: {hard.Count} sector(s) read right, {wrong.Count} read differently with no error reported, {unreadable.Count} never read cleanly{(c2 ? "" : " (no C2 pointers)")}.");
+        _note($"Careful re-read: {hard.Count} sector(s) read right{List(hard)}, {wrong.Count} read differently with no error reported{List(wrong)}, {unreadable.Count} never read cleanly{List(unreadable)}{(c2 ? "" : " (no C2 pointers)")}.");
         return new RecheckOutcome(hard, wrong, unreadable, c2);
     }
+
+    /// <summary>" (LBA 1, 2, 3 …)" for the log: the first ten sector numbers of a verdict, or nothing when there are none.</summary>
+    private static string List(List<int> lbas) =>
+        lbas.Count == 0 ? "" : $" (LBA {string.Join(", ", lbas.Take(10))}{(lbas.Count > 10 ? ", …" : "")})";
 
     private NativeVerifyResult Classify(SaoAudioLayout layout, RecheckOutcome o, int offset, long compared)
     {
