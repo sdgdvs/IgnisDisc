@@ -113,7 +113,7 @@ public static class ArchiveStager
                     layout = Par2RecoverySizer.Plan(sources, budget);
                     if (layout == null && !plan.FillFreeSpace)
                     {
-                        long oneBlock = Par2RecoverySizer.EstimateSectors(sources, OpticalConstants.DataSectorSize, 1);
+                        long oneBlock = Par2RecoverySizer.MinimumBudgetSectors(sources);
                         if (freeSectors >= oneBlock)
                         {
                             budget = oneBlock;

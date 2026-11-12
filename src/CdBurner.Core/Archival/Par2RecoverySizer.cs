@@ -37,14 +37,30 @@ public static class Par2RecoverySizer
     /// <summary>par2cmdline refuses more than 32,768 recovery blocks and more than 32,768 source blocks.</summary>
     public const int MaxRecoveryBlocks = 32_768;
 
-    /// <summary>Source blocks aimed for: finer blocks lose less to each bad spot, within par2's limit.</summary>
+    /// <summary>
+    /// Most source blocks aimed for (discs whose data and recovery span up to about 1.1 GiB, so every CD): finer
+    /// blocks lose less to each bad spot, within par2's limit.
+    /// </summary>
     public const int TargetSourceBlocks = 30_000;
 
+    /// <summary>Fewest source blocks aimed for, reached at about 33 GiB of span (BD-50 and BDXL).</summary>
+    public const int MinTargetSourceBlocks = 5_500;
+
     /// <summary>
-    /// par2's time grows with data bytes × recovery blocks; this cap (about two and a half minutes on a fast 24-thread PC,
-    /// longer on a slower one) keeps staging practical. Past it, blocks get bigger instead of more numerous.
+    /// Smallest block size: par2 repeats a 20-byte checksum per source block in about a dozen copies, so blocks under
+    /// 16 KiB spend much of a small archive's recovery space on checksums instead of recovery data. Files smaller
+    /// than this get blocks no bigger than the largest file, which would only be padded with zeros.
     /// </summary>
-    public const long DefaultMaxWork = 3_000_000_000_000L;
+    public const int MinBlockBytes = 16 * 1024;
+
+    /// <summary>
+    /// The work cap (data bytes × recovery blocks) never goes below this: 3e12 is the measured 350 MiB / 8,181-block
+    /// CD run (152 s with par2cmdline 1.4.0 on a 24-thread PC), so a half-full CD keeps that block size and time.
+    /// </summary>
+    public const long MinWorkCap = 3_000_000_000_000L;
+
+    private const double SpanScaleBlocks = 38_000;
+    private const double SpanScaleBytes = 700.0 * 1024 * 1024;
 
     /// <summary>Upper bound for the creator packet ("Created by par2cmdline version x.y.z"); 104 bytes for 1.4.0.</summary>
     public const int CreatorPacketBytes = 128;
@@ -56,7 +72,15 @@ public static class Par2RecoverySizer
     /// Chooses block size and recovery block count so the recovery files fill <paramref name="budgetSectors"/>
     /// (to within one block), or returns null when there is nothing to protect or no room for one block.
     /// </summary>
-    public static Par2RecoveryLayout? Plan(IReadOnlyList<Par2SourceFile> files, long budgetSectors, long maxWork = DefaultMaxWork)
+    /// <remarks>
+    /// The block count is scaled to the disc. The span (data plus recovery room) sets a target source-block count
+    /// (<see cref="TargetSourceBlocksFor"/>); the smallest block size reaching it decides how many recovery blocks
+    /// fit. On a full disc at 10 / 15 / 20 % that gives recovery blocks in about 1 : 1.5 : 2, since the span is the
+    /// same and only the room grows. The work cap, a quarter of the target (never under <paramref name="minWork"/> /
+    /// data bytes), only engages past about 25 % recovery: on a part-filled disc the extra room then goes into bigger
+    /// blocks so par2's time stays bounded by what a full disc at 25 % takes.
+    /// </remarks>
+    public static Par2RecoveryLayout? Plan(IReadOnlyList<Par2SourceFile> files, long budgetSectors, long minWork = MinWorkCap)
     {
         ArgumentNullException.ThrowIfNull(files);
         long dataBytes = files.Sum(f => Math.Max(0, f.SizeBytes));
@@ -73,8 +97,9 @@ public static class Par2RecoverySizer
                 "files on one disc. Put fewer files on the disc or turn recovery data off.");
         }
 
-        int minBlock = SmallestBlockSize(files);
-        int workCap = (int)Math.Clamp(maxWork / dataBytes, 1, MaxRecoveryBlocks);
+        int target = TargetSourceBlocksFor(dataBytes + budgetSectors * OpticalConstants.DataSectorSize);
+        int minBlock = SmallestBlockSize(files, target);
+        int workCap = (int)Math.Clamp(Math.Max((target + 3L) / 4, Math.Max(0, minWork) / dataBytes), 1, MaxRecoveryBlocks);
 
         int blockSize = minBlock;
         int count = MostBlocksThatFit(files, blockSize, budgetSectors);
@@ -94,6 +119,50 @@ public static class Par2RecoverySizer
 
         return new Par2RecoveryLayout(blockSize, count, SourceBlockCount(files, blockSize),
             EstimateSectors(files, blockSize, count), dataBytes);
+    }
+
+    /// <summary>
+    /// Source blocks aimed for on a disc whose data plus recovery room is <paramref name="spanBytes"/>:
+    /// 38,000 × √(700 MiB / span), kept within 5,500 to 30,000. Bad spots tolerated per disc then fall only with the
+    /// square root of the disc size, and par2's time grows with span^1.5 (a fixed count would keep tolerance flat at
+    /// the cost of span² time; a fixed time would cut tolerance in proportion to the disc size).
+    /// </summary>
+    public static int TargetSourceBlocksFor(long spanBytes)
+    {
+        if (spanBytes <= 0)
+        {
+            return TargetSourceBlocks;
+        }
+        double target = Math.Round(SpanScaleBlocks * Math.Sqrt(SpanScaleBytes / spanBytes));
+        return (int)Math.Clamp(target, MinTargetSourceBlocks, TargetSourceBlocks);
+    }
+
+    /// <summary>
+    /// Fewest sectors <see cref="Plan"/> needs to return a layout (one recovery block at the smallest block size),
+    /// or 0 when there is nothing to protect.
+    /// </summary>
+    public static long MinimumBudgetSectors(IReadOnlyList<Par2SourceFile> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        long dataBytes = files.Sum(f => Math.Max(0, f.SizeBytes));
+        if (dataBytes <= 0)
+        {
+            return 0;
+        }
+
+        // A bigger budget widens the span, which can raise the smallest block size: step until the estimate fits.
+        long budget = 0;
+        for (int i = 0; i < 64; i++)
+        {
+            int block = SmallestBlockSize(files, TargetSourceBlocksFor(dataBytes + budget * OpticalConstants.DataSectorSize));
+            long needed = EstimateSectors(files, block, 1);
+            if (needed <= budget)
+            {
+                return budget;
+            }
+            budget = Math.Max(budget + 1, needed);
+        }
+        return budget;
     }
 
     /// <summary>Sectors the index file and one recovery volume take for these settings (each file rounded up).</summary>
@@ -126,13 +195,15 @@ public static class Par2RecoverySizer
     public static int SourceBlockCount(IReadOnlyList<Par2SourceFile> files, int blockSize) =>
         (int)Math.Min(int.MaxValue, files.Sum(f => BlocksIn(f.SizeBytes, blockSize)));
 
-    private static int SmallestBlockSize(IReadOnlyList<Par2SourceFile> files)
+    private static int SmallestBlockSize(IReadOnlyList<Par2SourceFile> files, int targetSourceBlocks)
     {
         long dataBytes = files.Sum(f => Math.Max(0, f.SizeBytes));
-        // Every non-empty file starts its own block, so with more than TargetSourceBlocks files no block size can get
-        // the count under the target: aim for one block per file instead (par2's own limit is checked by Plan).
-        long target = Math.Clamp(NonEmptyCount(files), TargetSourceBlocks, MaxRecoveryBlocks);
-        long block = RoundUpToSector(Math.Max(OpticalConstants.DataSectorSize, dataBytes / target));
+        long largestFile = files.Max(f => Math.Max(0, f.SizeBytes));
+        long floor = Math.Min(MinBlockBytes, RoundUpToSector(Math.Max(OpticalConstants.DataSectorSize, largestFile)));
+        // Every non-empty file starts its own block, so with more files than the target no block size can get the
+        // count under it: aim for one block per file instead (par2's own limit is checked by Plan).
+        long target = Math.Clamp(NonEmptyCount(files), targetSourceBlocks, MaxRecoveryBlocks);
+        long block = Math.Max(floor, RoundUpToSector(Math.Max(OpticalConstants.DataSectorSize, dataBytes / target)));
         while (SourceBlockCount(files, (int)block) > target)
         {
             block += (long)OpticalConstants.DataSectorSize * Math.Max(1, block / (16 * OpticalConstants.DataSectorSize));

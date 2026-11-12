@@ -51,21 +51,169 @@ public class Par2RecoverySizerTests
         Assert.True(plan.RedundancyPercent > 40);
     }
 
-    [Fact]
-    public void FullDvd_IsCappedByWork_WithBiggerBlocksInstead()
+    /// <summary>
+    /// A disc filled to the planner's usable size at <paramref name="percent"/> % (200 equal files), with every
+    /// sector between the data and the ceiling given to recovery data, as the default fill does.
+    /// </summary>
+    private static (Par2SourceFile[] Files, long Budget) FullDisc(DiscMediaType media, int percent)
     {
-        // 4.0 GB of data and 440 MB of room: ~3,300 blocks at the finest size would cost too much par2 time.
-        var files = Enumerable.Range(0, 400).Select(i => new Par2SourceFile($"v/{i}.mkv", 10_000_000)).ToArray();
-        long budget = 440_000_000 / 2048;
+        int ceiling = ArchiveSpanPlanner.CalculateCeilingSectors(media);
+        int usable = ArchiveSpanPlanner.CalculateUsableSectors(media, percent);
+        const int count = 200;
+        long perFile = (long)usable / count * 2048;
+        var files = Enumerable.Range(0, count).Select(i => new Par2SourceFile($"d/{i:D4}.bin", perFile)).ToArray();
+        return (files, ceiling - perFile / 2048 * count);
+    }
+
+    // Measured with the sizer as it was before the block count was scaled to the disc (flat 3e12 work cap, flat
+    // 30,000 target): the cap held DVD and Blu-ray recovery blocks almost constant across 10 / 15 / 20 % and grew the
+    // blocks instead (DVD+R 568 / 782 / 958 KiB, BD-RE 15 / 20 / 25 MiB).
+    [Theory]
+    [InlineData(DiscMediaType.DvdPlusR, new[] { 716, 748, 781 })]
+    [InlineData(DiscMediaType.DvdPlusRDualLayer, new[] { 393, 411, 429 })]
+    [InlineData(DiscMediaType.BdRe, new[] { 139, 145, 151 })]
+    [InlineData(DiscMediaType.BdReDualLayer, new[] { 69, 72, 75 })]
+    [InlineData(DiscMediaType.BdxlRTripleLayer, new[] { 33, 35, 36 })]
+    public void FullDvdAndBluRay_GetMoreRecoveryBlocksThanTheFlatWorkCapGave(DiscMediaType media, int[] flatCapBlocks)
+    {
+        int[] percents = [10, 15, 20];
+        for (int i = 0; i < percents.Length; i++)
+        {
+            var (files, budget) = FullDisc(media, percents[i]);
+            var plan = Par2RecoverySizer.Plan(files, budget)!;
+            // Each step of the slider must now buy at least 1.9x what the flat cap gave at that step.
+            Assert.True(plan.RecoveryBlocks >= flatCapBlocks[i] * 19 / 10,
+                $"{media} {percents[i]} %: {plan.RecoveryBlocks} recovery blocks, flat cap gave {flatCapBlocks[i]}");
+        }
+    }
+
+    [Theory]
+    [InlineData(DiscMediaType.CdR)]
+    [InlineData(DiscMediaType.DvdPlusR)]
+    [InlineData(DiscMediaType.DvdMinusR)]
+    [InlineData(DiscMediaType.DvdPlusRDualLayer)]
+    [InlineData(DiscMediaType.BdR)]
+    [InlineData(DiscMediaType.BdRe)]
+    [InlineData(DiscMediaType.BdRDualLayer)]
+    [InlineData(DiscMediaType.BdxlRTripleLayer)]
+    [InlineData(DiscMediaType.BdxlRQuadLayer)]
+    public void FullDisc_RecoveryBlocksScaleWithThePercentage(DiscMediaType media)
+    {
+        var plans = new[] { 10, 15, 20 }.Select(p =>
+        {
+            var (files, budget) = FullDisc(media, p);
+            var plan = Par2RecoverySizer.Plan(files, budget)!;
+            Assert.True(plan.RecoverySectors <= budget);
+            Assert.Equal(0, plan.BlockSize % 2048);
+            Assert.True(plan.BlockSize >= Par2RecoverySizer.MinBlockBytes);
+            return plan;
+        }).ToArray();
+
+        double r15 = (double)plans[1].RecoveryBlocks / plans[0].RecoveryBlocks;
+        double r20 = (double)plans[2].RecoveryBlocks / plans[0].RecoveryBlocks;
+        // 1 : 1.5 : 2, give or take the rounding of blocks to whole sectors (about 9 % on a CD's 20 KiB blocks).
+        Assert.InRange(r15, 1.5 * 0.9, 1.5 * 1.1);
+        Assert.InRange(r20, 2.0 * 0.9, 2.0 * 1.1);
+    }
+
+    // Captured from the sizer before this change: full CDs were never work-capped and must not move.
+    [Theory]
+    [InlineData(10, 22 * 1024, 2_556)]
+    [InlineData(15, 22 * 1024, 3_838)]
+    [InlineData(20, 20 * 1024, 5_428)]
+    public void FullCd_KeepsItsLayout(int percent, int blockSize, int recoveryBlocks)
+    {
+        var (files, budget) = FullDisc(DiscMediaType.CdR, percent);
+        var plan = Par2RecoverySizer.Plan(files, budget)!;
+        Assert.Equal(blockSize, plan.BlockSize);
+        Assert.Equal(recoveryBlocks, plan.RecoveryBlocks);
+    }
+
+    [Fact]
+    public void HalfFullCd_KeepsTheMeasuredBlockSize()
+    {
+        // The 350 MiB (367,001,600-byte), 48-MP3 run timed at 152 s with par2cmdline 1.4.0 used 42 KiB blocks; the
+        // sizer before this change gave 43,008 bytes and 8,191 blocks for the same span with equal-sized files.
+        var files = Enumerable.Range(0, 48).Select(i => new Par2SourceFile($"m/{i:D2}.mp3", 367_001_600L / 48)).ToArray();
+        long budget = ArchiveSpanPlanner.CalculateCeilingSectors(DiscMediaType.CdR) - 367_001_600L / 2048;
 
         var plan = Par2RecoverySizer.Plan(files, budget)!;
 
-        long workCap = Par2RecoverySizer.DefaultMaxWork / 4_000_000_000L;   // 750
-        Assert.InRange(plan.RecoveryBlocks, (int)workCap, (int)workCap * 105 / 100);
+        Assert.Equal(42 * 1024, plan.BlockSize);
+        Assert.Equal(8_191, plan.RecoveryBlocks);
+        Assert.True((double)plan.DataBytes * plan.RecoveryBlocks <= 1.01 * Par2RecoverySizer.MinWorkCap);
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(20)]
+    public void SmallArchive_SpendsAtLeast85PercentOfItsRecoverySpaceOnRecoveryData(int percent)
+    {
+        // 60 MiB in 20 files with --no-fill: the budget is the percentage of the data. Before the 16 KiB floor the
+        // sizer chose 4 KiB blocks here and only 45 % of the space (at 10 %) held recovery data; the rest was the
+        // checksum packets par2 repeats in every copy of its critical packets.
+        var files = Enumerable.Range(0, 20).Select(i => new Par2SourceFile($"s/{i:D2}.bin", 3L * 1024 * 1024)).ToArray();
+        long budget = 60L * 1024 * 1024 / 2048 * percent / 100;
+
+        var plan = Par2RecoverySizer.Plan(files, budget)!;
+
+        double recoveryShare = (double)plan.RecoveryBlocks * plan.BlockSize / (plan.RecoverySectors * 2048.0);
+        Assert.True(recoveryShare >= 0.85, $"{recoveryShare:P1} of {plan.RecoverySectors} sectors, {plan.BlockSize}-byte blocks");
+        Assert.Equal(Par2RecoverySizer.MinBlockBytes, plan.BlockSize);
+    }
+
+    [Theory]
+    [InlineData(700L * 1024 * 1024, 30_000)]           // a CD: the full target
+    [InlineData(1_200L * 1024 * 1024, 29_023)]         // past about 1.1 GiB the square-root rule takes over
+    [InlineData(4_480L * 1024 * 1024, 15_021)]         // DVD-5
+    [InlineData(23_100L * 1024 * 1024, 6_615)]         // BD-25
+    [InlineData(47_000L * 1024 * 1024, 5_500)]         // BD-50 and up: the floor
+    [InlineData(0L, 30_000)]
+    public void TargetSourceBlocks_FollowTheSquareRootOfTheSpan(long spanBytes, int expected)
+    {
+        // 38,000 x sqrt(700 MiB / span) within 5,500..30,000, worked by hand: 38,000 x sqrt(700 / 4,480) = 15,020.8.
+        Assert.Equal(expected, Par2RecoverySizer.TargetSourceBlocksFor(spanBytes));
+    }
+
+    [Fact]
+    public void PartFilledDisc_PutsRoomPastTheWorkCapIntoBiggerBlocks()
+    {
+        // 2,000 MiB on a BD-RE 25: the span's target is about 6,600 source blocks, so the cap is a quarter of that or
+        // the CD work allowance, whichever allows more blocks; par2's time stays near a full disc at 25 %.
+        var files = Enumerable.Range(0, 100).Select(i => new Par2SourceFile($"v/{i:D3}.bin", 20L * 1024 * 1024)).ToArray();
+        long budget = ArchiveSpanPlanner.CalculateCeilingSectors(DiscMediaType.BdRe) - 100L * 20 * 1024 * 1024 / 2048;
+
+        var plan = Par2RecoverySizer.Plan(files, budget)!;
+
+        int target = Par2RecoverySizer.TargetSourceBlocksFor(plan.DataBytes + budget * 2048);
+        long cap = Math.Max((target + 3) / 4, Par2RecoverySizer.MinWorkCap / plan.DataBytes);
+        Assert.InRange(plan.RecoveryBlocks, (int)cap, (int)(cap * 105 / 100));
         Assert.True(plan.RecoverySectors <= budget);
         Assert.True(budget - plan.RecoverySectors <= plan.BlockSize / 2048 + 2);
-        // Today's par2 default (-r10, about 2,000 source blocks) gives ~200 recovery blocks.
-        Assert.True(plan.RecoveryBlocks >= 3 * 200);
+    }
+
+    [Fact]
+    public void TinyFile_GetsABlockNoBiggerThanItself_AndTheMinimumBudgetPlans()
+    {
+        var files = new[] { new Par2SourceFile("note.txt", 5_000) };
+        long minimum = Par2RecoverySizer.MinimumBudgetSectors(files);
+
+        var plan = Par2RecoverySizer.Plan(files, minimum);
+
+        Assert.NotNull(plan);
+        Assert.Equal(6_144, plan!.BlockSize);  // 5,000 bytes rounded up to whole sectors, under the 16 KiB floor
+        Assert.Equal(1, plan.RecoveryBlocks);
+        Assert.Null(Par2RecoverySizer.Plan(files, minimum - 1));
+    }
+
+    [Fact]
+    public void MinimumBudget_PlansOnALargeSpanToo()
+    {
+        var files = Enumerable.Range(0, 300).Select(i => new Par2SourceFile($"v/{i:D3}.bin", 10_000_000)).ToArray();
+        long minimum = Par2RecoverySizer.MinimumBudgetSectors(files);
+        Assert.NotNull(Par2RecoverySizer.Plan(files, minimum));
+        Assert.Equal(0, Par2RecoverySizer.MinimumBudgetSectors([new Par2SourceFile("e", 0)]));
     }
 
     [Fact]
