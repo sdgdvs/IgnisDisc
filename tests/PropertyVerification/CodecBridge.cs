@@ -117,7 +117,7 @@ static async Task<JsonObject> HandleAsync(JsonObject req)
         case "flac_decode":
         {
             using var ms = new MemoryStream(Bytes(req, "flac"), writable: false);
-            return new JsonObject { ["pcm"] = B64(FlacFileCodec.DecodeToRedBookPcm(ms)) };
+            return new JsonObject { ["pcm"] = B64(FlacFileCodec.DecodeToRedBookPcm(ms, strict: true)) };
         }
 
         // ---- Archive staging, SHA-256 manifest and span planning ----

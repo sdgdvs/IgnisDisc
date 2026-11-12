@@ -34,6 +34,50 @@ public class AudioCdBurnService
     }
 
     /// <summary>
+    /// Decodes each FLAC source once, fully, and returns the damaged ones with a plain description. Other formats are
+    /// left to their decoders. A file that cannot be opened is left to the burn, which reports it in its own words.
+    /// </summary>
+    public static IReadOnlyList<(string Path, string Problem)> CheckFlacSources(
+        AudioCdCompilation compilation, CancellationToken cancellationToken = default, IProgress<BurnProgressSnapshot>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(compilation);
+        var damaged = new List<(string, string)>();
+        var flacs = compilation.Tracks.Select(t => t.SourceFilePath)
+            .Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p) && FlacFileCodec.IsFlacFile(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        for (int i = 0; i < flacs.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string path = flacs[i];
+            progress?.Report(new BurnProgressSnapshot
+            {
+                CurrentLba = i,
+                TotalLba = flacs.Count,
+                CurrentActionDescription = $"Checking FLAC files for damage ({i + 1} of {flacs.Count})"
+            });
+
+            try
+            {
+                var report = FlacFileCodec.CheckIntegrity(path);
+                if (report.IsDamaged)
+                {
+                    damaged.Add((path, report.Describe()));
+                }
+            }
+            catch (InvalidDataException ex)
+            {
+                damaged.Add((path, ex.Message));
+            }
+            catch (IOException)
+            {
+                // Unreadable right now: the burn opens it again and reports the error itself.
+            }
+        }
+        return damaged;
+    }
+
+    /// <summary>
     /// Burns an Audio CD compilation to the specified recorder.
     /// </summary>
     public async Task<BurnOperationResult> BurnAsync(
@@ -59,6 +103,24 @@ public class AudioCdBurnService
         {
             return BurnOperationResult.Failed(
                 $"Compilation contains {compilation.TrackCount} tracks, which exceeds the Red Book limit of {AudioCdCompilation.MaxTracks}.");
+        }
+
+        // 1b. Damaged FLAC sources would be burned in as silence or missing audio: stop before the drive is touched.
+        if (!options.AllowDamagedAudio && !options.Simulate)
+        {
+            var damaged = CheckFlacSources(compilation, cancellationToken, progress);
+            if (damaged.Count > 0)
+            {
+                string list = string.Join(" ", damaged.Select(d => $"'{Path.GetFileName(d.Path)}': {d.Problem}"));
+                return new BurnOperationResult
+                {
+                    Success = false,
+                    Status = BurnStatus.Failed,
+                    ErrorMessage = $"{damaged.Count} FLAC file(s) are damaged, so the disc would not hold the full audio. {list} "
+                        + "Nothing was written to the disc. Replace the file(s), or burn anyway to accept the damage.",
+                    DamagedAudioFiles = damaged.Select(d => d.Path).ToList()
+                };
+            }
         }
 
         // 2. Query and validate media

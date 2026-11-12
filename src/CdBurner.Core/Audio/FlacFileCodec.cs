@@ -38,6 +38,48 @@ public sealed record FlacMetadata
     public string? CoverArtMimeType { get; init; }
 }
 
+/// <summary>What a full decode of a FLAC file found (see <see cref="FlacFileCodec.CheckIntegrity(Stream)"/>).</summary>
+/// <param name="StatedSamples">Length in samples the header gives (0 = not given).</param>
+/// <param name="DecodedSamples">Samples produced, including silence put in place of damaged frames.</param>
+/// <param name="ConcealedSamples">Samples of silence put in place of frames that failed their checks.</param>
+/// <param name="MissingSamplesAtEnd">Samples the header promises that the file does not hold (cut short).</param>
+/// <param name="SamplesBeyondStatedLength">Decodable samples after the length the header gives (a damaged length).</param>
+/// <param name="Md5Matches">Whether the audio matches the MD5 in the header; null when the encoder stored none.</param>
+/// <param name="SampleRate">Samples a second, for describing the damage in time.</param>
+public sealed record FlacIntegrityReport(
+    long StatedSamples,
+    long DecodedSamples,
+    long ConcealedSamples,
+    long MissingSamplesAtEnd,
+    long SamplesBeyondStatedLength,
+    bool? Md5Matches,
+    int SampleRate)
+{
+    public bool IsDamaged => ConcealedSamples > 0 || MissingSamplesAtEnd > 0 || SamplesBeyondStatedLength > 0 || Md5Matches == false;
+
+    /// <summary>One plain sentence naming each kind of damage found, or "intact".</summary>
+    public string Describe()
+    {
+        if (!IsDamaged)
+        {
+            return Md5Matches == true ? "intact (MD5 matches)." : "intact.";
+        }
+
+        var parts = new List<string>();
+        if (ConcealedSamples > 0) parts.Add($"{Time(ConcealedSamples)} of audio failed its checks and would be replaced by silence");
+        if (MissingSamplesAtEnd > 0) parts.Add($"the file ends {Time(MissingSamplesAtEnd)} early (cut short)");
+        if (SamplesBeyondStatedLength > 0) parts.Add($"the length in its header is wrong ({Time(SamplesBeyondStatedLength)} of audio after it would be dropped)");
+        if (Md5Matches == false) parts.Add("the audio does not match the MD5 fingerprint stored in the file");
+        return string.Join("; ", parts) + ".";
+    }
+
+    private string Time(long samples)
+    {
+        double seconds = SampleRate > 0 ? (double)samples / SampleRate : 0;
+        return seconds >= 1 ? $"{seconds:0.#} s" : $"{seconds * 1000:0} ms";
+    }
+}
+
 /// <summary>
 /// Pure C# RFC 9639 Free Lossless Audio Codec (FLAC) parser, Vorbis Comment tag reader, and lossless PCM decoder.
 /// Supports 8/12/16/20/24/32-bit sample depths, arbitrary sample rates, mono/stereo/multichannel streams,
@@ -523,6 +565,57 @@ public static class FlacFileCodec
         return converter.Finish();
     }
 
+    /// <summary>
+    /// Decodes like <see cref="DecodeToRedBookPcm(Stream)"/>, but throws when the stream is damaged (see
+    /// <see cref="CheckIntegrity(Stream)"/>) instead of handing back audio with silence in place of the damage.
+    /// The stream must be seekable: it is read twice.
+    /// </summary>
+    public static byte[] DecodeToRedBookPcm(Stream stream, bool strict)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (strict)
+        {
+            long start = stream.Position;
+            var report = CheckIntegrity(stream);
+            if (report.IsDamaged)
+            {
+                throw new InvalidDataException("Damaged FLAC: " + report.Describe());
+            }
+            stream.Position = start;
+        }
+        return DecodeToRedBookPcm(stream);
+    }
+
+    /// <summary>Checks a FLAC file the way <c>flac -t</c> does, without keeping the audio.</summary>
+    public static FlacIntegrityReport CheckIntegrity(string filePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return CheckIntegrity(stream);
+    }
+
+    /// <summary>
+    /// Decodes every frame and reports damage: frames that failed their CRC (concealed with silence), audio missing at
+    /// the end, frames past the length the header gives, and an MD5 of the audio that differs from the one stored in
+    /// the header (when the encoder stored one).
+    /// </summary>
+    /// <exception cref="InvalidDataException">Not a FLAC stream, or its header cannot be read.</exception>
+    public static FlacIntegrityReport CheckIntegrity(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var info = ParseFlacMetadataBlocks(stream);
+        bool hasMd5 = info.Md5 is { } stored && stored.AsSpan().ContainsAnyExcept((byte)0);
+        using var md5 = hasMd5 ? System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.MD5) : null;
+        var tally = new DecodeTally { Md5 = md5 };
+
+        DecodeFrames(stream, info, _ => { }, _ => { }, tally);
+
+        long missing = info.TotalSamples > 0 ? Math.Max(0, info.TotalSamples - tally.Emitted) : 0;
+        bool? md5Matches = md5 == null ? null : md5.GetHashAndReset().AsSpan().SequenceEqual(info.Md5);
+        return new FlacIntegrityReport(
+            info.TotalSamples, tally.Emitted, tally.ConcealedSamples, missing, tally.SamplesBeyondStatedLength, md5Matches, info.SampleRate);
+    }
+
     private sealed class ParsedFlacInfo
     {
         public int MinBlockSize { get; set; }
@@ -533,6 +626,7 @@ public static class FlacFileCodec
         public int Channels { get; set; }
         public int BitsPerSample { get; set; }
         public long TotalSamples { get; set; }
+        public byte[]? Md5 { get; set; }
         public string? Title { get; set; }
         public string? Artist { get; set; }
         public string? Album { get; set; }
@@ -665,6 +759,7 @@ public static class FlacFileCodec
                 info.Channels = (int)((packed >> 41) & 0x07UL) + 1;
                 info.BitsPerSample = (int)((packed >> 36) & 0x1FUL) + 1;
                 info.TotalSamples = (long)(packed & 0x0FFFFFFFFFUL);
+                info.Md5 = buf.AsSpan(18, 16).ToArray(); // MD5 of the unencoded audio; all zero when the encoder left it out
 
                 if (info.SampleRate is < 1 or > 655350)
                 {
@@ -885,7 +980,36 @@ public static class FlacFileCodec
     /// they leave — derived from the coded frame/sample numbers — is reported via <paramref name="onGap"/> so later audio keeps
     /// its exact timing (critical for single-file CUE albums whose track offsets are absolute).
     /// </summary>
-    private static void DecodeFrames(Stream stream, ParsedFlacInfo info, Action<FlacFrame> onFrame, Action<long> onGap)
+    /// <summary>What went wrong while decoding a stream; filled in by <see cref="DecodeFrames"/> when asked for.</summary>
+    private sealed class DecodeTally
+    {
+        public long ConcealedSamples;
+        public long SamplesBeyondStatedLength;
+        public long Emitted;
+        public System.Security.Cryptography.IncrementalHash? Md5;
+    }
+
+    /// <summary>Feeds decoded samples to the MD5 as RFC 9639 defines it: interleaved, signed little-endian, whole bytes.</summary>
+    private static void HashSamples(System.Security.Cryptography.IncrementalHash md5, FlacFrame frame)
+    {
+        int width = (frame.BitsPerSample + 7) / 8;
+        byte[] bytes = new byte[frame.Count * frame.Channels * width];
+        int o = 0;
+        for (int i = 0; i < frame.Count; i++)
+        {
+            for (int c = 0; c < frame.Channels; c++)
+            {
+                int v = frame.Samples[c][i];
+                for (int b = 0; b < width; b++)
+                {
+                    bytes[o++] = (byte)(v >> (8 * b));
+                }
+            }
+        }
+        md5.AppendData(bytes);
+    }
+
+    private static void DecodeFrames(Stream stream, ParsedFlacInfo info, Action<FlacFrame> onFrame, Action<long> onGap, DecodeTally? tally = null)
     {
         int maxFrameBytes = EstimateMaxFrameBytes(info);
         byte[] buffer = new byte[Math.Max(4 * 1024 * 1024, maxFrameBytes * 3)];
@@ -914,19 +1038,22 @@ public static class FlacFileCodec
             {
                 if (emitted >= totalLimit)
                 {
+                    if (tally != null) tally.SamplesBeyondStatedLength += frame.Count; // the header says the audio ended
                     continue;
                 }
 
-                // Conceal dropped/corrupt frames with silence so the timeline never shifts.
+                // Conceal dropped/corrupt frames with silence so the timeline never shifts. A stream starts at
+                // sample 0, so a lost first frame is concealed too instead of moving everything after it earlier.
                 if (firstSample >= 0)
                 {
-                    baselineSample ??= firstSample;
+                    baselineSample ??= 0;
                     long gap = firstSample - (baselineSample.Value + emitted);
                     if (gap > 0 && gap <= (long)info.SampleRate * 60)
                     {
                         gap = Math.Min(gap, totalLimit - emitted);
                         onGap(gap);
                         emitted += gap;
+                        if (tally != null) tally.ConcealedSamples += gap;
                     }
                 }
 
@@ -934,12 +1061,15 @@ public static class FlacFileCodec
                 if (count > 0)
                 {
                     onFrame(frame with { Count = count });
+                    if (tally?.Md5 != null) HashSamples(tally.Md5, frame with { Count = count });
                     emitted += count;
                 }
+                if (tally != null && count < frame.Count) tally.SamplesBeyondStatedLength += frame.Count - Math.Max(0, count);
             }
 
             if (eof)
             {
+                if (tally != null) tally.Emitted = emitted;
                 return;
             }
 

@@ -1717,18 +1717,40 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 directEngine = new CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine(DirectBurnLogDirectory) { TestWriteFirst = TestWriteFirst };
             }
 
-            var audioBurnOptions = new AudioBurnOptions
+            AudioBurnOptions Options(bool allowDamagedAudio) => new()
             {
                 UseDiscAtOnce = (RecordingMode == AudioRecordingMode.DiscAtOnceGapless),
                 WriteCdText = IncludeCdText,
                 PerformNormalization = NormalizeAllTracks,
                 PreGapFrames = DefaultPreGapFrames,
                 Speed = SelectedWriteSpeed,
-                KeepIndexMarks = direct
+                KeepIndexMarks = direct,
+                AllowDamagedAudio = allowDamagedAudio
             };
 
             var burnService = directEngine != null ? new AudioCdBurnService(directEngine, _audioDecoder) : _audioBurnService;
-            var burnResult = await burnService.BurnAsync(recorder, compilation, audioBurnOptions, progress, activeToken);
+            var burnResult = await burnService.BurnAsync(recorder, compilation, Options(allowDamagedAudio: false), progress, activeToken);
+
+            // A damaged FLAC stops the burn before the drive is touched; the user may accept the damage and go on.
+            if (burnResult.DamagedAudioFiles is { Count: > 0 } && CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
+            {
+                var answer = System.Windows.MessageBox.Show(
+                    $"{burnResult.ErrorMessage}\n\nBurn anyway? The damaged parts will be silence or missing on the disc.",
+                    "Damaged audio file — IgnisDisc",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning,
+                    System.Windows.MessageBoxResult.No);
+                if (answer == System.Windows.MessageBoxResult.Yes)
+                {
+                    burnResult = await burnService.BurnAsync(recorder, compilation, Options(allowDamagedAudio: true), progress, activeToken);
+                }
+                else
+                {
+                    StatusMessage = $"Burn not started: {burnResult.ErrorMessage}";
+                    LastBurnResult = burnResult;
+                    return burnResult;
+                }
+            }
             LastBurnResult = burnResult;
             LastDirectBurnResult = directEngine?.LastResult;
             LastDirectBurnLogPath = directEngine?.LastLogPath;

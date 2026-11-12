@@ -661,12 +661,6 @@ def test_flac_garbage_between_frames_is_skipped(pcm, data):
     assert unb64(call("flac_decode", flac=flac[:boundary] + junk + flac[boundary:])["pcm"]) == pcm
 
 
-_FLAC_SILENT = (
-    "F3: the FLAC decoder drops frames that fail CRC-8/CRC-16 and substitutes silence (or nothing) without "
-    "telling the caller, and never checks the STREAMINFO MD5 or sample count. ")
-
-
-@pytest.mark.xfail(strict=True, reason=_FLAC_SILENT + "A corrupt frame comes back as altered audio.")
 @given(pcm_streams, st.data())
 @example(bulk_bytes(3 * FLAC_BLOCK * 4, "random", 11), None)
 def test_flac_corrupt_frame_is_reported(pcm, data):
@@ -677,7 +671,6 @@ def test_flac_corrupt_frame_is_reported(pcm, data):
     assert decoded is None or decoded == pcm, "audio from a corrupt FLAC frame was returned as if intact"
 
 
-@pytest.mark.xfail(strict=True, reason=_FLAC_SILENT + "A truncated file comes back as shorter audio.")
 @given(pcm_streams, st.data())
 @example(bulk_bytes(3 * FLAC_BLOCK * 4, "random", 11), None)
 def test_flac_truncated_stream_is_reported(pcm, data):
@@ -687,7 +680,6 @@ def test_flac_truncated_stream_is_reported(pcm, data):
     assert decoded is None or decoded == pcm, "a truncated FLAC stream was decoded without an error"
 
 
-@pytest.mark.xfail(strict=True, reason=_FLAC_SILENT + "A bit flip in the STREAMINFO length field cuts the audio short.")
 @given(pcm_streams, st.data())
 @example(bulk_bytes(2 * FLAC_BLOCK * 4, "random", 11), None)
 def test_flac_length_field_bit_flip_is_reported(pcm, data):

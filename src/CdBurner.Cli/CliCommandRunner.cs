@@ -48,7 +48,7 @@ public static class CliCommandRunner
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
         "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only",
-        "overwrite", "strict-verify", "no-verify", "no-secure"
+        "overwrite", "strict-verify", "no-verify", "no-secure", "allow-damaged"
     };
 
     private static void WriteJsonResult(TextWriter stdout, object payload)
@@ -1077,7 +1077,8 @@ public static class CliCommandRunner
                 UseDiscAtOnce = dao,
                 WriteCdText = compilation.IncludeCdText,
                 Simulate = testWrite,
-                KeepIndexMarks = native // only the direct writer can place INDEX 00 marks and hidden audio
+                KeepIndexMarks = native, // only the direct writer can place INDEX 00 marks and hidden audio
+                AllowDamagedAudio = cmd.HasFlag("allow-damaged")
             }).ConfigureAwait(false);
 
         var verification = nativeEngine?.LastResult?.Verification;
@@ -1101,6 +1102,7 @@ public static class CliCommandRunner
                 writtenWrongSectors = verification?.WrittenWrongSectors,
                 unreadableSectors = verification?.UnreadableSectors,
                 verifyWarning = verification?.Warning,
+                damagedAudioFiles = result.DamagedAudioFiles,
                 driveId = recorder.UniqueId,
                 title = compilation.AlbumTitle,
                 artist = compilation.AlbumPerformer,
@@ -1158,6 +1160,10 @@ public static class CliCommandRunner
         }
 
         stderr.WriteLine($"Audio burn failed: {result.ErrorMessage}");
+        if (result.DamagedAudioFiles is { Count: > 0 })
+        {
+            stderr.WriteLine("To burn anyway, run the same command with --allow-damaged.");
+        }
         return 1;
     }
 
@@ -2474,7 +2480,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X|max>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
-        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
+        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--allow-damaged] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
         stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
@@ -2506,6 +2512,7 @@ public static class CliCommandRunner
         stdout.WriteLine("  and 8x on DVD; --speed <X>, --speed slowest or --speed max to change it.");
         stdout.WriteLine("  Data and DVD-Video burns are read back and compared afterwards; --no-verify skips that.");
         stdout.WriteLine("  rip-audio reads with C2 error pointers and re-reads doubtful sectors; --no-secure reads once.");
+        stdout.WriteLine("  burn-audio checks FLAC files first and stops if one is damaged; --allow-damaged burns anyway.");
     }
 
     private static void PrintSubcommandHelp(string? subcommand, TextWriter stdout)

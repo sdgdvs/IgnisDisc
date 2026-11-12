@@ -240,6 +240,9 @@ public class BurnOperationResult
     public double AverageSpeedMultiplier { get; init; }
     public Exception? Exception { get; init; }
 
+    /// <summary>Source files a burn refused because they are damaged (see <see cref="AudioBurnOptions.AllowDamagedAudio"/>).</summary>
+    public IReadOnlyList<string>? DamagedAudioFiles { get; init; }
+
     public static BurnOperationResult Succeeded(int sectorsWritten, TimeSpan duration, double avgSpeed = 0.0) => new()
     {
         Success = true,
@@ -363,6 +366,13 @@ public class AudioBurnOptions
     public bool UseDiscAtOnce { get; init; } = true;
     public int PreGapFrames { get; init; } = OpticalConstants.CdLeadInFrames; // default 150 frames = 2.0s
     public byte[]? CdTextBytes { get; init; }
+
+    /// <summary>
+    /// Burn even when a FLAC source is damaged (frames failing their checks, cut short, wrong length or MD5). Off by
+    /// default: the burn stops before the drive is touched and names the file, since the damage would be burned in as
+    /// silence or missing audio.
+    /// </summary>
+    public bool AllowDamagedAudio { get; init; }
 
     /// <summary>
     /// 13-digit UPC/EAN written into the disc's sub-channel. Only the direct drive-command writer can write it;
