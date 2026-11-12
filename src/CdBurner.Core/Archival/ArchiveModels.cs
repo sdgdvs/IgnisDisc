@@ -49,10 +49,10 @@ public sealed record ArchivePlan(
 
 /// <summary>What staging produced for one disc.</summary>
 /// <param name="DiscRoot">Staged disc folder.</param>
-/// <param name="Recovery">par2 settings used when the disc was filled, or null (fixed percentage or none).</param>
+/// <param name="Recovery">par2 recovery layout written for the disc, or null when no recovery blocks were written.</param>
 /// <param name="RecoverySectors">Sectors the RECOVERY folder's files take.</param>
 /// <param name="TotalSectors">Sectors all files on the disc take (each rounded up), recovery included.</param>
-/// <param name="RecoveryBudgetSectors">Room the recovery data was sized to fill (0 when not filled).</param>
+/// <param name="RecoveryBudgetSectors">Sector budget the recovery data was sized for (0 when none).</param>
 public sealed record ArchiveStagedDisc(string DiscRoot, Par2RecoveryLayout? Recovery, int RecoverySectors, int TotalSectors,
     long RecoveryBudgetSectors = 0);
 

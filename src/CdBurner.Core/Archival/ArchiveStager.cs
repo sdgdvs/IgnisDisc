@@ -34,7 +34,8 @@ public static class ArchiveStager
     /// <summary>
     /// Stages the plan like <see cref="StageAsync"/> and reports, per disc, the recovery settings used and the
     /// sectors taken. With <see cref="ArchivePlan.FillFreeSpace"/>, each disc's recovery data is sized to fill it up
-    /// to <see cref="ArchivePlan.EffectiveCeilingSectors"/>; the redundancy percentage is then a minimum.
+    /// to <see cref="ArchivePlan.EffectiveCeilingSectors"/>; without it, recovery data is sized to the requested
+    /// redundancy percentage while still using 2,048-byte-aligned blocks, one recovery volume, and the ceiling check.
     /// </summary>
     public static async Task<IReadOnlyList<ArchiveStagedDisc>> StageDiscsAsync(
         ArchivePlan plan,
@@ -103,25 +104,31 @@ public static class ArchiveStager
                 string scratchDir = Path.Combine(stagingRoot, ".par2-scratch", discFolderName);
                 try
                 {
-                    if (plan.FillFreeSpace)
+                    var sources = ListSourceFiles(discRoot);
+                    long freeSectors = RecoveryBudgetSectors(plan.EffectiveCeilingSectors, discRoot);
+                    int dataSectors = SectorsUnder(discRoot);
+                    budget = plan.FillFreeSpace
+                        ? freeSectors
+                        : Math.Min(freeSectors, (long)Math.Round(dataSectors * (plan.RedundancyPercent / 100.0)));
+                    layout = Par2RecoverySizer.Plan(sources, budget);
+                    if (layout == null && !plan.FillFreeSpace)
                     {
-                        var sources = ListSourceFiles(discRoot);
-                        budget = RecoveryBudgetSectors(plan.EffectiveCeilingSectors, discRoot);
-                        layout = Par2RecoverySizer.Plan(sources, budget);
+                        long oneBlock = Par2RecoverySizer.EstimateSectors(sources, OpticalConstants.DataSectorSize, 1);
+                        if (freeSectors >= oneBlock)
+                        {
+                            budget = oneBlock;
+                            layout = Par2RecoverySizer.Plan(sources, budget);
+                        }
                     }
 
                     if (layout != null)
                     {
+                        string fillDetail = plan.FillFreeSpace ? "to fill the disc " : string.Empty;
                         progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: generating PAR2 recovery data " +
-                                         $"to fill the disc ({layout.RecoveryBlocks:N0} blocks of {layout.BlockSize / 1024.0:N0} KB, " +
+                                         $"{fillDetail}({layout.RecoveryBlocks:N0} blocks of {layout.BlockSize / 1024.0:N0} KB, " +
                                          $"{layout.RedundancyPercent:N0} %)...");
                         layout = await CreateFittingAsync(par2Path!, discRoot, layout, plan.EffectiveCeilingSectors, scratchDir, cancellationToken)
                             .ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: generating PAR2 recovery data...");
-                        await Par2Runner.CreateAsync(par2Path!, discRoot, plan.RedundancyPercent, scratchDir, cancellationToken).ConfigureAwait(false);
                     }
                 }
                 finally

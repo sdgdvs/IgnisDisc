@@ -1499,6 +1499,57 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.Contains("must be erased", failErr.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ArchiveStage_NoFill_And_Help_DescribeAndProduceAlignedRecovery()
+    {
+        var (helpOut, helpErr) = CreateStringWriters();
+        int helpCode = await CliCommandRunner.RunAsync(new[] { "--help" }, helpOut, helpErr, _deviceService, _burnEngine);
+        Assert.Equal(0, helpCode);
+        string helpText = helpOut.ToString();
+        Assert.Contains("[--redundancy <min %>]", helpText);
+        Assert.Contains("[--no-fill]", helpText);
+        Assert.Contains("fills free space unless --no-fill", helpText);
+
+        string inputDir = Path.Combine(_tempDir, "archive_nofill_in");
+        Directory.CreateDirectory(inputDir);
+        var rng = new Random(2026_11_15);
+        for (int i = 0; i < 6; i++)
+        {
+            byte[] data = new byte[32 * 1024];
+            rng.NextBytes(data);
+            await File.WriteAllBytesAsync(Path.Combine(inputDir, $"item_{i}.bin"), data);
+        }
+
+        string stagingDir = Path.Combine(_tempDir, "archive_nofill_out");
+        bool hasPar2 = CdBurner.Core.Archival.Par2Runner.FindPar2Executable() != null;
+        string[] stageArgs = hasPar2
+            ? new[] { "archive-stage", "--input", inputDir, "--staging", stagingDir, "--media", "cd", "--redundancy", "10", "--no-fill", "--json" }
+            : new[] { "archive-stage", "--input", inputDir, "--plan-only", "--media", "cd", "--redundancy", "10", "--no-fill", "--json" };
+
+        var (stageOut, stageErr) = CreateStringWriters();
+        int stageCode = await CliCommandRunner.RunAsync(
+            stageArgs,
+            stageOut,
+            stageErr,
+            _deviceService,
+            _burnEngine);
+
+        Assert.Equal(0, stageCode);
+        using var doc = ParseJsonOutput(stageOut);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.False(root.GetProperty("fillFreeSpace").GetBoolean());
+
+        if (hasPar2)
+        {
+            var disc = root.GetProperty("discs")[0];
+            Assert.Equal(0, disc.GetProperty("recoveryBlockSize").GetInt32() % 2048);
+            Assert.True(disc.GetProperty("recoveryBlocks").GetInt32() >= 1);
+            string recoveryDir = Path.Combine(disc.GetProperty("path").GetString()!, CdBurner.Core.Archival.ArchiveManifest.RecoveryFolderName);
+            Assert.Single(Directory.GetFiles(recoveryDir, "recovery.vol*.par2"));
+        }
+    }
+
     private sealed class OptionsCapturingEngine : IBurnEngineBackend
     {
         public DataBurnOptions? Options { get; private set; }

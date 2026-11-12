@@ -50,7 +50,7 @@ public static class CliCommandRunner
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
         "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only",
-        "overwrite", "strict-verify", "no-verify", "no-secure", "allow-damaged"
+        "overwrite", "strict-verify", "no-verify", "no-secure", "allow-damaged", "no-fill"
     };
 
     private static void WriteJsonResult(TextWriter stdout, object payload)
@@ -2823,7 +2823,7 @@ public static class CliCommandRunner
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
         stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--json]");
-        stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data.");
+        stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data (fills free space unless --no-fill).");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
         stdout.WriteLine("  recover (--drive <id> | --image <file.iso>) --out <folder> [--retries N] [--keep-image] [--json]");
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");
