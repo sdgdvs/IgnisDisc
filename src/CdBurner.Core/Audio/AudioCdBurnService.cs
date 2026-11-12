@@ -80,12 +80,34 @@ public class AudioCdBurnService
     /// <summary>
     /// Burns an Audio CD compilation to the specified recorder.
     /// </summary>
-    public async Task<BurnOperationResult> BurnAsync(
+    public Task<BurnOperationResult> BurnAsync(
         IDiscRecorderBackend recorder,
         AudioCdCompilation compilation,
         AudioBurnOptions? options = null,
         IProgress<BurnProgressSnapshot>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RunAsync(recorder, compilation, options, progress, checkOnly: false, cancellationToken);
+
+    /// <summary>
+    /// Checks the recorded disc in <paramref name="recorder"/> against <paramref name="compilation"/> without writing:
+    /// the tracks are prepared exactly as for a burn, then the engine's read-back check compares the disc with them.
+    /// Needs an engine that can check discs (<see cref="IAudioDiscVerifier"/>, the direct drive-command writer).
+    /// </summary>
+    public Task<BurnOperationResult> VerifyAsync(
+        IDiscRecorderBackend recorder,
+        AudioCdCompilation compilation,
+        AudioBurnOptions? options = null,
+        IProgress<BurnProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(recorder, compilation, options, progress, checkOnly: true, cancellationToken);
+
+    private async Task<BurnOperationResult> RunAsync(
+        IDiscRecorderBackend recorder,
+        AudioCdCompilation compilation,
+        AudioBurnOptions? options,
+        IProgress<BurnProgressSnapshot>? progress,
+        bool checkOnly,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(compilation);
@@ -117,7 +139,7 @@ public class AudioCdBurnService
             {
                 return BurnOperationResult.Failed("A mixed-mode CD needs audio after its data track. Nothing was written to the disc.");
             }
-            if (!_burnEngine.WritesMixedModeCds)
+            if (!_burnEngine.WritesMixedModeCds && !checkOnly)
             {
                 return BurnOperationResult.Failed(
                     "Track 1 is a data track (a mixed-mode CD). Only direct drive commands can write one: turn them on, or remove the data track. "
@@ -125,8 +147,14 @@ public class AudioCdBurnService
             }
         }
 
+        IAudioDiscVerifier? verifier = null;
+        if (checkOnly && (verifier = _burnEngine as IAudioDiscVerifier) == null)
+        {
+            return BurnOperationResult.Failed("Checking a disc against its source needs direct drive commands.");
+        }
+
         // 1b. Damaged FLAC sources would be burned in as silence or missing audio: stop before the drive is touched.
-        if (!options.AllowDamagedAudio && !options.Simulate)
+        if (!checkOnly && !options.AllowDamagedAudio && !options.Simulate)
         {
             var damaged = CheckFlacSources(compilation, cancellationToken, progress);
             if (damaged.Count > 0)
@@ -150,19 +178,30 @@ public class AudioCdBurnService
             return BurnOperationResult.Failed("No optical media present in recorder.");
         }
 
-        if (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable)
+        if (checkOnly)
         {
-            return BurnOperationResult.Failed("Mounted media is not writable (disc is finalized or not blank/rewritable).");
+            // A check reads a recorded disc; none of the writing checks apply.
+            if (mediaStatus.IsBlank)
+            {
+                return BurnOperationResult.Failed("The disc is blank: there is nothing to check.");
+            }
         }
-
-        if (mediaStatus.RequiresEraseToWrite)
+        else
         {
-            return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.EraseRequiredMessage);
-        }
+            if (!mediaStatus.IsBlank && !mediaStatus.IsAppendable && !mediaStatus.IsRewritable)
+            {
+                return BurnOperationResult.Failed("Mounted media is not writable (disc is finalized or not blank/rewritable).");
+            }
 
-        if (mediaStatus.IsOverwriteOnly || mediaStatus.MediaType.IsDvd())
-        {
-            return BurnOperationResult.Failed("Audio CDs require blank CD-R or CD-RW media.");
+            if (mediaStatus.RequiresEraseToWrite)
+            {
+                return BurnOperationResult.Failed(CdBurner.Core.Burning.DataBurnService.EraseRequiredMessage);
+            }
+
+            if (mediaStatus.IsOverwriteOnly || mediaStatus.MediaType.IsDvd())
+            {
+                return BurnOperationResult.Failed("Audio CDs require blank CD-R or CD-RW media.");
+            }
         }
 
         progress?.Report(new BurnProgressSnapshot
@@ -387,7 +426,7 @@ public class AudioCdBurnService
             }
 
             // 4. Validate capacity against media
-            if (mediaStatus.FreeSectors > 0 && totalRequiredFrames > mediaStatus.FreeSectors)
+            if (!checkOnly && mediaStatus.FreeSectors > 0 && totalRequiredFrames > mediaStatus.FreeSectors)
             {
                 return BurnOperationResult.Failed(
                     $"Compilation requires {totalRequiredFrames} frames, exceeding media free capacity of {mediaStatus.FreeSectors} frames.");
@@ -408,10 +447,16 @@ public class AudioCdBurnService
                 PreGapFrames = options.PreGapFrames > 0 ? options.PreGapFrames : compilation.DefaultPreGapFrames,
                 CdTextBytes = cdTextPayload,
                 MediaCatalogNumber = options.MediaCatalogNumber ?? compilation.UpcEan,
-                KeepIndexMarks = options.KeepIndexMarks
+                KeepIndexMarks = options.KeepIndexMarks,
+                WriteOffsetSamples = options.WriteOffsetSamples
             };
 
-            // 6. Execute burn through backend
+            // 6. Execute burn through backend (or, for a check, read the disc back against the prepared tracks)
+            if (verifier != null)
+            {
+                return await verifier.VerifyAudioTracksAsync(recorder, audioTrackSources, effectiveOptions, progress, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             return await _burnEngine.BurnAudioTracksAsync(
                 recorder,
                 audioTrackSources,

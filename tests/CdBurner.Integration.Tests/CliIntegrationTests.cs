@@ -909,6 +909,78 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(medium.IsBlank);
     }
 
+    private async Task<(int Exit, StringWriter Out, StringWriter Err)> Cli(params string[] args)
+    {
+        var (stdout, stderr) = CreateStringWriters();
+        int exit = await CliCommandRunner.RunAsync(args, stdout, stderr, _deviceService, _burnEngine);
+        return (exit, stdout, stderr);
+    }
+
+    [Fact]
+    public async Task VerifyCue_ChecksAMixedModeDiscAgainstItsCue_WithoutWriting()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+        string cue = WriteMixedCue();
+        var burn = await Cli("burn-audio", "--drive", "VDRV-01", "--tracks", cue, "--dao", "--native", "--log-dir", Path.Combine(_tempDir, "logs"));
+        Assert.True(burn.Exit == 0, burn.Out.ToString() + burn.Err);
+
+        var (exit, stdout, stderr) = await Cli("verify", "--drive", "VDRV-01", "--cue", cue, "--log-dir", Path.Combine(_tempDir, "logs"), "--json");
+
+        Assert.True(exit == 0, stdout.ToString() + stderr);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.Contains("the data track's 300 sectors", doc.RootElement.GetProperty("message").GetString());
+        Assert.Equal((150L + 320) * 588, doc.RootElement.GetProperty("samplesCompared").GetInt64()); // the silent pre-gap, then the audio
+        Assert.True(medium.IsFinalized);
+    }
+
+    [Fact]
+    public async Task VerifyCue_FindsASourceThatNoLongerMatchesTheDisc()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+        string cue = WriteMixedCue();
+        Assert.Equal(0, (await Cli("burn-audio", "--drive", "VDRV-01", "--tracks", cue, "--dao", "--native", "--log-dir", Path.Combine(_tempDir, "logs"))).Exit);
+
+        // One audio sample of the source changes after the burn.
+        string bin = Path.Combine(_tempDir, "mixed.bin");
+        byte[] bytes = File.ReadAllBytes(bin);
+        int at = (600 + 100) * OpticalConstants.RawSectorSize + 1000;
+        bytes[at] ^= 0x5A;
+        File.WriteAllBytes(bin, bytes);
+
+        var (exit, stdout, stderr) = await Cli("verify", "--drive", "VDRV-01", "--cue", cue, "--log-dir", Path.Combine(_tempDir, "logs"));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Disc check FAILED", stderr.ToString());
+    }
+
+    [Fact]
+    public async Task VerifyCue_RefusesABlankDisc_AndADiscTheDirectWriterDidNotWrite()
+    {
+        using var blank = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(blank);
+        string cue = WriteMixedCue();
+
+        var (exitBlank, _, errBlank) = await Cli("verify", "--drive", "VDRV-01", "--cue", cue);
+        Assert.Equal(1, exitBlank);
+        Assert.Contains("nothing to check", errBlank.ToString());
+
+        var (wav1, wav2) = WriteNoiseTracks();
+        Assert.Equal(0, (await Cli("burn-audio", "--drive", "VDRV-01", "--tracks", $"{wav1},{wav2}", "--dao")).Exit); // the Windows path
+        string audioCue = Path.Combine(_tempDir, "two.cue");
+        File.WriteAllLines(audioCue, new[]
+        {
+            "FILE \"noise1.wav\" WAVE", "  TRACK 01 AUDIO", "    INDEX 01 00:00:00",
+            "FILE \"noise2.wav\" WAVE", "  TRACK 02 AUDIO", "    INDEX 01 00:00:00"
+        });
+
+        var (exit, _, stderr) = await Cli("verify", "--drive", "VDRV-01", "--cue", audioCue);
+        Assert.Equal(1, exit);
+        Assert.Contains("not written with direct drive commands", stderr.ToString());
+    }
+
     [Fact]
     public async Task BurnAudio_TestFirstWithoutNative_IsRejected()
     {

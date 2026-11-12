@@ -204,6 +204,53 @@ public sealed class RipAudioCliTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RipAudio_CleanRip_IsComplete_WithExitCode0()
+    {
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "rip-audio", "--drive", "VDRV-01", "--output", Path.Combine(_tempDir, "Clean"), "--json" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.GetProperty("complete").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("suspectSectors").GetInt32());
+    }
+
+    [Fact]
+    public async Task RipAudio_SectorStillSuspectAfterReReads_IsNotComplete_WithExitCode2()
+    {
+        _recorder.CurrentMedium!.SimulatedC2Errors[80] = 1000; // never reads cleanly
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "rip-audio", "--drive", "VDRV-01", "--output", Path.Combine(_tempDir, "Suspect"), "--json" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.Equal(2, exitCode);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());    // the files were written
+        Assert.False(doc.RootElement.GetProperty("complete").GetBoolean());  // but not all of them can be trusted
+        Assert.Equal(1, doc.RootElement.GetProperty("suspectSectors").GetInt32());
+    }
+
+    [Fact]
+    public async Task RipAudio_SectorStillSuspect_SaysSoInTheFirstLine()
+    {
+        _recorder.CurrentMedium!.SimulatedC2Errors[80] = 1000;
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "rip-audio", "--drive", "VDRV-01", "--output", Path.Combine(_tempDir, "SuspectText") },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.Equal(2, exitCode);
+        Assert.StartsWith("Audio rip finished, but 1 sector(s) may be wrong (1 still suspect after re-reads, 0 unreadable):",
+            stdout.ToString().Split(Environment.NewLine).First(l => l.StartsWith("Audio rip", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task RipAudio_NoSecure_ReadsOnce()
     {
         string outDir = Path.Combine(_tempDir, "NoSecureOutput");

@@ -402,6 +402,20 @@ public class AudioBurnOptions
 }
 
 /// <summary>
+/// An engine that can check a recorded audio or mixed-mode CD against its source without writing: the same read-back
+/// check a direct burn ends with (track table, CD-Text, codes, every sector).
+/// </summary>
+public interface IAudioDiscVerifier
+{
+    Task<BurnOperationResult> VerifyAudioTracksAsync(
+        IDiscRecorderBackend recorder,
+        IReadOnlyList<AudioTrackSource> tracks,
+        AudioBurnOptions options,
+        IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Metadata and file reference for an audio track in an Audio CD compilation.
 /// </summary>
 public class AudioTrackSource

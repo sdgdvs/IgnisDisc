@@ -1924,11 +1924,21 @@ public static class CliCommandRunner
             finalOutputFiles.AddRange(result.RippedFilePaths);
         }
 
+        // A rip with sectors that may be wrong is finished but not clean: exit code 2 (as `recover` uses for lost files),
+        // so a script does not take it for a perfect copy.
+        int suspectTotal = result.TrackInfos.Sum(t => t.SuspectSectors);
+        int unreadableTotal = Math.Max(result.TrackInfos.Sum(t => t.UnreadableSectors), result.BadSectorLbas.Count);
+        bool complete = suspectTotal + unreadableTotal == 0;
+        int exitCode = complete ? 0 : 2;
+
         if (cmd.IsJson)
         {
             var jsonResult = new
             {
                 success = true,
+                complete,
+                suspectSectors = suspectTotal,
+                unreadableSectors = unreadableTotal,
                 driveId = recorder.UniqueId,
                 outputFolder = Path.GetFullPath(outputFolder),
                 format = isFlac ? "FLAC" : "WAV",
@@ -1971,10 +1981,12 @@ public static class CliCommandRunner
             };
 
             WriteJsonResult(stdout, jsonResult);
-            return 0;
+            return exitCode;
         }
 
-        stdout.WriteLine("Audio rip completed successfully:");
+        stdout.WriteLine(complete
+            ? "Audio rip completed successfully:"
+            : $"Audio rip finished, but {suspectTotal + unreadableTotal:N0} sector(s) may be wrong ({suspectTotal:N0} still suspect after re-reads, {unreadableTotal:N0} unreadable):");
         stdout.WriteLine($"  Drive:            {recorder.UniqueId}");
         stdout.WriteLine($"  Output Folder:    {Path.GetFullPath(outputFolder)}");
         stdout.WriteLine($"  Format:           {(isFlac ? "FLAC" : "WAV")}");
@@ -2027,7 +2039,7 @@ public static class CliCommandRunner
             stdout.WriteLine($"  CUE Sheet:        {Path.GetFullPath(result.CueSheetPath)}");
         }
 
-        return 0;
+        return exitCode;
     }
 
     private static async Task<int> HandleDetectOffsetAsync(
@@ -2340,6 +2352,77 @@ public static class CliCommandRunner
         return result.IsIntact ? 0 : 1;
     }
 
+    /// <summary>
+    /// <c>verify --cue</c>: checks a recorded audio or mixed-mode CD against the <c>.cue</c> it was burned from, with the
+    /// read-back check a direct burn ends with, and writes nothing. The tracks are prepared as <c>burn-audio --native</c>
+    /// prepares them, so a disc burned that way on this drive is compared sample for sample.
+    /// </summary>
+    private static async Task<int> HandleVerifyCueAsync(CommandLineArgs cmd, string cuePath, IDiscRecorderBackend recorder,
+        TextWriter stdout, TextWriter stderr)
+    {
+        if (!File.Exists(cuePath))
+        {
+            throw new FileNotFoundException($"CUE sheet not found: {cuePath}", cuePath);
+        }
+
+        using var decoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
+        var engine = new NativeAudioBurnEngine(cmd.GetOption("log-dir"));
+        var service = new AudioCdBurnService(engine, decoder);
+        // The album text starts as burn-audio starts it (--title / --artist, else its defaults), so the CD-Text compared
+        // is the CD-Text that command wrote.
+        var compilation = new AudioCdCompilation
+        {
+            RecordingMode = AudioRecordingMode.DiscAtOnceGapless,
+            AlbumTitle = cmd.GetOption("title") ?? "Audio CD",
+            AlbumPerformer = cmd.GetOption("artist") ?? "Various Artists"
+        };
+        compilation.ImportCueSheet(cuePath, service.AudioDecoder);
+        compilation.IncludeCdText = !cmd.HasFlag("no-cd-text");
+
+        var result = await service.VerifyAsync(recorder, compilation, new AudioBurnOptions
+        {
+            UseDiscAtOnce = true,
+            WriteCdText = compilation.IncludeCdText,
+            KeepIndexMarks = true,
+            WriteOffsetSamples = ParseWriteOffset(cmd.GetOption("write-offset"), native: true)
+        }).ConfigureAwait(false);
+
+        var v = engine.LastVerification;
+        if (cmd.IsJson)
+        {
+            WriteJsonResult(stdout, new
+            {
+                success = result.Success,
+                driveId = recorder.UniqueId,
+                cueSheet = Path.GetFullPath(cuePath),
+                message = v?.Message ?? result.ErrorMessage,
+                offsetSamples = v?.OffsetSamples,
+                samplesCompared = v?.SamplesCompared,
+                hardToReadSectors = v?.HardToReadSectors ?? 0,
+                writtenWrongSectors = v?.WrittenWrongSectors ?? 0,
+                unreadableSectors = v?.UnreadableSectors ?? 0,
+                warning = v?.Warning,
+                writeOffset = engine.LastWriteOffsetPlan?.Explanation,
+                commandLog = engine.LastLogPath,
+                error = result.Success ? null : result.ErrorMessage
+            });
+            return result.Success ? 0 : 1;
+        }
+
+        (result.Success ? stdout : stderr).WriteLine(result.Success
+            ? $"Disc check PASSED: {v?.Message}"
+            : $"Disc check FAILED: {v?.Message ?? result.ErrorMessage}");
+        if (v?.Warning is { } warning)
+        {
+            stdout.WriteLine($"  Warning: {warning}");
+        }
+        if (engine.LastLogPath != null)
+        {
+            stdout.WriteLine($"  Command log: {engine.LastLogPath}");
+        }
+        return result.Success ? 0 : 1;
+    }
+
     private static async Task<int> HandleVerifyAsync(
         CommandLineArgs cmd,
         TextWriter stdout,
@@ -2348,7 +2431,11 @@ public static class CliCommandRunner
         IBurnEngineBackend burnEngine)
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
-        string isoPath = cmd.GetRequiredOption("iso", "--iso <file.iso>");
+        if (cmd.GetOption("cue") is { } cuePath)
+        {
+            return await HandleVerifyCueAsync(cmd, cuePath, FindRecorder(deviceService, driveId), stdout, stderr).ConfigureAwait(false);
+        }
+        string isoPath = cmd.GetRequiredOption("iso", "--iso <file.iso> or --cue <file.cue>");
 
         if (!File.Exists(isoPath))
         {
@@ -2725,7 +2812,7 @@ public static class CliCommandRunner
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
         stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--json]");
-        stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+        stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
         stdout.WriteLine("  copy-disc --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]] [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>] [--json]");
         stdout.WriteLine("      Copies a disc, with one drive or two. With one drive (or for each further copy) the tray opens and the copy waits for a blank disc.");
         stdout.WriteLine("      Audio is read with error checks; a copy stops before writing if sectors still read wrong, unless --allow-suspect. --native copies a mixed-mode CD's data track too.");
@@ -2740,6 +2827,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");
         stdout.WriteLine("  verify --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
+        stdout.WriteLine("  verify --drive <id> --cue <file.cue> [--title <album>] [--artist <name>] [--no-cd-text] [--write-offset <samples|auto>] [--log-dir <folder>] [--json]");
+        stdout.WriteLine("      Checks a recorded audio or mixed-mode CD against the .cue it was burned from (track table, CD-Text, codes, every sample), without writing.");
         stdout.WriteLine("  erase --drive <id> [--full] [--json]");
         stdout.WriteLine("      Erases rewritable optical media (CD-RW, DVD-RW, DVD+RW, DVD-RAM).");
         stdout.WriteLine("  scan --drive <id> [--block-size <sectors>] [--csv <file.csv>] [--json]");
@@ -2775,7 +2864,7 @@ public static class CliCommandRunner
             stdout.WriteLine(LegalBanner.VersionNotice);
             stdout.WriteLine();
             stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--cover <image>] [--no-replaygain] [--json]");
-            stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+            stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
             stdout.WriteLine("      FLAC files get ReplayGain 2.0 tags (unless --no-replaygain) and, with --cover, embedded front cover art.");
             return;
         }

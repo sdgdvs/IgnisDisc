@@ -12,8 +12,17 @@ namespace CdBurner.Hardware.NativeWriting;
 /// write first (<see cref="TestWriteFirst"/>). Every run saves a full SCSI command log.
 /// <see cref="AudioBurnOptions.Simulate"/> does the test write only.
 /// </summary>
-public sealed class NativeAudioBurnEngine : IBurnEngineBackend
+public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifier
 {
+    /// <summary>
+    /// The simulated drive that wrote each simulated disc, so a later check reads it through the same drive state.
+    /// A real disc is read through the real drive.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VirtualDiscMedium, VirtualMmcDrive> WrittenBy = new();
+
+    /// <summary>The result of the last <see cref="VerifyAudioTracksAsync"/> (a check of a disc already recorded).</summary>
+    public NativeVerifyResult? LastVerification { get; private set; }
+
     private readonly string _logDirectory;
 
     /// <param name="logDirectory">Where command logs go; defaults to %LOCALAPPDATA%\IgnisDisc\logs.</param>
@@ -138,6 +147,108 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         LastResult = null;
         LastTestWritePassed = false;
 
+        var request = BuildRequest(tracks, options, out string? problem);
+        if (request == null)
+        {
+            return Task.FromResult(BurnOperationResult.Failed($"{problem} Nothing was written to the disc."));
+        }
+        return BurnWithWriteOffsetAsync(recorder, tracks, request, options, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// Checks the recorded disc in <paramref name="recorder"/> against <paramref name="tracks"/> with the read-back check
+    /// a burn ends with, and writes nothing. The audio is compared as this engine would have written it on this drive
+    /// (with the same write-offset correction, or the one in <see cref="AudioBurnOptions.WriteOffsetSamples"/>).
+    /// </summary>
+    public async Task<BurnOperationResult> VerifyAudioTracksAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks,
+        AudioBurnOptions options, IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        ArgumentNullException.ThrowIfNull(tracks);
+        options ??= new AudioBurnOptions();
+        LastLogPath = null;
+        LastResult = null;
+        LastVerification = null;
+        var request = BuildRequest(tracks, options, out string? problem); // its test-write flag plays no part in a check
+        if (request == null)
+        {
+            return BurnOperationResult.Failed(problem!);
+        }
+        request = await ApplyWriteOffsetAsync(recorder, tracks, request, options, cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => RunCheck(recorder, request, progress, cancellationToken), CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private BurnOperationResult RunCheck(IDiscRecorderBackend recorder, NativeSaoWriteRequest request, IProgress<BurnProgressSnapshot>? progress,
+        CancellationToken ct)
+    {
+        IScsiTransport device;
+        bool owns = false;
+        try
+        {
+            if (recorder is VirtualDiscRecorder virtualRecorder)
+            {
+                if (virtualRecorder.CurrentMedium is not { } medium || !WrittenBy.TryGetValue(medium, out var drive))
+                {
+                    return BurnOperationResult.Failed("This simulated disc was not written with direct drive commands, so it cannot be checked this way.");
+                }
+                device = drive;
+            }
+            else
+            {
+                if (!OperatingSystem.IsWindows())
+                {
+                    return BurnOperationResult.Failed("Checking a disc needs Windows.");
+                }
+                device = Win32ScsiTransport.Open(DevicePathFor(recorder));
+                owns = true;
+            }
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return BurnOperationResult.Failed($"Could not open the drive: {ex.Message}", ex);
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        NativeVerifyResult verification;
+        using (var log = new LoggingScsiTransport(device, ownsInner: owns))
+        {
+            log.Note($"IgnisDisc disc check (no writing). Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
+            if (LastWriteOffsetPlan is { } plan)
+            {
+                log.Note($"{plan.Explanation} The source is compared {plan.ShiftSamples:+0;-0;0} samples later, as a burn on this drive writes it.");
+            }
+            try
+            {
+                var layout = SaoAudioLayout.Create(request.Tracks);
+                verification = new NativeSaoVerifier(log, log.Note).Verify(layout, request.OpenTrackAudio, request.CdTextPacks,
+                    (done, total) => progress?.Report(new BurnProgressSnapshot
+                    {
+                        CurrentActionDescription = $"Checking the disc ({100.0 * done / Math.Max(1, total):F0}%)",
+                        CurrentLba = done,
+                        TotalLba = Math.Max(1, total),
+                        BufferLevelPercent = 100.0,
+                        ElapsedTime = sw.Elapsed
+                    }),
+                    ct, request.MediaCatalogNumber, request.ShiftSamples);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
+            {
+                verification = new NativeVerifyResult(false, $"The check stopped: {ex.Message}");
+            }
+            log.Note($"Result: {(verification.Passed ? "passed" : "failed")}: {verification.Message}");
+            SaveLog(log);
+        }
+
+        LastVerification = verification;
+        return verification.Passed
+            ? BurnOperationResult.Succeeded(0, sw.Elapsed)
+            : BurnOperationResult.Failed(verification.Message);
+    }
+
+    /// <summary>The direct writer's request for <paramref name="tracks"/>; null with <paramref name="problem"/> when they cannot be written.</summary>
+    private static NativeSaoWriteRequest? BuildRequest(IReadOnlyList<AudioTrackSource> tracks, AudioBurnOptions options, out string? problem)
+    {
+        problem = null;
         var saoTracks = new List<SaoTrack>(tracks.Count);
         for (int i = 0; i < tracks.Count; i++)
         {
@@ -146,8 +257,8 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
             {
                 if (t.TotalPcmBytes % NativeSaoAudioWriter.DataSectorSize != 0)
                 {
-                    return Task.FromResult(BurnOperationResult.Failed(
-                        $"Track {i + 1}'s data is not a whole number of 2,048-byte sectors. Nothing was written to the disc."));
+                    problem = $"Track {i + 1}'s data is not a whole number of 2,048-byte sectors.";
+                    return null;
                 }
                 saoTracks.Add(new SaoTrack(i + 1, (int)(t.TotalPcmBytes / NativeSaoAudioWriter.DataSectorSize), OpticalConstants.CdLeadInFrames, IsData: true));
                 continue;
@@ -168,19 +279,25 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         }
 
         int? speed = options.Speed is { Multiplier: > 0 } s ? (int)Math.Round(s.Multiplier * 176.4) : null;
-        var request = new NativeSaoWriteRequest(
+        return new NativeSaoWriteRequest(
             saoTracks,
             i => OpenTrack(tracks[i]),
             options.WriteCdText && options.CdTextBytes is { Length: > 0 } ? options.CdTextBytes : null,
             options.MediaCatalogNumber,
             TestWrite: options.Simulate,
             WriteSpeedKiloBytesPerSecond: speed);
-
-        return BurnWithWriteOffsetAsync(recorder, tracks, request, options, progress, cancellationToken);
     }
 
     private async Task<BurnOperationResult> BurnWithWriteOffsetAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks,
         NativeSaoWriteRequest request, AudioBurnOptions options, IProgress<BurnProgressSnapshot>? progress, CancellationToken ct)
+    {
+        request = await ApplyWriteOffsetAsync(recorder, tracks, request, options, ct).ConfigureAwait(false);
+        return await Task.Run(() => Run(recorder, tracks, request, progress, ct), CancellationToken.None).ConfigureAwait(false);
+    }
+
+    /// <summary>The write-offset correction for this drive (or the one asked for), applied to <paramref name="request"/>.</summary>
+    private async Task<NativeSaoWriteRequest> ApplyWriteOffsetAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks,
+        NativeSaoWriteRequest request, AudioBurnOptions options, CancellationToken ct)
     {
         LastWriteOffsetPlan = null;
         bool automatic = UsesWriteOffsets(recorder);
@@ -200,8 +317,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
             LastWriteOffsetPlan = WriteOffsetPlan.Resolve(readOffset, source, combined, options.WriteOffsetSamples);
             request = request with { ShiftSamples = LastWriteOffsetPlan.ShiftSamples };
         }
-
-        return await Task.Run(() => Run(recorder, tracks, request, progress, ct), CancellationToken.None).ConfigureAwait(false);
+        return request;
     }
 
     private BurnOperationResult Run(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks, NativeSaoWriteRequest request,
@@ -295,6 +411,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         if (result.DiscRecorded && recorder is VirtualDiscRecorder { CurrentMedium: { } medium } && virtualDrive != null)
         {
             CommitToVirtualMedium(medium, virtualDrive, tracks, request);
+            WrittenBy.AddOrUpdate(medium, virtualDrive);
         }
 
         if (result.Success)

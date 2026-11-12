@@ -55,6 +55,7 @@ public sealed class MixedModeCopyTests : IDisposable
         string cue = Path.Combine(_dir, "src.cue");
         File.WriteAllLines(cue, new[]
         {
+            "TITLE \"Album\"", "PERFORMER \"Band\"",
             "FILE \"src.bin\" BINARY", "  TRACK 01 MODE1/2352", "    INDEX 01 00:00:00",
             "  TRACK 02 AUDIO", "    TITLE \"Two\"", "    INDEX 00 00:07:25", "    INDEX 01 00:09:25",
             "  TRACK 03 AUDIO", "    TITLE \"Three\"", "    INDEX 01 00:13:25"
@@ -97,6 +98,8 @@ public sealed class MixedModeCopyTests : IDisposable
         Assert.Equal(sourceDrive.RecordedTracks.Select(t => (t.Index01Lba, t.CueControl)), targetDrive!.RecordedTracks.Select(t => (t.Index01Lba, t.CueControl)));
         Assert.Equal(sourceDrive.RecordedLeadOutLba, targetDrive.RecordedLeadOutLba);
         Assert.Equal(sourceDrive.ProgramAreaWritten.ToArray(), targetDrive.ProgramAreaWritten.ToArray());
+        Assert.NotNull(source.CurrentMedium!.CdTextBytes);
+        Assert.Equal(source.CurrentMedium.CdTextBytes, target.CurrentMedium!.CdTextBytes);   // track 1's CD-Text included
     }
 
     [Fact]

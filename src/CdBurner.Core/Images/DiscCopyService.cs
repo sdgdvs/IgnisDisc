@@ -247,8 +247,13 @@ public sealed class DiscCopyService
                     {
                         return DiscCopyResult.Failed($"The data track could not be read: {readProblem} Nothing was written to the disc.", copyCount);
                     }
+                    // Track 1's CD-Text as the source disc has it, so the copy's CD-Text matches the source's.
+                    var sourceText = audioRip.CdText?.Tracks?.FirstOrDefault(t => t.TrackNumber == sourceTracks[0].TrackNumber);
+                    string dataPerformer = !string.IsNullOrWhiteSpace(sourceText?.Performer) ? sourceText.Performer
+                        : !string.IsNullOrWhiteSpace(audioRip.CdText?.AlbumPerformer) ? audioRip.CdText.AlbumPerformer
+                        : compilation.AlbumPerformer;
                     compilation.AddTrack(AudioCdCompilation.CreateDataTrack(
-                        DataTrackImage.Open(dataPath, 0, dataSectors, DataTrackImage.UserDataSize), "Data track", compilation.AlbumPerformer));
+                        DataTrackImage.Open(dataPath, 0, dataSectors, DataTrackImage.UserDataSize), sourceText?.Title, dataPerformer));
                     burnService = new AudioCdBurnService(options.MixedModeWriter!, _audioDecoder);
                 }
                 compilation.ImportCueSheet(stagedPath, _audioBurnService.AudioDecoder);

@@ -89,6 +89,7 @@ ignisdisc-cli <command> [options]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
              [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--continue-on-error] [--cover <image>]
+                                               Exit code 2 when sectors may be wrong (still suspect or unreadable)
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
   copy-disc  --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]]
              [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>]
@@ -102,6 +103,9 @@ ignisdisc-cli <command> [options]
                                                Copy a damaged archive disc's files out, rebuild them from its
                                                PAR2 recovery data and check them (exit code 2 if any are lost)
   verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img>
+  verify     --drive <id> --cue <file.cue> [--title <album>] [--artist <name>] [--no-cd-text] [--write-offset <n|auto>]
+                                               Check an audio or mixed-mode CD burned with --native against its .cue,
+                                               without writing (track table, CD-Text, codes, every sample)
   erase      --drive <id> [--full]
   scan       --drive <id> [--block-size <sectors>] [--csv <file.csv>]
   drive-report --drive <id>                    Build a drive compatibility report (capabilities and media ID)
