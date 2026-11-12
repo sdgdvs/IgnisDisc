@@ -335,6 +335,10 @@ public sealed class NativeSaoVerifier
 
     // ---- Data track (mixed-mode CD) ----
 
+    /// <summary>"the data track's N sectors and " for a mixed-mode CD's pass message; empty otherwise.</summary>
+    private static string DataPart(SaoAudioLayout layout) =>
+        layout.HasDataTrack ? $"the data track's {layout.Tracks[0].SectorCount - layout.Tracks[0].PostGapSectors:N0} sectors and " : string.Empty;
+
     /// <summary>
     /// Reads a mixed-mode CD's data track back as Mode 1 user data (READ CD, sector type 2, 2,048 bytes a sector) and
     /// compares it with the image, then checks that the post-gap reads as zeros. Data sectors carry their own address,
@@ -534,7 +538,7 @@ public sealed class NativeSaoVerifier
             return Classify(layout, recheck, offset, compared);
         }
 
-        string message = $"Read-back check passed: {layout.Tracks.Count} track(s), {compared:N0} audio samples identical (drive offset {offset:+0;-0;0} samples).";
+        string message = $"Read-back check passed: {layout.Tracks.Count} track(s), {DataPart(layout)}{compared:N0} audio samples identical (drive offset {offset:+0;-0;0} samples).";
         _note(message);
         return new NativeVerifyResult(true, message, offset, compared);
     }
@@ -671,7 +675,7 @@ public sealed class NativeSaoVerifier
 
         string warning = $"{o.HardToRead.Count:N0} sector(s) in track(s) {TracksAt(layout, o.HardToRead)} read wrong in the fast pass and right on a careful re-read: "
             + "the disc holds the right audio, but those parts are hard to read, so some players may skip there. Discs of another make may do better.";
-        string passed = $"Read-back check passed: {layout.Tracks.Count} track(s), {compared:N0} audio samples identical after re-reading (drive offset {offset:+0;-0;0} samples). {warning}";
+        string passed = $"Read-back check passed: {layout.Tracks.Count} track(s), {DataPart(layout)}{compared:N0} audio samples identical after re-reading (drive offset {offset:+0;-0;0} samples). {warning}";
         _note(passed);
         return new NativeVerifyResult(true, passed, offset, compared, o.HardToRead.Count, Warning: warning);
     }

@@ -174,6 +174,32 @@ public sealed class MixedModeCueBurnTests : IDisposable
     }
 
     [Fact]
+    public async Task OnADriveWithAKnownOffset_NoShiftIsPlanned_AndTheReportCountsTheDataTrack()
+    {
+        var compilation = new AudioCdCompilation { RecordingMode = AudioRecordingMode.DiscAtOnceGapless };
+        compilation.ImportCueSheet(SingleFileCue());
+        var recorder = new VirtualDiscRecorder();
+        recorder.InsertMedia(VirtualDiscMedium.CreateBlankCdRw700());
+        string name = CdBurner.Core.Audio.AccurateRipDriveOffsets.DriveName(recorder.VendorId, recorder.ProductId);
+        var engine = new NativeAudioBurnEngine(_dir)
+        {
+            Wait = _ => { },
+            DriveOffsetStorePath = Path.Combine(_dir, "offsets.json"),
+            LoadReadOffsets = _ => Task.FromResult<IReadOnlyList<DriveOffsetEntry>>([new DriveOffsetEntry(name, 6, 99)])
+        };
+
+        var result = await new AudioCdBurnService(engine).BurnAsync(recorder, compilation, new AudioBurnOptions { UseDiscAtOnce = true });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Null(engine.LastWriteOffsetPlan);                                   // nothing to report as applied
+        Assert.Equal(0, engine.LastResult!.Verification!.OffsetSamples);
+        Assert.Equal(150 + DataSectors + 150, engine.LastResult.DataSectorsWritten);
+        Assert.Equal(engine.LastResult.LeadInSectorsWritten + engine.LastResult.DataSectorsWritten + engine.LastResult.AudioSectorsWritten,
+            result.SectorsWritten);
+        Assert.Contains($"the data track's {DataSectors} sectors and", engine.LastResult.Verification.Message);
+    }
+
+    [Fact]
     public async Task FilePerTrackCue_GivesTheSameDisc()
     {
         var (result, _, drive, _) = await BurnNative(FilePerTrackCue());

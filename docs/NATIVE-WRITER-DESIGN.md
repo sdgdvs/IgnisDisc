@@ -8,6 +8,9 @@
   lead-in, ISRC and catalog codes, pre-emphasis and copy bits, audio in pre-gaps (INDEX 00) and in front of track 1.
   Reached through `ignisdisc-cli burn-audio --native` and the "Direct drive commands" option on the app's Audio CD
   screen; both are off by default.
+- mixed-mode CDs (track 1 a Mode 1 data track, then audio), from a `.cue` file whose track 1 is `MODE1/2352` or
+  `MODE1/2048` in a BINARY file, through the same audio path (`burn-audio --native`, the Audio CD screen). The
+  Windows writer refuses them.
 - data discs: one Mode 1 track Track-at-Once on a blank CD-R/CD-RW, and one data track on a blank single-layer
   DVD-R, DVD-RW (sequential) or DVD+R (`NativeTaoDataWriter`, DVD half in `NativeTaoDataWriter.Dvd.cs`), through
   `burn-iso` / `burn-data --native` and the Data Disc and Disc Image screens. The DVD path has run only against the
@@ -19,7 +22,8 @@
 **What has run where.** Everything above passes against the virtual drive (`VirtualMmcDrive`). On real hardware
 (see Test hardware) the test write has run on CD-R and CD-RW, and two real audio writes have run and read back
 identical: two tracks with CD-Text on a CD-RW, and four tracks on a CD-R with CD-Text, catalog and ISRC codes,
-pre-emphasis and copy bits, audio in pre-gaps and audio in front of track 1. One drive model only; no disc has
+pre-emphasis and copy bits, audio in pre-gaps and audio in front of track 1. A mixed-mode CD (a data track, then two
+audio tracks) has been written on a CD-RW and read back identical. One drive model only; no disc has
 been played in a stand-alone CD player yet.
 
 Phases 5–6 below are still plans.
@@ -101,6 +105,19 @@ The cue sheet data form values (0x00 audio, 0x01 drive-generated lead-in/lead-ou
 the pack-to-subcode packing and the lead-in addressing were checked against cdrdao's generic MMC driver. Drives that
 reject the standard cue sheet get cdrdao's fallbacks: ISRC entries without control bits, and a CD-Text lead-in entry
 without its start time.
+
+**Mixed-mode CD** (built 2026-11-11, same writer and checks as the audio CD): the cue sheet's lead-in entry carries
+the first track's control nibble (0x4, data) and the lead-out entry the last track's (audio). Track 1's INDEX 00
+and INDEX 01 entries have CTL/ADR 0x41 and data form 0x10 (2,048-byte Mode 1 user data; the drive adds sync,
+header, EDC and ECC). Track 1 is written from LBA −150 in 2,048-byte sectors, 32 per `WRITE(10)` (64 KiB): its
+2-second pre-gap and a 2-second post-gap after the data are zeros (Yellow Book; libburn's cookbook). The audio
+follows in 2,352-byte sectors from the first audio track's pre-gap, at least 2 seconds; no `WRITE` crosses from
+one block size to the other. A rip of such a disc keeps the post-gap at the end of track 1, so the `.cue` import
+leaves up to 150 trailing zero sectors to the writer, which writes the same zeros: the disc then matches the
+`.bin`. The read-back check reads track 1 with `READ CD` sector type Mode 1 (user data only), compares it with
+the image and the post-gap with zeros, then finds the audio offset and compares the audio from the first audio
+sector. No write-offset correction is applied: the shift would move audio samples across sector boundaries,
+and the data sectors cannot move with them.
 
 **Safety checks before the first WRITE** (any failure stops with nothing written): disc profile is CD-R or CD-RW;
 the CD Mastering feature is current and offers SAO, test write and (for CD-Text) R-W; the disc is blank; the audio
@@ -292,6 +309,7 @@ Results:
 | 2026-11-11 (evening) | GP60NB50 | blank CD-R of the old batch (FORNET, ATIP 97:26:07) | The same 8 tracks, everything automatic, with **write-offset correction** (6c8763c): read offset +6 from AccurateRip's list (255 submissions, downloaded), combined offset 0 on record from the day's four logged burns, so write offset −6 and the audio sent 6 samples later | 10.1x; TOC, 57 CD-Text packs and the drive offset (0, as expected: the check compares with what was sent) matched. **Fast pass: 2,524,041 differing samples from track 6 on**, more than the 4,500-sector limit for careful re-reads, so the check reported failure. A secure `rip-audio --read-offset 6` minutes later: **all 8 tracks identical to the decoded source, sample for sample**, 198 sectors re-read in track 5, 0 suspect. So the disc holds the audio where an offset-corrected rip expects it (the earlier, uncorrected discs matched only with read offset 0), and the check's limit was too low for this batch read straight after a burn. |
 | 2026-11-11 (evening) | GP60NB50 | the same disc, about an hour later | Read-only `check-disc`: every sector read once with C2 pointers | 147,266 sectors in 146 s. 6,242 flagged (uncorrectable), 0 unreadable: track 6 4, track 7 1,121, track 8 5,117, all in minutes 25–32, rising towards the edge (14, 89, 403, 1,033, 1,167, 1,310, 1,289, 937 per minute). The secure rip an hour before had flagged only 198 sectors on first reads, in track 5: on this disc single-pass results vary a lot from read to read. |
 | 2026-11-10 | GP60NB50 | CD-R, FORNET (ATIP 97:26:07) | Real audio write from a single-file cue sheet: 4 tracks (85 s), CD-Text, catalog number, 4 ISRC codes, pre-emphasis on track 2, copy permitted on track 3, 2 s of gap audio before tracks 2 and 3, 6 s of audio in front of track 1; no test write | Cue sheet (19 entries) accepted in the standard layout, 18,068 sectors with the CD-Text lead-in, session closed in 10 s, 73 s in all. Read-back check passed: table of contents, 21 CD-Text packs, 3,748,500 samples identical, offset 0. Read separately from the disc: control bits 0/1/2/0 in the table of contents, catalog number and all four ISRC codes as written, and the Q sub-channel shows INDEX 00 from the exact frame of each gap, counting down to INDEX 01. A `rip-audio` of the disc gave four files identical to the source. |
+| 2026-11-11 (night) | GP60NB50 | the Mitsubishi CD-RW (ATIP 97:34:23), quick-erased (39 s) | **Mixed-mode CD** from a `.cue` (a239555): one BINARY file, track 1 `MODE1/2352` (an ISO 9660 + Joliet image, 1,493 sectors, holding a 3 MB file of known SHA-256) with its 150-sector post-gap of zeros, then two audio tracks (3:25 and 4:25) after a 2-second INDEX 00; `burn-audio --native`, recommended speed, no test write | Cue sheet accepted (lead-in 0x41, track 1 data form 10h); the data track went in 2,048-byte sectors from LBA −150 to 1643, then the audio; 143 s in all, 9.5x on average. Read-back check passed: the data track's sectors and the post-gap, then 20,825,196 audio samples identical (offset 0; no write-offset correction on a mixed disc). Read separately: Windows mounted CDFS "MIXEDTEST" and the file's SHA-256 matched; the TOC gives track 1 control 4 (data) at LBA 0, track 2 at 1,793, track 3 at 17,192, lead-out 37,060, exactly the `.bin`'s layout; the Q sub-channel shows track 1 through the post-gap and track 2 INDEX 00 from LBA 1,643, counting down. A secure `rip-audio` of tracks 2 and 3 about 15 minutes later took 14 min and flagged 20 and 5,226 sectors as still suspect; exactly those sectors differ from the source, all others are identical. A one-pass `check-disc` right after: 8,073 of 37,060 sectors with uncorrectable errors, rising from minute 3 (78, 115, 125, 776, 1,081, 1,780, 1,851, 1,841, 426 per minute), 7 of them in the data track (its own error correction covered them). So the disc was written as sent, and on later reads this CD-RW reads weakly towards the outside. Found on the way and fixed: the JSON reported a +6-sample shift the writer had not applied, and `sectorsWritten` left out the data track. |
 
 Media on hand: CD-RW, CD-R, DVD-R and DVD+RW (Verbatim). Ordered: DVD+R, DVD+R DL, BD-R, BD-RE and M-DISC BD-R, a Blu-ray writer (LG BP50NB40) and a second DVD writer (Lite-On iHAS124). No DVD-RW, DVD-RAM, BD-R DL or BDXL yet.
 

@@ -184,7 +184,8 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
     {
         LastWriteOffsetPlan = null;
         bool automatic = UsesWriteOffsets(recorder);
-        if (!request.TestWrite && (options.WriteOffsetSamples != null || automatic))
+        bool mixedMode = tracks.Any(t => t.IsDataTrack); // the data track's sectors cannot move with the audio: no correction
+        if (!request.TestWrite && !mixedMode && (options.WriteOffsetSamples != null || automatic))
         {
             int? readOffset = null;
             string? source = null;
@@ -238,6 +239,10 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         if (LastWriteOffsetPlan is { } plan)
         {
             log.Note(plan.ShiftSamples == 0 ? plan.Explanation : $"{plan.Explanation} The audio is sent {plan.ShiftSamples:+0;-0} samples later to correct it.");
+        }
+        else if (tracks.Any(t => t.IsDataTrack))
+        {
+            log.Note("Mixed-mode CD: no write-offset correction; the audio lands where this drive's write offset puts it.");
         }
 
         IDisposable? exclusive = null;
@@ -294,7 +299,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
 
         if (result.Success)
         {
-            return BurnOperationResult.Succeeded(result.LeadInSectorsWritten + result.AudioSectorsWritten, result.Elapsed, result.AverageWriteMultiplier);
+            return BurnOperationResult.Succeeded(result.LeadInSectorsWritten + result.DataSectorsWritten + result.AudioSectorsWritten, result.Elapsed, result.AverageWriteMultiplier);
         }
 
         string message = result.StoppedBeforeWriting ? $"{result.Message} Nothing was written to the disc." : result.Message;
@@ -314,7 +319,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
                 Success = false,
                 Status = BurnStatus.Failed,
                 ErrorMessage = message,
-                SectorsWritten = result.LeadInSectorsWritten + result.AudioSectorsWritten,
+                SectorsWritten = result.LeadInSectorsWritten + result.DataSectorsWritten + result.AudioSectorsWritten,
                 TotalTime = result.Elapsed,
                 AverageSpeedMultiplier = result.AverageWriteMultiplier
             }
