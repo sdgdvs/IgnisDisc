@@ -50,6 +50,7 @@ public sealed class NativeSaoVerifier
     private readonly IScsiTransport _transport;
     private readonly Action<string> _note;
     private readonly Action<TimeSpan> _sleep;
+    private int _shiftSamples; // the write-offset shift the writer applied: compare with what was really sent
 
     public NativeSaoVerifier(IScsiTransport transport, Action<string>? note = null, Action<TimeSpan>? sleep = null)
     {
@@ -63,14 +64,17 @@ public sealed class NativeSaoVerifier
     /// <param name="cdTextPacks">The CD-Text packs that were written, or null.</param>
     /// <param name="progress">Receives (program sectors compared, total) while the audio is compared.</param>
     /// <param name="mediaCatalogNumber">The catalog number that was written, or null.</param>
+    /// <param name="shiftSamples">The write-offset shift the writer applied (<see cref="NativeSaoWriteRequest.ShiftSamples"/>).</param>
     public NativeVerifyResult Verify(
         SaoAudioLayout layout,
         Func<int, Stream> openTrackAudio,
         byte[]? cdTextPacks,
         Action<int, int>? progress = null,
         CancellationToken cancellationToken = default,
-        string? mediaCatalogNumber = null)
+        string? mediaCatalogNumber = null,
+        int shiftSamples = 0)
     {
+        _shiftSamples = shiftSamples;
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(openTrackAudio);
 
@@ -324,7 +328,7 @@ public sealed class NativeSaoVerifier
         }
 
         int offset;
-        using (var probeSource = new ProgramAreaReader(layout, openTrackAudio))
+        using (var probeSource = new ProgramAreaReader(layout, openTrackAudio, shiftSamples: _shiftSamples))
         {
             probeSource.Skip(-SaoAudioLayout.FirstWritableLba);
             var found = FindOffset(probeSource, totalSectors, out string? offsetProblem);
@@ -336,7 +340,7 @@ public sealed class NativeSaoVerifier
         }
         _note($"Audio reads back {offset} sample(s) {(offset >= 0 ? "later" : "earlier")} than written (drive offset).");
 
-        using var expectedSource = new ProgramAreaReader(layout, openTrackAudio);
+        using var expectedSource = new ProgramAreaReader(layout, openTrackAudio, shiftSamples: _shiftSamples);
         expectedSource.Skip(-SaoAudioLayout.FirstWritableLba);
 
         int nextReadLba = 0;
@@ -581,9 +585,9 @@ public sealed class NativeSaoVerifier
     }
 
     /// <summary>What each listed disc sector should hold: written sample p reads back as disc sample p + offset.</summary>
-    private static Dictionary<int, byte[]> ExpectedDiscSectors(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> lbas)
+    private Dictionary<int, byte[]> ExpectedDiscSectors(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> lbas)
     {
-        using var source = new ProgramAreaReader(layout, openTrackAudio);
+        using var source = new ProgramAreaReader(layout, openTrackAudio, shiftSamples: _shiftSamples);
         source.Skip(-SaoAudioLayout.FirstWritableLba);
         var reader = new ChunkReader(buffer =>
         {

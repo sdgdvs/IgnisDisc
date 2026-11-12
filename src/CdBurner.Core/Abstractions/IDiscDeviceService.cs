@@ -386,6 +386,13 @@ public class AudioBurnOptions
     /// Windows burning service writes every pre-gap as silence and would lose that audio.
     /// </summary>
     public bool KeepIndexMarks { get; init; }
+
+    /// <summary>
+    /// Direct drive-command writer only: the drive's write offset in samples. Null (the default) works it out from the
+    /// drive's read offset (AccurateRip's list) and the combined offset measured on earlier burns, so an offset-corrected
+    /// rip gives the source back sample for sample; 0 writes the audio unshifted.
+    /// </summary>
+    public int? WriteOffsetSamples { get; init; }
 }
 
 /// <summary>

@@ -1,3 +1,4 @@
+using CdBurner.Core.Audio;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Scsi;
@@ -38,6 +39,32 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
 
     /// <summary>The writer's own result for the last burn (the real write, or the test write if it stopped there).</summary>
     public NativeSaoWriteResult? LastResult { get; private set; }
+
+    /// <summary>How the last burn's write offset was decided (null for a test write).</summary>
+    public WriteOffsetPlan? LastWriteOffsetPlan { get; private set; }
+
+    /// <summary>Where measured combined offsets are kept, per drive.</summary>
+    public string DriveOffsetStorePath { get; init; } = DriveOffsetStore.DefaultPath;
+
+    /// <summary>
+    /// Loads AccurateRip's drive read-offset list. The default downloads it when the cached copy is missing or a month
+    /// old; tests replace it. A failure only means no write-offset correction.
+    /// </summary>
+    public Func<CancellationToken, Task<IReadOnlyList<DriveOffsetEntry>>> LoadReadOffsets { get; init; } = DownloadReadOffsets;
+
+    private static async Task<IReadOnlyList<DriveOffsetEntry>> DownloadReadOffsets(CancellationToken ct)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        string cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IgnisDisc", "cache", "DriveOffsets.bin");
+        return await AccurateRipDriveOffsets.LoadAsync(http, cache, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The virtual drive is in no offset list, and its burns must not reach the real offset store: it takes part only
+    /// when a test supplies its own list and store.
+    /// </summary>
+    private bool UsesWriteOffsets(IDiscRecorderBackend recorder) =>
+        !recorder.IsVirtual || (LoadReadOffsets != DownloadReadOffsets && DriveOffsetStorePath != DriveOffsetStore.DefaultPath);
 
     /// <summary>True when the last burn ran a test write that passed before the real write.</summary>
     public bool LastTestWritePassed { get; private set; }
@@ -135,7 +162,31 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
             TestWrite: options.Simulate,
             WriteSpeedKiloBytesPerSecond: speed);
 
-        return Task.Run(() => Run(recorder, tracks, request, progress, cancellationToken), CancellationToken.None);
+        return BurnWithWriteOffsetAsync(recorder, tracks, request, options, progress, cancellationToken);
+    }
+
+    private async Task<BurnOperationResult> BurnWithWriteOffsetAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks,
+        NativeSaoWriteRequest request, AudioBurnOptions options, IProgress<BurnProgressSnapshot>? progress, CancellationToken ct)
+    {
+        LastWriteOffsetPlan = null;
+        bool automatic = UsesWriteOffsets(recorder);
+        if (!request.TestWrite && (options.WriteOffsetSamples != null || automatic))
+        {
+            int? readOffset = null;
+            string? source = null;
+            int? combined = null;
+            if (options.WriteOffsetSamples is null)
+            {
+                var entry = AccurateRipDriveOffsets.Find(await LoadReadOffsets(ct).ConfigureAwait(false), recorder.VendorId, recorder.ProductId);
+                readOffset = entry?.ReadOffsetSamples;
+                source = entry is null ? null : $"AccurateRip's drive list, {entry.Submissions} submissions";
+                combined = new DriveOffsetStore(DriveOffsetStorePath).GetCombinedOffset(AccurateRipDriveOffsets.DriveName(recorder.VendorId, recorder.ProductId));
+            }
+            LastWriteOffsetPlan = WriteOffsetPlan.Resolve(readOffset, source, combined, options.WriteOffsetSamples);
+            request = request with { ShiftSamples = LastWriteOffsetPlan.ShiftSamples };
+        }
+
+        return await Task.Run(() => Run(recorder, tracks, request, progress, ct), CancellationToken.None).ConfigureAwait(false);
     }
 
     private BurnOperationResult Run(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks, NativeSaoWriteRequest request,
@@ -170,6 +221,10 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         string kind = request.TestWrite ? "test write only" : TestWriteFirst ? "test write, then real write" : "real write";
         log.Note($"IgnisDisc native Session-at-Once writer, {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
         log.Note($"Tracks: {request.Tracks.Count}, CD-Text: {(request.CdTextPacks != null ? $"{request.CdTextPacks.Length / 18} packs" : "none")}.");
+        if (LastWriteOffsetPlan is { } plan)
+        {
+            log.Note(plan.ShiftSamples == 0 ? plan.Explanation : $"{plan.Explanation} The audio is sent {plan.ShiftSamples:+0;-0} samples later to correct it.");
+        }
 
         IDisposable? exclusive = null;
         if (win32 != null)
@@ -201,6 +256,22 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         }
 
         LastResult = result;
+        if (result.Verification is { Passed: true, OffsetSamples: int measured } && UsesWriteOffsets(recorder))
+        {
+            // The check compared the disc with what was sent, so this is the drive's own combined offset whatever shift was used.
+            try
+            {
+                int? before = new DriveOffsetStore(DriveOffsetStorePath).RecordCombinedOffset(AccurateRipDriveOffsets.DriveName(recorder.VendorId, recorder.ProductId), measured);
+                if (before is int old)
+                {
+                    log.Note($"Combined offset measured {measured:+0;-0;0}, where an earlier burn measured {old:+0;-0;0}; the new value is kept.");
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Not saved: the next burn just measures it again.
+            }
+        }
         if (result.DiscRecorded && recorder is VirtualDiscRecorder { CurrentMedium: { } medium } && virtualDrive != null)
         {
             CommitToVirtualMedium(medium, virtualDrive, tracks, request);
@@ -307,7 +378,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
     private static void CommitToVirtualMedium(VirtualDiscMedium medium, VirtualMmcDrive drive, IReadOnlyList<AudioTrackSource> tracks, NativeSaoWriteRequest request)
     {
         medium.Raw2352Mode = true;
-        ReadOnlySpan<byte> program = drive.ProgramAreaWritten.GetBuffer().AsSpan(0, (int)drive.ProgramAreaWritten.Length);
+        ReadOnlySpan<byte> program = drive.RecordedProgram(); // where the audio landed, after the drive's write offset
         int firstSector = -SaoAudioLayout.FirstWritableLba; // the capture starts at LBA -150
         int sectors = Math.Max(0, program.Length / OpticalConstants.RawSectorSize - firstSector);
         for (int lba = 0; lba < sectors; lba++)

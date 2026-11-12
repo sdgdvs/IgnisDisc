@@ -144,6 +144,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     public int ReadOffsetSamples { get; set; }
 
+    /// <summary>
+    /// Audio lands this many samples later than it was sent (the drive's write offset; negative = earlier). Reads see
+    /// the disc as written, so the shift measured on read-back is write offset + read offset, as on a real drive.
+    /// </summary>
+    public int WriteOffsetSamples { get; set; }
+
     /// <summary>READ CD returns this sector with one sample changed, like a marginal burn.</summary>
     public int? ReadBackDifferenceAtLba { get; set; }
 
@@ -338,6 +344,36 @@ public sealed class VirtualMmcDrive : IScsiTransport
     public List<byte> CommandsReceived { get; } = new();
     public MemoryStream LeadInWritten { get; } = new();
     public MemoryStream ProgramAreaWritten { get; } = new();
+
+    /// <summary>
+    /// The program area as it lies on the disc: what was sent (<see cref="ProgramAreaWritten"/>, from LBA -150) moved
+    /// by <see cref="WriteOffsetSamples"/>, with silence where nothing landed.
+    /// </summary>
+    private byte[]? _onDisc;
+    private long _onDiscFor = -1;
+
+    private byte[] OnDiscCached()
+    {
+        if (_onDisc == null || _onDiscFor != ProgramAreaWritten.Length)
+        {
+            _onDisc = RecordedProgram();
+            _onDiscFor = ProgramAreaWritten.Length;
+        }
+        return _onDisc;
+    }
+
+    public byte[] RecordedProgram()
+    {
+        ReadOnlySpan<byte> sent = ProgramAreaWritten.GetBuffer().AsSpan(0, (int)ProgramAreaWritten.Length);
+        byte[] onDisc = new byte[sent.Length];
+        int shift = WriteOffsetSamples * 4;
+        int from = Math.Max(0, -shift), to = Math.Min(sent.Length, sent.Length - shift);
+        if (to > from)
+        {
+            sent.Slice(from, to - from).CopyTo(onDisc.AsSpan(from + shift));
+        }
+        return onDisc;
+    }
     public byte[]? AcceptedCueSheet => _cue?.Raw;
     public int WriteCommandCount { get; private set; }
     public bool SessionClosed { get; private set; }
@@ -760,7 +796,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
 
         // The program area was captured from LBA -150. Sample i read back is sample i - offset as written.
-        ReadOnlySpan<byte> program = ProgramAreaWritten.GetBuffer().AsSpan(0, (int)ProgramAreaWritten.Length);
+        ReadOnlySpan<byte> program = WriteOffsetSamples == 0
+            ? ProgramAreaWritten.GetBuffer().AsSpan(0, (int)ProgramAreaWritten.Length)
+            : OnDiscCached();
         int n = count * 2352;
         long source = (long)(lba + 150) * 2352 - (long)ReadOffsetSamples * 4;
         Span<byte> audio = new byte[n];

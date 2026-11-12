@@ -386,4 +386,93 @@ public sealed class NativeAudioBurnEngineTests : IDisposable
         Assert.Equal(6750, drive.RecordedLeadOutLba);
         Assert.DoesNotContain(sheet.Chunk(8), e => (e[0] & 0x0F) == 0x01 && e[1] >= 2 && e[1] <= 99 && e[2] == 0);
     }
+
+    // ---- Write-offset correction (M3.2) ----
+
+    private NativeAudioBurnEngine OffsetEngine(string store, IReadOnlyList<DriveOffsetEntry> list, int writeOffset, int readOffset) => new(_dir)
+    {
+        Wait = _ => { },
+        DriveOffsetStorePath = store,
+        LoadReadOffsets = _ => Task.FromResult(list),
+        ConfigureVirtualDrive = d => { d.WriteOffsetSamples = writeOffset; d.ReadOffsetSamples = readOffset; }
+    };
+
+    private static byte[] OnDisc(VirtualDiscMedium medium, int sectors)
+    {
+        var all = new byte[sectors * SectorSize];
+        for (int lba = 0; lba < sectors; lba++)
+        {
+            medium.ReadSector(lba, SectorSize).CopyTo(all, lba * SectorSize);
+        }
+        return all;
+    }
+
+    [Fact]
+    public async Task WriteOffset_IsMeasuredOnTheFirstBurn_AndCorrectedOnTheNext_SoTheDiscHoldsTheSourceSampleForSample()
+    {
+        // A drive that lands audio 30 samples early (W = -30) and reads it 12 late (R = +12): it measures C = -18.
+        string store = Path.Combine(_dir, "offsets.json");
+        var name = AccurateRipDriveOffsets.DriveName("IGNIS", "VIRTUAL DVD/CD-RW");
+        IReadOnlyList<DriveOffsetEntry> list = [new DriveOffsetEntry(name, 12, 99)];
+        byte[] source = [.. Pcm(1, 300), .. Pcm(2, 300)];
+
+        // 1. Nothing measured yet: written as it is, and the combined offset is recorded.
+        using var first = Recorder(VirtualDiscMedium.CreateBlankCdR700());
+        var engine1 = OffsetEngine(store, list, writeOffset: -30, readOffset: 12);
+        var r1 = await engine1.BurnAudioTracksAsync(first, Tracks(), Options(), null, CancellationToken.None);
+        Assert.True(r1.Success, r1.ErrorMessage);
+        Assert.Null(engine1.LastWriteOffsetPlan!.WriteOffset);
+        Assert.Equal(0, engine1.LastWriteOffsetPlan.ShiftSamples);
+        Assert.Equal(-18, engine1.LastResult!.Verification!.OffsetSamples);
+        Assert.Equal(-18, new DriveOffsetStore(store).GetCombinedOffset(name));
+        // Uncorrected, the audio sits 30 samples early on the disc.
+        Assert.True(OnDisc(first.CurrentMedium!, 600).AsSpan(0, 1000 * 4).SequenceEqual(source.AsSpan(30 * 4, 1000 * 4)));
+
+        // 2. Measured: W = C - R = -30, so the audio is sent 30 samples later and lands where it belongs.
+        using var second = Recorder(VirtualDiscMedium.CreateBlankCdR700());
+        var engine2 = OffsetEngine(store, list, writeOffset: -30, readOffset: 12);
+        var r2 = await engine2.BurnAudioTracksAsync(second, Tracks(), Options(), null, CancellationToken.None);
+        Assert.True(r2.Success, r2.ErrorMessage);
+        Assert.Equal(-30, engine2.LastWriteOffsetPlan!.WriteOffset);
+        Assert.Equal(30, engine2.LastWriteOffsetPlan.ShiftSamples);
+        Assert.True(engine2.LastResult!.Verification!.Passed); // the check compares with what was sent, shift included
+        Assert.Equal(-18, engine2.LastResult.Verification.OffsetSamples);
+
+        byte[] disc = OnDisc(second.CurrentMedium!, 600);
+        int exact = source.Length - 30 * 4; // the last 30 samples were pushed past the end of the program area
+        Assert.True(disc.AsSpan(0, exact).SequenceEqual(source.AsSpan(0, exact)), "every sample in its place, across the track boundary");
+        Assert.True(disc.AsSpan(exact).IndexOfAnyExcept((byte)0) < 0);
+
+        string log = await File.ReadAllTextAsync(engine2.LastLogPath!);
+        Assert.Contains("Write offset -30 samples (combined -18 measured on earlier burns, read +12", log);
+        Assert.Contains("sent +30 samples later", log);
+    }
+
+    [Theory]
+    [InlineData(0)]   // explicitly off
+    [InlineData(-30)] // explicitly given
+    public async Task AnExplicitWriteOffset_IsUsedAsGiven(int given)
+    {
+        using var recorder = Recorder(VirtualDiscMedium.CreateBlankCdR700());
+        var engine = OffsetEngine(Path.Combine(_dir, "o.json"), [], writeOffset: -30, readOffset: 0);
+        var options = new AudioBurnOptions { WriteCdText = true, CdTextBytes = Packs(), UseDiscAtOnce = true, WriteOffsetSamples = given };
+
+        var result = await engine.BurnAudioTracksAsync(recorder, Tracks(), options, null, CancellationToken.None);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Equal(-given, engine.LastWriteOffsetPlan!.ShiftSamples);
+    }
+
+    [Fact]
+    public async Task UnknownDrive_IsWrittenAsItIs_AndSaysWhy()
+    {
+        using var recorder = Recorder(VirtualDiscMedium.CreateBlankCdR700());
+        var engine = OffsetEngine(Path.Combine(_dir, "o.json"), [new DriveOffsetEntry("OTHER - DRIVE", 6, 5)], writeOffset: 0, readOffset: 0);
+
+        var result = await engine.BurnAudioTracksAsync(recorder, Tracks(), Options(), null, CancellationToken.None);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Equal(0, engine.LastWriteOffsetPlan!.ShiftSamples);
+        Assert.Contains("read offset is not known", engine.LastWriteOffsetPlan.Explanation);
+    }
 }

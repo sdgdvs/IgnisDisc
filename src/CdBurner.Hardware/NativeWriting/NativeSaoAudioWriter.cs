@@ -21,7 +21,12 @@ public sealed record NativeSaoWriteRequest(
     byte[]? CdTextPacks,
     string? MediaCatalogNumber,
     bool TestWrite,
-    int? WriteSpeedKiloBytesPerSecond = null);
+    int? WriteSpeedKiloBytesPerSecond = null)
+{
+    /// <summary>Samples to move all the audio later before it is sent (negative: earlier), to correct the drive's write
+    /// offset; see <see cref="CdBurner.Core.Audio.WriteOffsetPlan"/>. 0 sends the audio as it is.</summary>
+    public int ShiftSamples { get; init; }
+}
 
 /// <summary>Outcome of a native Session-at-Once write.</summary>
 public sealed record NativeSaoWriteResult
@@ -276,7 +281,8 @@ public sealed class NativeSaoAudioWriter
                 layout, request.OpenTrackAudio, request.CdTextPacks,
                 (done, total) => reporter.Report(totalSectors, $"Checking the disc ({100.0 * done / Math.Max(1, total):F0}%)"),
                 CancellationToken.None,
-                request.MediaCatalogNumber);
+                request.MediaCatalogNumber,
+                request.ShiftSamples);
         }
 
         reporter.Report(totalSectors, "Done");
@@ -352,7 +358,7 @@ public sealed class NativeSaoAudioWriter
             filled = 0;
         }
 
-        using var source = new ProgramAreaReader(layout, request.OpenTrackAudio, _note);
+        using var source = new ProgramAreaReader(layout, request.OpenTrackAudio, _note, request.ShiftSamples);
         while (true)
         {
             bool more;

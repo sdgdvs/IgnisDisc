@@ -1078,7 +1078,8 @@ public static class CliCommandRunner
                 WriteCdText = compilation.IncludeCdText,
                 Simulate = testWrite,
                 KeepIndexMarks = native, // only the direct writer can place INDEX 00 marks and hidden audio
-                AllowDamagedAudio = cmd.HasFlag("allow-damaged")
+                AllowDamagedAudio = cmd.HasFlag("allow-damaged"),
+                WriteOffsetSamples = ParseWriteOffset(cmd.GetOption("write-offset"), native)
             }).ConfigureAwait(false);
 
         var verification = nativeEngine?.LastResult?.Verification;
@@ -1103,6 +1104,17 @@ public static class CliCommandRunner
                 unreadableSectors = verification?.UnreadableSectors,
                 verifyWarning = verification?.Warning,
                 damagedAudioFiles = result.DamagedAudioFiles,
+                writeOffset = nativeEngine?.LastWriteOffsetPlan is { } plan
+                    ? new
+                    {
+                        readOffsetSamples = plan.ReadOffset,
+                        readOffsetSource = plan.ReadOffsetSource,
+                        combinedOffsetSamples = plan.CombinedOffset,
+                        writeOffsetSamples = plan.WriteOffset,
+                        shiftSamples = plan.ShiftSamples,
+                        note = plan.Explanation
+                    }
+                    : null,
                 driveId = recorder.UniqueId,
                 title = compilation.AlbumTitle,
                 artist = compilation.AlbumPerformer,
@@ -2372,6 +2384,27 @@ public static class CliCommandRunner
         throw new CommandLineException($"--speed '{speedStr}' is not a speed. Use a number such as 8 or 8x, 'recommended' (the default), 'slowest' or 'max'.");
     }
 
+    /// <summary>
+    /// <c>--write-offset</c>: absent or <c>auto</c> works the drive's write offset out (read offset from AccurateRip's
+    /// list, combined offset from earlier burns); a number of samples is used as given; 0 writes the audio unshifted.
+    /// </summary>
+    private static int? ParseWriteOffset(string? text, bool native)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        if (!native)
+        {
+            throw new CommandLineException("--write-offset needs --native: only the direct writer can correct the write offset.");
+        }
+        if (int.TryParse(text.Trim(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int samples) && Math.Abs(samples) <= 5_000)
+        {
+            return samples;
+        }
+        throw new CommandLineException($"--write-offset '{text}' is not a number of samples between -5000 and +5000, or 'auto'.");
+    }
+
     /// <summary>The drive's write speeds; none when this kind of drive cannot list them (it then keeps its own speed).</summary>
     private static IReadOnlyList<WriteSpeedDescriptor> DriveSpeeds(IDiscRecorderBackend recorder)
     {
@@ -2492,7 +2525,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X|max>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
-        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--allow-damaged] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
+        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--allow-damaged] [--native [--test-write | --test-first] [--write-offset <samples|auto>] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
         stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
