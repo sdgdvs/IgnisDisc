@@ -891,17 +891,28 @@ public class AudioCdCompilation
         }
         int sectors = (int)Math.Max(0, (end - start) / sectorSize);
         var image = DataTrackImage.Open(filePath, start, sectors, sectorSize);
+        return CreateDataTrack(image, trk.Title, !string.IsNullOrWhiteSpace(trk.Performer) ? trk.Performer : AlbumPerformer);
+    }
+
+    /// <summary>
+    /// Track 1 of a mixed-mode CD from a data track image read from a disc or a rip. Such an image ends with the
+    /// two-second post-gap (zeros); up to 150 trailing zero sectors are left to the writer, which writes the same zeros
+    /// there, so the new disc has the source's layout.
+    /// </summary>
+    public static AudioCdTrackItem CreateDataTrack(DataTrackImage image, string? title, string performer)
+    {
+        ArgumentNullException.ThrowIfNull(image);
         int postGap = image.CountTrailingZeroSectors(MixedModeAudioPreGapFrames);
-        if (postGap > 0 && sectors - postGap >= 4 * OpticalConstants.AudioFramesPerSecond)
+        if (postGap > 0 && image.SectorCount - postGap >= 4 * OpticalConstants.AudioFramesPerSecond)
         {
-            image = image with { SectorCount = sectors - postGap };
+            image = image with { SectorCount = image.SectorCount - postGap };
         }
 
         return new AudioCdTrackItem(
             TrackNumber: 1,
-            SourceFilePath: filePath,
-            Title: !string.IsNullOrWhiteSpace(trk.Title) ? trk.Title : "Data track",
-            Performer: !string.IsNullOrWhiteSpace(trk.Performer) ? trk.Performer : AlbumPerformer,
+            SourceFilePath: image.FilePath,
+            Title: !string.IsNullOrWhiteSpace(title) ? title : "Data track",
+            Performer: performer,
             PreGapFrames: OpticalConstants.CdLeadInFrames)
         {
             DataTrack = image,

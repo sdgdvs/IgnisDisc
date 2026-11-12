@@ -352,6 +352,12 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
                     // offset 16, EDC/ECC. (Returning the bare user data hid a disc-copy bug that wrote raw bytes as data.)
                     CdBurner.Core.Images.RawSectorCodec.Convert2048To2352Mode1(stored, lba, destination[..sz]);
                 }
+                else if (stored != null && sz == OpticalConstants.DataSectorSize && stored.Length == OpticalConstants.RawSectorSize &&
+                         IsMode1Sector(stored))
+                {
+                    // A 2,048-byte read of a recorded Mode 1 sector (a mixed-mode CD's data track) gives its user data.
+                    stored.AsSpan(16, OpticalConstants.DataSectorSize).CopyTo(destination);
+                }
                 else if (stored != null)
                 {
                     int copyLen = Math.Min(sz, stored.Length);
@@ -372,6 +378,9 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
     /// <summary>
     /// Reads a single sector and returns a newly allocated byte array.
     /// </summary>
+    private static bool IsMode1Sector(ReadOnlySpan<byte> raw) =>
+        raw[0] == 0 && raw[11] == 0 && raw.Slice(1, 10).IndexOfAnyExcept((byte)0xFF) < 0 && raw[15] == 1;
+
     public byte[] ReadSector(int lba, int? sectorSize = null)
     {
         int sz = sectorSize ?? SectorSize;

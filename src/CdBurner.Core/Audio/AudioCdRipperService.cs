@@ -290,6 +290,10 @@ public class AudioCdRipperService
                         foreach (var t in trkList)
                         {
                             var tType = t.GetType();
+                            if (tType.GetProperty("IsAudio")?.GetValue(t) is false)
+                            {
+                                continue; // a data track (mixed-mode CD) is not audio to rip
+                            }
                             int trkNum = tType.GetProperty("TrackNumber")?.GetValue(t) is int tn ? tn : (tracks.Count + 1);
                             int startLba = tType.GetProperty("StartLba")?.GetValue(t) is int sl ? sl : 0;
                             int count = tType.GetProperty("SectorCount")?.GetValue(t) is int sc ? sc : 0;

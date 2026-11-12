@@ -1926,7 +1926,11 @@ public class ImageStudioViewModel : ObservableObject
                     VerifyEachCopy = CopyVerifyEachDisc,
                     KeepStagedImage = CopyKeepStagedImage,
                     WriteSpeed = SelectedWriteSpeed,
-                    OnPrepareTargetDiscAsync = prepareCallback
+                    OnPrepareTargetDiscAsync = prepareCallback,
+                    // A mixed-mode CD's data track is copied only by the direct writer, and only when the user turned it on.
+                    MixedModeWriter = UseDirectDriveCommands
+                        ? new CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine(DirectBurnLogDirectory)
+                        : null
                 },
                 progress,
                 linkedToken);
@@ -1937,7 +1941,9 @@ public class ImageStudioViewModel : ObservableObject
             if (copyResult.Success)
             {
                 BurnProgress = 100.0;
-                StatusMessage = $"Disc Copy complete: {copyResult.CopiesCompleted}/{copyResult.CopiesRequested} copy/copies burned ({copyResult.TotalSectorsWritten:N0} total sectors).";
+                StatusMessage = $"Disc Copy complete: {copyResult.CopiesCompleted}/{copyResult.CopiesRequested} copy/copies burned ({copyResult.TotalSectorsWritten:N0} total sectors)."
+                    + (copyResult.CopiedDataTrack ? " The data track was copied with the audio." : string.Empty)
+                    + (copyResult.WarningMessage is { } copyWarning ? $" {copyWarning}" : string.Empty);
                 AppendLog(StatusMessage);
             }
             else

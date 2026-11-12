@@ -10,7 +10,10 @@
   screen; both are off by default.
 - mixed-mode CDs (track 1 a Mode 1 data track, then audio), from a `.cue` file whose track 1 is `MODE1/2352` or
   `MODE1/2048` in a BINARY file, through the same audio path (`burn-audio --native`, the Audio CD screen). The
-  Windows writer refuses them.
+  Windows writer refuses them. Disc copy (Disc Image screen, with direct drive commands on) copies such a disc whole:
+  track 1 is read as 2,048-byte user data up to the next track's 2-second pre-gap, the audio is ripped as usual,
+  and both are written by this writer (simulator only so far). An Enhanced CD (data after the audio, in a second
+  session) still copies its audio only.
 - data discs: one Mode 1 track Track-at-Once on a blank CD-R/CD-RW, and one data track on a blank single-layer
   DVD-R, DVD-RW (sequential) or DVD+R (`NativeTaoDataWriter`, DVD half in `NativeTaoDataWriter.Dvd.cs`), through
   `burn-iso` / `burn-data --native` and the Data Disc and Disc Image screens. The DVD path has run only against the

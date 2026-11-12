@@ -50,6 +50,12 @@ public sealed class DiscCopyOptions
     /// Return false to cancel the copy batch.
     /// </summary>
     public Func<int, CancellationToken, Task<bool>>? OnPrepareTargetDiscAsync { get; set; }
+
+    /// <summary>
+    /// The direct drive-command writer, when the user turned it on. A mixed-mode CD (track 1 data, then audio) is then
+    /// copied whole: its data track is read and written ahead of the audio. Without it only the audio is copied.
+    /// </summary>
+    public IBurnEngineBackend? MixedModeWriter { get; set; }
 }
 
 /// <summary>
@@ -64,6 +70,9 @@ public sealed record DiscCopyResult
     public int TotalSectorsWritten { get; init; }
     public bool WasAudioCd { get; init; }
     public bool IsMixedMode { get; init; }
+
+    /// <summary>The data track of a mixed-mode CD was copied too (not only the audio).</summary>
+    public bool CopiedDataTrack { get; init; }
     public string? WarningMessage { get; init; }
     public string? StagedImagePath { get; init; }
     public TimeSpan TotalTime { get; init; }
@@ -92,6 +101,7 @@ public sealed class DiscCopyService
     private readonly AudioCdBurnService _audioBurnService;
     private readonly AudioCdRipperService _audioRipperService;
     private readonly DiscVerificationService _verificationService;
+    private readonly IAudioDecoder? _audioDecoder;
 
     public DiscCopyService(
         IBurnEngineBackend burnEngine,
@@ -103,6 +113,7 @@ public sealed class DiscCopyService
         _audioBurnService = new AudioCdBurnService(_burnEngine, audioDecoder);
         _audioRipperService = new AudioCdRipperService();
         _verificationService = new DiscVerificationService();
+        _audioDecoder = audioDecoder;
     }
 
     /// <summary>
@@ -155,12 +166,20 @@ public sealed class DiscCopyService
         string? stagedPath = null;
         try
         {
-            var (isAudioDisc, isMixedMode) = InspectSourceDiscLayout(sourceRecorder);
-            // Windows' burning service (IMAPIv2) cannot write a data track and audio tracks in one pass, so an Enhanced
-            // CD copy keeps only the audio. Say so up front rather than pretending to clone it.
-            const string mixedModeWarning = "Mixed-mode / Enhanced CD detected: only the audio tracks are copied. Copying the data track as well needs the native drive-command writer, which is not available yet.";
+            var sourceTracks = ReadSourceTracks(sourceRecorder);
+            var (isAudioDisc, isMixedMode) = Classify(sourceTracks);
 
-            if (isMixedMode)
+            // Windows' burning service (IMAPIv2) cannot write a data track and audio tracks in one pass. The direct
+            // drive-command writer can, for a mixed-mode CD whose track 1 is the data track. Otherwise only the audio
+            // is copied, and the user is told so up front.
+            bool dataFirst = isMixedMode && sourceTracks.Count > 1 && !sourceTracks[0].IsAudio && sourceTracks.Skip(1).All(t => t.IsAudio);
+            bool copyDataTrack = dataFirst && options.MixedModeWriter is { WritesMixedModeCds: true };
+            string? mixedModeWarning = !isMixedMode || copyDataTrack ? null
+                : !dataFirst
+                    ? "Enhanced CD (data after the audio) detected: only the audio tracks are copied. Copying its data track is not supported yet."
+                    : "Mixed-mode CD detected: only the audio tracks are copied. Turn on direct drive commands to copy the data track as well.";
+
+            if (mixedModeWarning != null)
             {
                 progress?.Report(new BurnProgressSnapshot
                 {
@@ -197,6 +216,21 @@ public sealed class DiscCopyService
                     RecordingMode = AudioRecordingMode.DiscAtOnceGapless,
                     IncludeCdText = true
                 };
+                var burnService = _audioBurnService;
+                if (copyDataTrack)
+                {
+                    // Track 1 runs to the next track's two-second pre-gap: the data, then its post-gap.
+                    int dataSectors = sourceTracks[1].StartLba - sourceTracks[0].StartLba - OpticalConstants.CdLeadInFrames;
+                    string dataPath = Path.Combine(audioRipDir, "data_track.iso");
+                    string? readProblem = await ReadDataTrackAsync(sourceRecorder, sourceTracks[0].StartLba, dataSectors, dataPath, progress, ct).ConfigureAwait(false);
+                    if (readProblem != null)
+                    {
+                        return DiscCopyResult.Failed($"The data track could not be read: {readProblem} Nothing was written to the disc.", copyCount);
+                    }
+                    compilation.AddTrack(AudioCdCompilation.CreateDataTrack(
+                        DataTrackImage.Open(dataPath, 0, dataSectors, DataTrackImage.UserDataSize), "Data track", compilation.AlbumPerformer));
+                    burnService = new AudioCdBurnService(options.MixedModeWriter!, _audioDecoder);
+                }
                 compilation.ImportCueSheet(stagedPath, _audioBurnService.AudioDecoder);
 
                 int completed = 0;
@@ -216,7 +250,7 @@ public sealed class DiscCopyService
                         }
                     }
 
-                    var burnRes = await _audioBurnService.BurnAsync(
+                    var burnRes = await burnService.BurnAsync(
                         targetRecorder,
                         compilation,
                         new AudioBurnOptions
@@ -252,7 +286,8 @@ public sealed class DiscCopyService
                     TotalSectorsWritten = totalSectors,
                     WasAudioCd = true,
                     IsMixedMode = isMixedMode,
-                    WarningMessage = isMixedMode ? mixedModeWarning : null,
+                    CopiedDataTrack = copyDataTrack,
+                    WarningMessage = mixedModeWarning,
                     StagedImagePath = options.KeepStagedImage ? stagedPath : null,
                     TotalTime = sw.Elapsed
                 };
@@ -432,7 +467,56 @@ public sealed class DiscCopyService
     /// Inspects the disc Table of Contents or mounted medium to classify whether the disc has audio tracks,
     /// and whether it is a mixed-mode or Enhanced CD (containing both audio and data tracks).
     /// </summary>
-    public static (bool IsAudioDisc, bool IsMixedMode) InspectSourceDiscLayout(IDiscRecorderBackend recorder)
+    public static (bool IsAudioDisc, bool IsMixedMode) InspectSourceDiscLayout(IDiscRecorderBackend recorder) =>
+        Classify(ReadSourceTracks(recorder));
+
+    private static (bool IsAudioDisc, bool IsMixedMode) Classify(IReadOnlyList<DiscTocTrack> tracks)
+    {
+        bool hasAudio = tracks.Any(t => t.IsAudio);
+        bool hasData = tracks.Any(t => !t.IsAudio);
+        return (hasAudio, hasAudio && hasData);
+    }
+
+    /// <summary>
+    /// Reads a mixed-mode CD's data track as 2,048-byte user data into <paramref name="path"/>. Returns null when every
+    /// sector was read, or what went wrong.
+    /// </summary>
+    private async Task<string?> ReadDataTrackAsync(IDiscRecorderBackend recorder, int startLba, int sectors, string path,
+        IProgress<BurnProgressSnapshot>? progress, CancellationToken ct)
+    {
+        if (sectors < 4 * OpticalConstants.AudioFramesPerSecond)
+        {
+            return $"track 1 is only {Math.Max(0, sectors)} sectors long.";
+        }
+
+        progress?.Report(new BurnProgressSnapshot { CurrentActionDescription = "Reading the data track", TotalLba = sectors, BufferLevelPercent = 100.0 });
+        int written = 0;
+        await using (var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16, useAsync: true))
+        {
+            var read = await _burnEngine.ReadSectorsAsync(recorder, startLba, sectors, raw2352Mode: false,
+                async (_, data) =>
+                {
+                    if (data.Length != DataTrackImage.UserDataSize)
+                    {
+                        throw new InvalidDataException($"the drive returned {data.Length} bytes for a data sector.");
+                    }
+                    await file.WriteAsync(data, ct).ConfigureAwait(false);
+                    written++;
+                },
+                progress, ct).ConfigureAwait(false);
+            if (!read.Success)
+            {
+                return read.ErrorMessage ?? "the drive reported a read error.";
+            }
+        }
+        return written == sectors ? null : $"only {written:N0} of {sectors:N0} sectors were read.";
+    }
+
+    /// <summary>
+    /// The disc's tracks with their start, length and audio/data flag: from the drive's Table of Contents on a
+    /// physical drive, from the mounted medium on a virtual one. Empty when neither is available.
+    /// </summary>
+    public static IReadOnlyList<DiscTocTrack> ReadSourceTracks(IDiscRecorderBackend recorder)
     {
         ArgumentNullException.ThrowIfNull(recorder);
 
@@ -444,9 +528,7 @@ public sealed class DiscCopyService
                 var toc = tocProvider.ReadTableOfContents();
                 if (toc.Count > 0)
                 {
-                    bool hasAudio = toc.Any(t => t.IsAudio);
-                    bool hasData = toc.Any(t => !t.IsAudio);
-                    return (hasAudio, hasAudio && hasData);
+                    return toc;
                 }
             }
             catch
@@ -464,8 +546,7 @@ public sealed class DiscCopyService
                 var sessionsProp = medium.GetType().GetProperty("Sessions");
                 if (sessionsProp?.GetValue(medium) is System.Collections.IEnumerable sessions)
                 {
-                    bool hasAudio = false;
-                    bool hasData = false;
+                    var found = new List<DiscTocTrack>();
                     foreach (object session in sessions)
                     {
                         var tracksProp = session.GetType().GetProperty("Tracks");
@@ -473,18 +554,21 @@ public sealed class DiscCopyService
                         {
                             foreach (object track in tracks)
                             {
-                                var isAudioProp = track.GetType().GetProperty("IsAudio");
-                                if (isAudioProp?.GetValue(track) is bool isAudio)
+                                var type = track.GetType();
+                                if (type.GetProperty("IsAudio")?.GetValue(track) is bool isAudio)
                                 {
-                                    if (isAudio) hasAudio = true;
-                                    else hasData = true;
+                                    found.Add(new DiscTocTrack(
+                                        type.GetProperty("TrackNumber")?.GetValue(track) is int n ? n : found.Count + 1,
+                                        type.GetProperty("StartLba")?.GetValue(track) is int s ? s : 0,
+                                        type.GetProperty("SectorCount")?.GetValue(track) is int c ? c : 0,
+                                        isAudio));
                                 }
                             }
                         }
                     }
-                    if (hasAudio || hasData)
+                    if (found.Count > 0)
                     {
-                        return (hasAudio, hasAudio && hasData);
+                        return found;
                     }
                 }
             }
@@ -493,6 +577,6 @@ public sealed class DiscCopyService
         {
         }
 
-        return (false, false);
+        return Array.Empty<DiscTocTrack>();
     }
 }
