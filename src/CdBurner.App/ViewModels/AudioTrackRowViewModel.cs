@@ -107,8 +107,20 @@ public class AudioTrackRowViewModel : ObservableObject
     public string? Isrc
     {
         get => _isrc;
-        set => SetProperty(ref _isrc, value);
+        set
+        {
+            if (SetProperty(ref _isrc, value))
+            {
+                OnPropertyChanged(nameof(IsrcProblem));
+                OnPropertyChanged(nameof(HasIsrcProblem));
+            }
+        }
     }
+
+    /// <summary>What is wrong with <see cref="Isrc"/>, in plain words; null when it is empty or valid.</summary>
+    public string? IsrcProblem => CdBurner.Hardware.NativeWriting.SaoAudioLayout.DescribeIsrcProblem(_isrc);
+
+    public bool HasIsrcProblem => IsrcProblem != null;
 
     /// <summary>
     /// Pre-gap duration in 75 fps Red Book frames (150 frames = 2 seconds).

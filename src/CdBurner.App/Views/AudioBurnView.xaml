@@ -113,11 +113,19 @@
                                 <TextBox Width="120"
                                          AutomationProperties.Name="UPC/EAN"
                                          Text="{Binding UpcEanCode, UpdateSourceTrigger=PropertyChanged}"
-                                         MaxLength="13"
+                                         MaxLength="15"
                                          Padding="6,4"
+                                         ToolTip="{Binding UpcEanProblem, TargetNullValue='Catalog number written to the disc by direct drive commands: 13 digits (EAN-13) or 12 (UPC-A). Leave empty if you have none.'}"
                                          Background="{DynamicResource ControlBackgroundBrush}"
                                          Foreground="{DynamicResource TextPrimaryBrush}"
                                          BorderBrush="{DynamicResource ControlBorderBrush}" />
+                                <TextBlock Text="{Binding UpcEanProblem}"
+                                           AutomationProperties.Name="UPC/EAN problem"
+                                           Foreground="{DynamicResource CapacityWarningBrush}"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="320"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,0,0" />
                             </StackPanel>
 
                             <!-- Recording Mode & DSP Options Sub-row -->
@@ -327,6 +335,22 @@
                                     <DataGridTextColumn Header="Performer / Artist"
                                                         Binding="{Binding Performer}"
                                                         Width="170" />
+                                    <DataGridTextColumn Header="ISRC"
+                                                        Binding="{Binding Isrc, UpdateSourceTrigger=PropertyChanged}"
+                                                        Width="120">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="ToolTip" Value="Recording code written to the disc by direct drive commands, e.g. USRC17607839. Leave empty if you have none." />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasIsrcProblem}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource CapacityWarningBrush}" />
+                                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                                        <Setter Property="ToolTip" Value="{Binding IsrcProblem}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
                                     <DataGridTextColumn Header="Format"
                                                         Binding="{Binding FormatSummary}"
                                                         Width="145"

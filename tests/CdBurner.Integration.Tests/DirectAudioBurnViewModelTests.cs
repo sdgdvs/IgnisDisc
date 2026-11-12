@@ -146,4 +146,55 @@ public sealed class DirectAudioBurnViewModelTests : IDisposable
         Assert.False(used.IsFinalized);
         Assert.DoesNotContain(used.Sessions.SelectMany(s => s.Tracks), t => t.IsAudio);
     }
+
+    // ---- ISRC and UPC/EAN typed on the screen (M3.5) ----
+
+    [Fact]
+    public async Task ATypoInAnIsrc_StopsADirectBurn_BeforeTheDiscIsTouched_AndNamesTheTrack()
+    {
+        // The writer leaves an invalid code out without a word, so the screen must catch it.
+        var vm = CreateViewModel();
+        vm.UseDirectDriveCommands = true;
+        vm.Tracks[1].Isrc = "USRC1760783"; // one digit short
+
+        Assert.True(vm.Tracks[1].HasIsrcProblem);
+        var result = await vm.StartAudioBurnAsync("VDRV-01");
+
+        Assert.False(result.Success);
+        Assert.Contains("Track 2 ISRC \"USRC1760783\"", vm.StatusMessage);
+        Assert.True(VirtualDisc().IsBlank);
+        Assert.False(vm.IsBusy);
+    }
+
+    [Fact]
+    public async Task ABadCatalogNumber_StopsADirectBurn()
+    {
+        var vm = CreateViewModel();
+        vm.UseDirectDriveCommands = true;
+        vm.UpcEanCode = "12345";
+
+        Assert.NotNull(vm.UpcEanProblem);
+        var result = await vm.StartAudioBurnAsync("VDRV-01");
+
+        Assert.False(result.Success);
+        Assert.Contains("UPC/EAN", vm.StatusMessage);
+        Assert.True(VirtualDisc().IsBlank);
+    }
+
+    [Fact]
+    public async Task ValidCodesTypedOnTheScreen_AreBurnedAndReadBack()
+    {
+        var vm = CreateViewModel();
+        vm.UseDirectDriveCommands = true;
+        vm.UpcEanCode = "724384260927";        // a 12-digit UPC-A
+        vm.Tracks[0].Isrc = "US-RC1-76-07839"; // hyphens as often printed
+
+        Assert.Null(vm.CodeProblem());
+        var result = await vm.StartAudioBurnAsync("VDRV-01");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        // The read-back check reads both codes from the disc's sub-channel and compares them with what was written.
+        string check = vm.LastDirectBurnResult!.Verification!.Message;
+        Assert.Contains("Catalog number and 1 ISRC code(s) match", check);
+    }
 }

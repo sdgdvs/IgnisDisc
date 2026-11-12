@@ -132,12 +132,25 @@ public class NativeSaoEncodingTests
 
     [Theory]
     [InlineData("0724384260927", "0724384260927")]
+    [InlineData("0 724384 260927", "0724384260927")] // spaces as printed under a barcode
+    [InlineData("724384260927", "0724384260927")]    // 12-digit UPC-A: EAN-13 adds the leading 0
     [InlineData("0000000000000", null)]
-    [InlineData("072438426092", null)]
+    [InlineData("72438426092", null)]                // 11 digits
     [InlineData("07243842609AB", null)]
-    public void Mcn_MustBeThirteenDigits(string input, string? expected)
+    public void Mcn_IsThirteenDigits_OrATwelveDigitUpcA(string input, string? expected)
     {
         Assert.Equal(expected, SaoAudioLayout.NormalizeMcn(input));
+    }
+
+    [Fact]
+    public void ProblemsAreDescribed_OnlyForCodesThatWouldBeLeftOut()
+    {
+        Assert.Null(SaoAudioLayout.DescribeIsrcProblem(null));
+        Assert.Null(SaoAudioLayout.DescribeIsrcProblem("US-RC1-76-07839"));
+        Assert.Contains("12 characters", SaoAudioLayout.DescribeIsrcProblem("USRC1760783"));
+        Assert.Null(SaoAudioLayout.DescribeMcnProblem(""));
+        Assert.Null(SaoAudioLayout.DescribeMcnProblem("724384260927"));
+        Assert.Contains("13 digits", SaoAudioLayout.DescribeMcnProblem("12345"));
     }
 
     [Fact]

@@ -882,6 +882,10 @@ public class DataBurnViewModel : ObservableObject
                 {
                     StatusMessage += " " + result.Warning;
                 }
+                if (!string.IsNullOrWhiteSpace(result.VerificationNote))
+                {
+                    StatusMessage += " " + result.VerificationNote; // e.g. which checksum lists matched, as the CLI prints
+                }
             }
             else
             {

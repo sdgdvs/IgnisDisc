@@ -1209,7 +1209,8 @@ public class DvdVideoViewModel : ObservableObject
                 BurnProgress = 100.0;
                 StatusMessage = $"DVD-Video burn completed successfully ({result.SectorsWritten:N0} sectors written to {targetRecorder.VolumePath})."
                     + (LastLayerBreak is { } brk ? $" Layer break: {brk}." : "")
-                    + (directEngine?.LastSummary is { } how ? " " + how : "");
+                    + (directEngine?.LastSummary is { } how ? " " + how : "")
+                    + (string.IsNullOrWhiteSpace(result.VerificationNote) ? "" : " " + result.VerificationNote);
             }
             else
             {

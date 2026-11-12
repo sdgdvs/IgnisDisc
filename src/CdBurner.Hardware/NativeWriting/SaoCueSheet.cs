@@ -145,7 +145,10 @@ public sealed class SaoAudioLayout
         return s;
     }
 
-    /// <summary>Returns the 13-digit UPC/EAN media catalog number, or null if it is not 13 digits.</summary>
+    /// <summary>
+    /// Returns the 13-digit UPC/EAN media catalog number, or null if it is not one. A 12-digit UPC-A becomes its EAN-13
+    /// form with a leading 0, as EAN-13 defines it; spaces and hyphens are ignored.
+    /// </summary>
     public static string? NormalizeMcn(string? mcn)
     {
         if (string.IsNullOrWhiteSpace(mcn))
@@ -153,9 +156,25 @@ public sealed class SaoAudioLayout
             return null;
         }
 
-        string s = mcn.Trim();
+        string s = new string(mcn.Where(c => c is not (' ' or '-')).ToArray());
+        if (s.Length == 12 && s.All(char.IsAsciiDigit))
+        {
+            s = "0" + s;
+        }
         return s.Length == 13 && s.All(char.IsAsciiDigit) && s.Any(c => c != '0') ? s : null;
     }
+
+    /// <summary>What is wrong with an ISRC the user typed, in plain words; null when it is empty or valid.</summary>
+    public static string? DescribeIsrcProblem(string? isrc) =>
+        string.IsNullOrWhiteSpace(isrc) || NormalizeIsrc(isrc) != null
+            ? null
+            : "An ISRC is 12 characters: 2 letters (country), 3 letters or digits (registrant), 7 digits (year and number), e.g. USRC17607839. Hyphens are fine.";
+
+    /// <summary>What is wrong with a UPC/EAN the user typed, in plain words; null when it is empty or valid.</summary>
+    public static string? DescribeMcnProblem(string? mcn) =>
+        string.IsNullOrWhiteSpace(mcn) || NormalizeMcn(mcn) != null
+            ? null
+            : "A UPC/EAN catalog number is 13 digits (EAN-13), or 12 for a UPC-A, and not all zeros.";
 }
 
 /// <summary>Alternative cue sheet layouts. Some drives reject the standard one; these follow cdrdao's fallbacks.</summary>

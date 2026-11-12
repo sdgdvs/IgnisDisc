@@ -160,7 +160,30 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     public string? UpcEanCode
     {
         get => _upcEanCode;
-        set => SetProperty(ref _upcEanCode, value);
+        set
+        {
+            if (SetProperty(ref _upcEanCode, value))
+            {
+                OnPropertyChanged(nameof(UpcEanProblem));
+            }
+        }
+    }
+
+    /// <summary>What is wrong with <see cref="UpcEanCode"/>, in plain words; null when it is empty or valid.</summary>
+    public string? UpcEanProblem => CdBurner.Hardware.NativeWriting.SaoAudioLayout.DescribeMcnProblem(_upcEanCode);
+
+    /// <summary>
+    /// Why a direct burn cannot start with the codes as typed, or null. The direct writer leaves out an invalid ISRC or
+    /// catalog number, so a typo would vanish from the disc without a word; it is caught here instead.
+    /// </summary>
+    public string? CodeProblem()
+    {
+        if (UpcEanProblem is { } upc)
+        {
+            return $"UPC/EAN \"{UpcEanCode}\": {upc}";
+        }
+        var bad = Tracks.FirstOrDefault(t => t.HasIsrcProblem);
+        return bad is null ? null : $"Track {bad.TrackNumber} ISRC \"{bad.Isrc}\": {bad.IsrcProblem}";
     }
 
     /// <summary>
@@ -1704,6 +1727,13 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine? directEngine = null;
             LastDirectBurnResult = null;
             LastDirectBurnLogPath = null;
+            if (direct && CodeProblem() is { } codeProblem)
+            {
+                StatusMessage = $"Burn not started: {codeProblem}";
+                var refused = BurnOperationResult.Failed(StatusMessage);
+                LastBurnResult = refused;
+                return refused;
+            }
             if (direct)
             {
                 if (!recorder.GetCapabilities().SupportsNativeSao)
