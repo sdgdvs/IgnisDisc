@@ -68,8 +68,8 @@
     "featureHtml": "Copy a disc (one or two drives, several copies)",
     "physical": "⚠️",
     "virtual": "✅",
-    "notesMarkdown": "Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; the whole copy has run only in the built-in drive simulator",
-    "notesHtml": "Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; the whole copy has run only in the built-in drive simulator; real-drive reports welcome"
+    "notesMarkdown": "Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; done once on a real drive (one drive, a CD-RW copied to a CD-R). The source audio is read with error checks and re-reads, and a copy stops before writing when sectors still read wrong",
+    "notesHtml": "Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; done once on a real drive (one drive, a CD-RW copied to a CD-R). The source audio is read with error checks and re-reads, and a copy stops before writing when sectors still read wrong; real-drive reports welcome"
   },
   {
     "featureMarkdown": "Rip audio CD to `.wav` / `.flac` + `.cue`",

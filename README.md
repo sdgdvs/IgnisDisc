@@ -26,7 +26,7 @@ pipeline can be tested without hardware or blank media.
 | Rip data disc to `.iso` / `.bin` + `.cue` | ✅ | ✅ | |
 | Burn audio CD (Disc-at-Once / Track-at-Once) | ✅ | ✅ | WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling, crossfade, preview, printable jewel-case insert |
 | Burn / verify / convert legacy images | ✅ | ✅ | Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit |
-| Disc copy (one or two drives, multi-copy) | ⚠️ | ✅ | Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; the whole copy has run only in the built-in drive simulator |
+| Disc copy (one or two drives, multi-copy) | ⚠️ | ✅ | Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; done once on a real drive (one drive, a CD-RW copied to a CD-R). The source audio is read with error checks and re-reads, and a copy stops before writing when sectors still read wrong |
 | Rip audio CD to `.wav` / `.flac` + `.cue` | ✅ | ✅ | Reads the real TOC and CD-Text; optional MusicBrainz track names |
 | AccurateRip verification + read-offset correction | ✅ | ✅ | Detects your drive's offset from a disc in the AccurateRip database |
 | Secure audio ripping (C2 error pointers + re-reads) | ✅ | ✅ | Flags suspect sectors; can be slow on badly scratched discs |
