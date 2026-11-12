@@ -355,6 +355,21 @@ public class SerializedAudioTrack
     /// Slice length (75 fps frames), or null to run to the end of the file. Only used with <see cref="SourceStartFrame"/>.
     /// </summary>
     public int? SourceFrameCount { get; set; }
+
+    /// <summary>
+    /// "BINARY" or "MOTOROLA" when the track's audio is raw CD audio read straight from <see cref="SourceFilePath"/>
+    /// (a CUE sheet's .bin), with no decoder; null for audio files that are decoded.
+    /// </summary>
+    public string? RawFileType { get; set; }
+
+    /// <summary>A mixed-mode CD's data track: where its first sector starts in <see cref="SourceFilePath"/>. Null for audio.</summary>
+    public long? DataTrackOffsetBytes { get; set; }
+
+    /// <summary>Sectors of the data track. Only used with <see cref="DataTrackOffsetBytes"/>.</summary>
+    public int? DataTrackSectorCount { get; set; }
+
+    /// <summary>2,048 or 2,352 bytes a sector in the file. Only used with <see cref="DataTrackOffsetBytes"/>.</summary>
+    public int? DataTrackSectorSize { get; set; }
 }
 
 /// <summary>

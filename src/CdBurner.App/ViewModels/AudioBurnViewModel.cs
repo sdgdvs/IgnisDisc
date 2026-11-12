@@ -923,7 +923,12 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
                     if (isMixed)
                     {
-                        ctx.MixedModeNotices.Add($"Imported {audioTrackCount} audio track(s) from mixed-mode CUE (skipped {dataTrackCount} data track(s)).");
+                        bool keptData = tempComp.HasDataTrack && Tracks.Count == 0;
+                        int skipped = dataTrackCount - (keptData ? 1 : 0);
+                        ctx.MixedModeNotices.Add(keptData
+                            ? $"Track 1 of this mixed-mode CUE is a data track: it is kept, so the disc is a mixed-mode CD, which only direct drive commands can write."
+                              + (skipped > 0 ? $" {skipped} other data track(s) were left out." : string.Empty)
+                            : $"Imported {audioTrackCount} audio track(s) from mixed-mode CUE (skipped {dataTrackCount} data track(s)).");
                     }
 
                     if ((string.IsNullOrWhiteSpace(AlbumTitle) || AlbumTitle == "Untitled Album") &&
@@ -951,6 +956,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                     foreach (var cueTrk in tempComp.Tracks)
                     {
                         if (Tracks.Count >= AudioCdCompilation.MaxTracks) break;
+                        if (cueTrk.IsDataTrack && Tracks.Count > 0) continue; // a data track can only be track 1
 
                         long trkSize = 0;
                         string trkFormat = Path.GetExtension(cueTrk.SourceFilePath).TrimStart('.').ToUpperInvariant();
@@ -958,7 +964,12 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                         int trkBps = OpticalConstants.CdAudioBitsPerSample;
                         int trkCh = OpticalConstants.CdAudioChannels;
 
-                        if (File.Exists(cueTrk.SourceFilePath))
+                        if (cueTrk.DataTrack is { } dataImage)
+                        {
+                            trkSize = dataImage.UserDataBytes;
+                            trkFormat = "Data (Mode 1)";
+                        }
+                        else if (File.Exists(cueTrk.SourceFilePath))
                         {
                             try
                             {
@@ -992,6 +1003,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                             BitsPerSample = trkBps,
                             Channels = trkCh,
                             CustomPcmStreamFactory = cueTrk.CustomPcmStreamFactory,
+                            DataTrack = cueTrk.DataTrack,
+                            RawFileType = cueTrk.RawFileType,
                             SourceStartFrame = cueTrk.SourceStartFrame,
                             SourceFrameCount = cueTrk.SourceFrameCount
                         };
@@ -1367,6 +1380,12 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
         StopPreview();
 
+        if (target.IsDataTrack)
+        {
+            PreviewStatusText = $"Track {target.TrackNumber} is a data track: there is no audio to preview.";
+            return;
+        }
+
         bool hasSource = target.CustomPcmStreamFactory != null ||
                          (!string.IsNullOrWhiteSpace(target.SourceFilePath) && File.Exists(target.SourceFilePath));
         if (!hasSource)
@@ -1568,7 +1587,9 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 Composer = row.Composer,
                 DurationFrames = row.DurationFrames,
                 SourceStartFrame = row.SourceStartFrame,
-                SourceFrameCount = row.SourceFrameCount
+                SourceFrameCount = row.SourceFrameCount,
+                DataTrack = row.DataTrack,
+                RawFileType = row.RawFileType
             });
         }
 

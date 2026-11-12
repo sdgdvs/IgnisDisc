@@ -656,7 +656,7 @@ public sealed class AudioAndImageViewModelTests : IDisposable
     {
         // Arrange: Generate 2 synthetic WAV audio files and 1 dummy data file
         string dataBin = Path.Combine(_tempDir, "game_data.bin");
-        File.WriteAllBytes(dataBin, new byte[OpticalConstants.DataSectorSize * 10]);
+        File.WriteAllBytes(dataBin, new byte[OpticalConstants.DataSectorSize * 400]); // over the 4-second track minimum
 
         string wav1 = Path.Combine(_tempDir, "MixTrack01.wav");
         string wav2 = Path.Combine(_tempDir, "MixTrack02.wav");
@@ -689,13 +689,15 @@ public sealed class AudioAndImageViewModelTests : IDisposable
         // Act: Add mixed-mode CUE
         vm.AddAudioFilesCommand.Execute(new[] { cuePath });
 
-        // Assert: Only 2 audio tracks were imported (data track skipped)
-        Assert.Equal(2, vm.Tracks.Count);
-        Assert.Equal("MixTrack01", vm.Tracks[0].Title);
-        Assert.Equal("MixTrack02", vm.Tracks[1].Title);
+        // Assert: the Mode 1 data track is kept as track 1 (a mixed-mode CD), then the two audio tracks
+        Assert.Equal(3, vm.Tracks.Count);
+        Assert.True(vm.Tracks[0].IsDataTrack);
+        Assert.Equal(400, vm.Tracks[0].DataTrack!.SectorCount);
+        Assert.Equal("MixTrack01", vm.Tracks[1].Title);
+        Assert.Equal("MixTrack02", vm.Tracks[2].Title);
 
-        // Notice in StatusMessage mentions imported audio and skipped data tracks
-        Assert.Contains("Imported 2 audio track(s) from mixed-mode CUE (skipped 1 data track(s)).", vm.StatusMessage);
+        // The notice says the disc is mixed-mode and which writer can write it
+        Assert.Contains("only direct drive commands can write", vm.StatusMessage);
     }
 
     [Fact]

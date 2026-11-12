@@ -31,6 +31,18 @@ public class AudioTrackRowViewModel : ObservableObject
     public Func<Stream>? CustomPcmStreamFactory { get; set; }
 
     /// <summary>
+    /// Set when this row is a mixed-mode CD's data track (track 1, from a CUE sheet), not audio. Only direct drive
+    /// commands can write it.
+    /// </summary>
+    public CdBurner.Core.Audio.DataTrackImage? DataTrack { get; set; }
+
+    /// <summary>This row is a data track.</summary>
+    public bool IsDataTrack => DataTrack != null;
+
+    /// <summary>"BINARY" or "MOTOROLA" for raw CD audio read straight from a CUE sheet's .bin; null when decoded.</summary>
+    public string? RawFileType { get; set; }
+
+    /// <summary>
     /// Slice start (75 fps frames) inside <see cref="SourceFilePath"/> for single-file CUE album tracks; null = whole file.
     /// Carried into the compilation so project files can rebuild the slice.
     /// </summary>

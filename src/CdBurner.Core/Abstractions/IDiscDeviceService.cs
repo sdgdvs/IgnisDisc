@@ -63,6 +63,12 @@ public interface IBurnEngineBackend
         IProgress<BurnProgressSnapshot>? progress,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Whether <see cref="BurnAudioTracksAsync"/> can write a mixed-mode CD: track 1 a Mode 1 data track
+    /// (<see cref="AudioTrackSource.IsDataTrack"/>), then audio. Only the direct drive-command writer can.
+    /// </summary>
+    bool WritesMixedModeCds => false;
+
     Task<BurnOperationResult> EraseMediaAsync(
         IDiscRecorderBackend recorder,
         bool fullErase,
@@ -428,4 +434,11 @@ public class AudioTrackSource
 
     /// <summary>Digital copying of the track is permitted (CUE "FLAGS DCP").</summary>
     public bool CopyPermitted { get; init; }
+
+    /// <summary>
+    /// A CD-ROM Mode 1 data track (track 1 of a mixed-mode CD): the streams give 2,048 bytes of user data per sector
+    /// and <see cref="TotalPcmBytes"/> counts those bytes. Only an engine with
+    /// <see cref="IBurnEngineBackend.WritesMixedModeCds"/> writes one.
+    /// </summary>
+    public bool IsDataTrack { get; init; }
 }

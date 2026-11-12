@@ -848,6 +848,67 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(medium.IsBlank);
     }
 
+    /// <summary>A mixed-mode rip: a Mode 1 data track (300 sectors and its 150-sector post-gap), then one audio track.</summary>
+    private string WriteMixedCue()
+    {
+        var bin = new List<byte>();
+        var user = new byte[2048];
+        var random = new Random(9);
+        for (int lba = 0; lba < 450; lba++)
+        {
+            if (lba < 300) random.NextBytes(user); else Array.Clear(user);
+            bin.AddRange(CdBurner.Core.Images.RawSectorCodec.Convert2048To2352Mode1(user, lba));
+        }
+        var audio = new byte[320 * OpticalConstants.RawSectorSize];
+        random.NextBytes(audio);
+        bin.AddRange(new byte[150 * OpticalConstants.RawSectorSize]);
+        bin.AddRange(audio);
+        File.WriteAllBytes(Path.Combine(_tempDir, "mixed.bin"), bin.ToArray());
+        string cue = Path.Combine(_tempDir, "mixed.cue");
+        File.WriteAllLines(cue, new[]
+        {
+            "FILE \"mixed.bin\" BINARY", "  TRACK 01 MODE1/2352", "    INDEX 01 00:00:00",
+            "  TRACK 02 AUDIO", "    INDEX 00 00:06:00", "    INDEX 01 00:08:00"
+        });
+        return cue;
+    }
+
+    [Fact]
+    public async Task BurnAudio_NativeMixedCue_WritesTheDataTrackAndTheAudio_AndVerifies()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
+        _recorder.InsertMedia(medium);
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-audio", "--drive", "VDRV-01", "--tracks", WriteMixedCue(), "--dao", "--native", "--log-dir", Path.Combine(_tempDir, "logs"), "--json" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.True(exitCode == 0, stdout.ToString() + stderr);
+        using var doc = ParseJsonOutput(stdout);
+        Assert.True(doc.RootElement.GetProperty("verified").GetBoolean());
+        Assert.Equal(2, doc.RootElement.GetProperty("trackCount").GetInt32());
+        var tracks = Assert.Single(medium.Sessions).Tracks;
+        Assert.Equal(new[] { false, true }, tracks.Select(t => t.IsAudio));
+        Assert.Equal(600, tracks[1].StartLba);
+    }
+
+    [Fact]
+    public async Task BurnAudio_MixedCueWithoutNative_IsRefused_AndTheDiscStaysBlank()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+        var (stdout, stderr) = CreateStringWriters();
+
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-audio", "--drive", "VDRV-01", "--tracks", WriteMixedCue(), "--dao" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Only direct drive commands can write one", stdout.ToString() + stderr);
+        Assert.True(medium.IsBlank);
+    }
+
     [Fact]
     public async Task BurnAudio_TestFirstWithoutNative_IsRejected()
     {

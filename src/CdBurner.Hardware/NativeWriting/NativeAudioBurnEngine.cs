@@ -142,6 +142,16 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         for (int i = 0; i < tracks.Count; i++)
         {
             var t = tracks[i];
+            if (t.IsDataTrack)
+            {
+                if (t.TotalPcmBytes % NativeSaoAudioWriter.DataSectorSize != 0)
+                {
+                    return Task.FromResult(BurnOperationResult.Failed(
+                        $"Track {i + 1}'s data is not a whole number of 2,048-byte sectors. Nothing was written to the disc."));
+                }
+                saoTracks.Add(new SaoTrack(i + 1, (int)(t.TotalPcmBytes / NativeSaoAudioWriter.DataSectorSize), OpticalConstants.CdLeadInFrames, IsData: true));
+                continue;
+            }
             int sectors = (int)((t.TotalPcmBytes + OpticalConstants.RawSectorSize - 1) / OpticalConstants.RawSectorSize);
             int silence = i == 0 || options.UseDiscAtOnce
                 ? Math.Max(0, t.PreGapFrames)
@@ -150,6 +160,10 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
 
             // Track 1's layout always starts with two seconds of silence; later tracks get silence, then gap audio.
             int preGap = i == 0 ? Math.Max(silence, OpticalConstants.CdLeadInFrames + gapAudio) : silence + gapAudio;
+            if (i == 1 && tracks[0].IsDataTrack)
+            {
+                preGap = Math.Max(preGap, OpticalConstants.CdLeadInFrames + gapAudio); // two seconds after the data (Yellow Book)
+            }
             saoTracks.Add(new SaoTrack(i + 1, sectors, preGap, t.Isrc, gapAudio, t.PreEmphasis, t.CopyPermitted));
         }
 
@@ -398,7 +412,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
                 TrackNumber = recorded[i].TrackNumber,
                 StartLba = recorded[i].Index01Lba,
                 SectorCount = end - recorded[i].Index01Lba,
-                IsAudio = true,
+                IsAudio = (recorded[i].CueControl & 0x40) == 0,
                 PreGapFrames = source?.PreGapFrames ?? 0,
                 Title = source?.Title,
                 Performer = source?.Performer,
@@ -472,6 +486,9 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         }
         throw new IOException($"Track {track.TrackNumber} has no audio.");
     }
+
+    /// <summary>A mixed-mode CD (a Mode 1 data track, then audio) is written Session-at-Once like an audio CD.</summary>
+    public bool WritesMixedModeCds => true;
 
     public Task<BurnOperationResult> BurnDataStreamAsync(IDiscRecorderBackend recorder, Stream imageStream, DataBurnOptions options,
         IProgress<BurnProgressSnapshot>? progress, CancellationToken cancellationToken) =>

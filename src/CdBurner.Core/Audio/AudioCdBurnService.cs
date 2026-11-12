@@ -105,6 +105,26 @@ public class AudioCdBurnService
                 $"Compilation contains {compilation.TrackCount} tracks, which exceeds the Red Book limit of {AudioCdCompilation.MaxTracks}.");
         }
 
+        // 1a. A mixed-mode CD (data track 1, then audio) needs the direct drive-command writer.
+        if (compilation.HasDataTrack)
+        {
+            if (!compilation.Tracks[0].IsDataTrack || compilation.Tracks.Skip(1).Any(t => t.IsDataTrack))
+            {
+                return BurnOperationResult.Failed(
+                    "Only track 1 of a mixed-mode CD can be a data track. Move the data track to the top, or remove it. Nothing was written to the disc.");
+            }
+            if (compilation.TrackCount < 2)
+            {
+                return BurnOperationResult.Failed("A mixed-mode CD needs audio after its data track. Nothing was written to the disc.");
+            }
+            if (!_burnEngine.WritesMixedModeCds)
+            {
+                return BurnOperationResult.Failed(
+                    "Track 1 is a data track (a mixed-mode CD). Only direct drive commands can write one: turn them on, or remove the data track. "
+                    + "Nothing was written to the disc.");
+            }
+        }
+
         // 1b. Damaged FLAC sources would be burned in as silence or missing audio: stop before the drive is touched.
         if (!options.AllowDamagedAudio && !options.Simulate)
         {
@@ -175,6 +195,12 @@ public class AudioCdBurnService
                     TotalLba = Math.Max(1, compilation.Tracks.Count),
                     BufferLevelPercent = 100.0
                 });
+
+                if (trackItem.IsDataTrack)
+                {
+                    preparedTracks[i] = Array.Empty<byte>(); // read from the image while writing; nothing to decode
+                    continue;
+                }
 
                 Stream pcmStream;
                 try
@@ -265,7 +291,7 @@ public class AudioCdBurnService
             {
                 for (int k = 0; k + 1 < preparedTracks.Length; k++)
                 {
-                    if (compilation.Tracks[k + 1].PreGapFrames > 0) continue;
+                    if (compilation.Tracks[k + 1].PreGapFrames > 0 || compilation.Tracks[k].IsDataTrack) continue;
                     (preparedTracks[k], preparedTracks[k + 1]) = RedBookPcmDspProcessor.ApplyCrossfadeBetweenTracks(
                         preparedTracks[k], preparedTracks[k + 1], compilation.CrossfadeSeconds);
                 }
@@ -285,6 +311,7 @@ public class AudioCdBurnService
                 const int minimumTrackFrames = 4 * OpticalConstants.AudioFramesPerSecond;
                 for (int i = 1; i < preparedTracks.Length; i++)
                 {
+                    if (compilation.Tracks[i - 1].IsDataTrack) continue;
                     int lead = compilation.Tracks[i].Index00LeadFrames;
                     int previousFrames = preparedTracks[i - 1].Length / OpticalConstants.RawSectorSize;
                     if (lead > 0 && previousFrames - lead >= minimumTrackFrames)
@@ -298,6 +325,25 @@ public class AudioCdBurnService
             for (int i = 0; i < preparedTracks.Length; i++)
             {
                 var trackItem = compilation.Tracks[i];
+                if (trackItem.DataTrack is { } data)
+                {
+                    // The data, then its two-second post-gap, which the writer adds.
+                    totalRequiredFrames += data.SectorCount + AudioCdCompilation.MixedModeAudioPreGapFrames;
+                    audioTrackSources.Add(new AudioTrackSource
+                    {
+                        TrackNumber = 1,
+                        FilePath = trackItem.SourceFilePath,
+                        Title = trackItem.Title,
+                        Performer = !string.IsNullOrEmpty(trackItem.Performer) ? trackItem.Performer : compilation.AlbumPerformer,
+                        PreGapFrames = trackItem.PreGapFrames,
+                        TotalPcmBytes = data.UserDataBytes,
+                        Duration = TimeSpan.FromSeconds((double)data.SectorCount / OpticalConstants.AudioFramesPerSecond),
+                        PcmStreamFactory = data.OpenUserData,
+                        IsDataTrack = true
+                    });
+                    continue;
+                }
+
                 byte[] pcmBytes = preparedTracks[i];
                 int pcmLength = audibleLength[i];
                 int frames = pcmBytes.Length / OpticalConstants.RawSectorSize;

@@ -571,7 +571,11 @@ public static class ProjectSerializer
                 Arranger = track.Arranger,
                 Message = track.Message,
                 SourceStartFrame = track.SourceStartFrame,
-                SourceFrameCount = track.SourceFrameCount
+                SourceFrameCount = track.SourceFrameCount,
+                RawFileType = track.RawFileType,
+                DataTrackOffsetBytes = track.DataTrack?.OffsetBytes,
+                DataTrackSectorCount = track.DataTrack?.SectorCount,
+                DataTrackSectorSize = track.DataTrack?.SectorSize
             });
         }
 
@@ -626,7 +630,19 @@ public static class ProjectSerializer
 
                 Func<Stream>? sliceFactory = null;
                 SingleFileAlbumSource? album = null;
-                if (track.SourceStartFrame.HasValue && !string.IsNullOrWhiteSpace(track.SourceFilePath))
+                DataTrackImage? dataTrack = null;
+                if (track.DataTrackOffsetBytes is long dataOffset && track.DataTrackSectorCount is int dataSectors &&
+                    track.DataTrackSectorSize is int dataSectorSize && !string.IsNullOrWhiteSpace(track.SourceFilePath))
+                {
+                    // Not re-checked against the file here: the burn opens it and reports a missing or changed file.
+                    dataTrack = new DataTrackImage(track.SourceFilePath, dataOffset, dataSectors, dataSectorSize);
+                }
+                else if (track.RawFileType is { } rawType && RawCdAudioFile.IsRawType(rawType) && !string.IsNullOrWhiteSpace(track.SourceFilePath))
+                {
+                    sliceFactory = RawCdAudioFile.CreateSliceFactory(track.SourceFilePath, Math.Max(0, track.SourceStartFrame ?? 0),
+                        track.SourceFrameCount, string.Equals(rawType, "MOTOROLA", StringComparison.OrdinalIgnoreCase));
+                }
+                else if (track.SourceStartFrame.HasValue && !string.IsNullOrWhiteSpace(track.SourceFilePath))
                 {
                     if (!albumSources.TryGetValue(track.SourceFilePath, out album))
                     {
@@ -653,7 +669,9 @@ public static class ProjectSerializer
                     Message = track.Message ?? cdt?.Message,
                     SourceStartFrame = track.SourceStartFrame,
                     SourceFrameCount = track.SourceFrameCount,
-                    AlbumSource = album
+                    AlbumSource = album,
+                    RawFileType = track.RawFileType,
+                    DataTrack = dataTrack
                 };
 
                 compilation.AddTrack(trackItem);

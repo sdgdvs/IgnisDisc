@@ -96,6 +96,21 @@ public record AudioCdTrackItem(
     public bool CopyPermitted { get; init; }
 
     /// <summary>
+    /// Set when this is a CD-ROM Mode 1 data track rather than audio: track 1 of a mixed-mode CD (data, then audio),
+    /// imported from a CUE sheet. Only the direct drive-command writer can write one.
+    /// </summary>
+    public DataTrackImage? DataTrack { get; init; }
+
+    /// <summary>This is a data track (<see cref="DataTrack"/> is set).</summary>
+    public bool IsDataTrack => DataTrack != null;
+
+    /// <summary>
+    /// "BINARY" or "MOTOROLA" when the audio is raw CD audio read straight from <see cref="SourceFilePath"/> (a CUE
+    /// sheet's .bin) between <see cref="SourceStartFrame"/> and <see cref="SourceFrameCount"/>; null when decoded.
+    /// </summary>
+    public string? RawFileType { get; init; }
+
+    /// <summary>
     /// Total duration of this track in 2,352-byte Red Book frames (75 fps).
     /// </summary>
     public int DurationFrames
@@ -395,6 +410,9 @@ public class AudioCdCompilation
     /// </summary>
     public int TotalFrames => _tracks.Sum(t => t.DurationFrames);
 
+    /// <summary>The compilation holds a data track: it is a mixed-mode CD (data, then audio).</summary>
+    public bool HasDataTrack => _tracks.Any(t => t.IsDataTrack);
+
     /// <summary>
     /// Total duration as an MSF address.
     /// </summary>
@@ -646,11 +664,25 @@ public class AudioCdCompilation
         }
 
         int added = 0;
+        bool cueHasAudio = cueSheet.Tracks.Any(t => t.IsAudio);
         foreach (var file in cueSheet.Files)
         {
             string audioFilePath = Path.IsPathRooted(file.FileName)
                 ? file.FileName
                 : Path.Combine(cueDirectory, file.FileName);
+            bool rawFile = RawCdAudioFile.IsRawType(file.FileType);
+
+            // A mixed-mode CD's Mode 1 data track: only as the cue sheet's first track, in raw BINARY data, and before
+            // audio. Other data tracks (Mode 2, or a data track that is not first) are left out, as before.
+            if (_tracks.Count == 0 && cueHasAudio && rawFile && file.Tracks.Count > 0 &&
+                ReferenceEquals(file.Tracks[0], cueSheet.Tracks[0]) &&
+                file.Tracks[0].DataType is CueTrackDataType.Mode1_2048 or CueTrackDataType.Mode1_2352 &&
+                (file.Tracks.Count == 1 || file.Tracks[0].DataType == CueTrackDataType.Mode1_2352) &&
+                File.Exists(audioFilePath))
+            {
+                AddTrack(ImportDataTrack(file, audioFilePath));
+                added++;
+            }
 
             var audioTracks = file.Tracks.Where(t => t.DataType == CueTrackDataType.Audio).ToList();
             if (audioTracks.Count == 0)
@@ -659,7 +691,11 @@ public class AudioCdCompilation
             }
 
             AudioFormatMetadata? meta = null;
-            if (File.Exists(audioFilePath))
+            if (rawFile)
+            {
+                // Raw CD audio: no header to read, no decoder needed.
+            }
+            else if (File.Exists(audioFilePath))
             {
                 try
                 {
@@ -682,7 +718,11 @@ public class AudioCdCompilation
             }
 
             int totalFileFrames = 0;
-            if (meta != null)
+            if (rawFile && File.Exists(audioFilePath))
+            {
+                totalFileFrames = RawCdAudioFile.FrameCount(audioFilePath);
+            }
+            else if (meta != null)
             {
                 totalFileFrames = meta.TotalRedBookBytes > 0
                     ? OpticalConstants.BytesToSectors(meta.TotalRedBookBytes, OpticalConstants.RawSectorSize)
@@ -695,6 +735,19 @@ public class AudioCdCompilation
 
                 var trk = audioTracks[0];
                 int trackNum = _tracks.Count + 1;
+                bool afterData = _tracks.Count > 0 && _tracks[^1].IsDataTrack;
+                Func<Stream>? rawFactory = null;
+                int rawFrames = totalFileFrames;
+                int rawGap = 0;
+                if (rawFile)
+                {
+                    // The first audio track after a data track starts at its INDEX 01, after a generated pre-gap of
+                    // at least two seconds (Yellow Book). Otherwise the whole file is the track, as for a WAVE file.
+                    int start = afterData ? GetIndex01Frames(trk) ?? 0 : 0;
+                    rawGap = afterData ? Math.Max(0, start - (GetIndex00Frames(trk) ?? start)) : 0;
+                    rawFrames = Math.Max(0, totalFileFrames - start);
+                    rawFactory = RawCdAudioFile.CreateSliceFactory(audioFilePath, start, null, IsMotorola(file));
+                }
                 string title = !string.IsNullOrWhiteSpace(trk.Title)
                     ? trk.Title
                     : (!string.IsNullOrWhiteSpace(meta?.Title) ? meta.Title : Path.GetFileNameWithoutExtension(audioFilePath));
@@ -702,6 +755,10 @@ public class AudioCdCompilation
                     ? trk.Performer
                     : (!string.IsNullOrWhiteSpace(meta?.Artist) ? meta.Artist : AlbumPerformer);
                 int preGap = trk.PreGap?.ToFrameCount() ?? (trackNum == 1 ? DefaultPreGapFrames : 0);
+                if (afterData)
+                {
+                    preGap = Math.Max(preGap, Math.Max(MixedModeAudioPreGapFrames, rawGap));
+                }
 
                 AddTrack(new AudioCdTrackItem(
                     TrackNumber: trackNum,
@@ -709,11 +766,14 @@ public class AudioCdCompilation
                     Title: title,
                     Performer: performer,
                     Isrc: !string.IsNullOrWhiteSpace(trk.Isrc) ? trk.Isrc : meta?.Isrc,
-                    PreGapFrames: preGap)
+                    PreGapFrames: preGap,
+                    CustomPcmStreamFactory: rawFactory)
                 {
                     Songwriter = trk.Songwriter ?? meta?.Songwriter ?? Songwriter,
                     Composer = meta?.Composer ?? Composer,
-                    DurationFrames = totalFileFrames,
+                    DurationFrames = rawFile ? rawFrames : totalFileFrames,
+                    RawFileType = rawFile ? file.FileType.ToUpperInvariant() : null,
+                    SourceStartFrame = rawFile ? (afterData ? GetIndex01Frames(trk) ?? 0 : 0) : null,
                     PreEmphasis = trk.Flags.Contains("PRE"),
                     CopyPermitted = trk.Flags.Contains("DCP")
                 });
@@ -723,18 +783,17 @@ public class AudioCdCompilation
             {
                 // Single-file CUE sheet with multiple INDEX 01 track offsets inside one audio file (.flac / .wav / etc.).
                 // The album is decoded once (lazily) and every track reads a zero-copy slice of it.
-                var album = new SingleFileAlbumSource(audioFilePath, audioDecoder);
+                // Raw CD audio is read straight from the file; anything else is decoded once and sliced.
+                var album = rawFile ? null : new SingleFileAlbumSource(audioFilePath, audioDecoder);
+                bool motorola = IsMotorola(file);
+                Func<Stream> Slice(int start, int? count) => album != null
+                    ? album.CreateSliceFactory(start, count)
+                    : RawCdAudioFile.CreateSliceFactory(audioFilePath, start, count, motorola);
 
                 // Each slice runs from this track's INDEX 01 to the next track's INDEX 01. Audio between the next
                 // track's INDEX 00 and INDEX 01 (its pre-gap) therefore stays at the tail of this track: it is
                 // played exactly once, never duplicated or clipped. (The burn engine writes pre-gaps as generated
                 // silence, so moving that audio into PreGapFrames would replace real audio with silence.)
-                static int? GetIndex01Frames(CueTrack track) =>
-                    (track.Indices.FirstOrDefault(idx => idx.IndexNumber == 1) ?? track.Indices.FirstOrDefault())?.Position.ToFrameCount();
-
-                static int? GetIndex00Frames(CueTrack track) =>
-                    track.Indices.FirstOrDefault(idx => idx.IndexNumber == 0)?.Position.ToFrameCount();
-
                 for (int k = 0; k < audioTracks.Count; k++)
                 {
                     if (_tracks.Count >= MaxTracks) break;
@@ -752,6 +811,12 @@ public class AudioCdCompilation
                     string title = !string.IsNullOrWhiteSpace(trk.Title) ? trk.Title : $"Track {trackNum:D2}";
                     string performer = !string.IsNullOrWhiteSpace(trk.Performer) ? trk.Performer : AlbumPerformer;
                     int preGap = trk.PreGap?.ToFrameCount() ?? (trackNum == 1 ? DefaultPreGapFrames : 0);
+                    if (k == 0 && _tracks.Count > 0 && _tracks[^1].IsDataTrack)
+                    {
+                        // After a data track: a generated pre-gap of at least two seconds, covering the cue's INDEX 00.
+                        int gap = GetIndex00Frames(trk) is int i00 && i00 < startFrame ? startFrame - i00 : 0;
+                        preGap = Math.Max(preGap, Math.Max(MixedModeAudioPreGapFrames, gap));
+                    }
 
                     // INDEX 00 marks: for a later track the gap audio is the tail of the previous slice; for the
                     // first track of the file it is audio in front of INDEX 01 that no slice covers.
@@ -774,7 +839,7 @@ public class AudioCdCompilation
                         Performer: performer,
                         Isrc: trk.Isrc,
                         PreGapFrames: preGap,
-                        CustomPcmStreamFactory: album.CreateSliceFactory(startFrame, sliceFrameCount))
+                        CustomPcmStreamFactory: Slice(startFrame, sliceFrameCount))
                     {
                         Songwriter = trk.Songwriter ?? Songwriter,
                         Composer = Composer,
@@ -782,9 +847,10 @@ public class AudioCdCompilation
                         SourceStartFrame = startFrame,
                         SourceFrameCount = sliceFrameCount,
                         AlbumSource = album,
+                        RawFileType = rawFile ? file.FileType.ToUpperInvariant() : null,
                         Index00LeadFrames = index00Lead,
                         HiddenAudioFrames = hiddenFrames,
-                        HiddenAudioPcmStreamFactory = hiddenFrames > 0 ? album.CreateSliceFactory(0, hiddenFrames) : null,
+                        HiddenAudioPcmStreamFactory = hiddenFrames > 0 ? Slice(0, hiddenFrames) : null,
                         PreEmphasis = trk.Flags.Contains("PRE"),
                         CopyPermitted = trk.Flags.Contains("DCP")
                     });
@@ -794,6 +860,53 @@ public class AudioCdCompilation
         }
 
         return added;
+    }
+
+    /// <summary>Pre-gap of the first audio track after a data track: two seconds (Yellow Book).</summary>
+    public const int MixedModeAudioPreGapFrames = 2 * OpticalConstants.AudioFramesPerSecond;
+
+    private static int? GetIndex01Frames(CueTrack track) =>
+        (track.Indices.FirstOrDefault(idx => idx.IndexNumber == 1) ?? track.Indices.FirstOrDefault())?.Position.ToFrameCount();
+
+    private static int? GetIndex00Frames(CueTrack track) =>
+        track.Indices.FirstOrDefault(idx => idx.IndexNumber == 0)?.Position.ToFrameCount();
+
+    private static bool IsMotorola(CueFileEntry file) => string.Equals(file.FileType, "MOTOROLA", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Track 1 of a mixed-mode cue sheet as a data track: from its INDEX 01 to where the next track in the same file
+    /// begins (its INDEX 00, else INDEX 01), or to the end of the file. A rip keeps the two-second post-gap at the end
+    /// of the data track; when those sectors are zeros they are left to the writer, which writes the same zeros there.
+    /// </summary>
+    private AudioCdTrackItem ImportDataTrack(CueFileEntry file, string filePath)
+    {
+        var trk = file.Tracks[0];
+        int sectorSize = trk.DataType == CueTrackDataType.Mode1_2048 ? DataTrackImage.UserDataSize : OpticalConstants.RawSectorSize;
+        long start = (long)(GetIndex01Frames(trk) ?? 0) * sectorSize;
+        long end = new FileInfo(filePath).Length;
+        if (file.Tracks.Count > 1)
+        {
+            var next = file.Tracks[1];
+            end = (long)(GetIndex00Frames(next) ?? GetIndex01Frames(next) ?? 0) * OpticalConstants.RawSectorSize;
+        }
+        int sectors = (int)Math.Max(0, (end - start) / sectorSize);
+        var image = DataTrackImage.Open(filePath, start, sectors, sectorSize);
+        int postGap = image.CountTrailingZeroSectors(MixedModeAudioPreGapFrames);
+        if (postGap > 0 && sectors - postGap >= 4 * OpticalConstants.AudioFramesPerSecond)
+        {
+            image = image with { SectorCount = sectors - postGap };
+        }
+
+        return new AudioCdTrackItem(
+            TrackNumber: 1,
+            SourceFilePath: filePath,
+            Title: !string.IsNullOrWhiteSpace(trk.Title) ? trk.Title : "Data track",
+            Performer: !string.IsNullOrWhiteSpace(trk.Performer) ? trk.Performer : AlbumPerformer,
+            PreGapFrames: OpticalConstants.CdLeadInFrames)
+        {
+            DataTrack = image,
+            DurationFrames = image.SectorCount
+        };
     }
 
     /// <summary>
