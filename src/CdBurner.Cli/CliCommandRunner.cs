@@ -1181,6 +1181,7 @@ public static class CliCommandRunner
             throw new CommandLineException("Missing required option: --video-ts <folder-or-movie>");
         }
         string? volumeLabel = cmd.GetOption("label");
+        var (nativeEngine, testWrite) = ResolveNativeDataEngine(cmd, burnEngine);
 
         var pathTokens = videoTsInput.Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         bool allTokensExist = pathTokens.Length > 0 && pathTokens.All(p => File.Exists(p) || Directory.Exists(p));
@@ -1304,14 +1305,16 @@ public static class CliCommandRunner
                 IncludeJoliet: false,
                 UdfRevision: 0x0102);
 
-            var burnService = new DataBurnService(burnEngine);
+            var burnService = new DataBurnService(nativeEngine ?? burnEngine);
             var dvdOptions = new DataBurnOptions
             {
                 VolumeLabel = effectiveLabel,
                 CloseDisc = true,
                 OverwriteExistingData = cmd.HasFlag("overwrite"),
                 Speed = ParseSpeed(cmd.GetOption("speed"), recorder, recorder.QueryMediaStatus().MediaType),
-                VerifyAfterBurn = !cmd.HasFlag("no-verify")
+                Simulate = testWrite,
+                // Read back by default; a test write records nothing; a direct burn is always read back.
+                VerifyAfterBurn = !testWrite && (!cmd.HasFlag("no-verify") || nativeEngine != null)
             };
             result = await burnService.BurnCompilationAsync(recorder, root, dvdOptions, buildOptions).ConfigureAwait(false);
         }
@@ -1335,6 +1338,10 @@ public static class CliCommandRunner
                 totalTime = result.TotalTime.ToString(),
                 totalTimeSeconds = result.TotalTime.TotalSeconds,
                 averageSpeedMultiplier = result.AverageSpeedMultiplier,
+                testWrite,
+                verified = result.Verified,
+                verificationNote = result.VerificationNote,
+                directWrite = NativeDataJson(nativeEngine),
                 error = result.ErrorMessage
             };
 
@@ -1344,11 +1351,16 @@ public static class CliCommandRunner
 
         if (result.Success)
         {
-            stdout.WriteLine("DVD-Video burned successfully:");
+            stdout.WriteLine(testWrite ? "DVD-Video test write completed (laser off; the disc was not written):" : "DVD-Video burned successfully:");
             stdout.WriteLine($"  Drive:          {recorder.UniqueId}");
             stdout.WriteLine($"  Volume Label:   {effectiveLabel}");
             stdout.WriteLine($"  Sectors Burned: {result.SectorsWritten:N0}");
             stdout.WriteLine($"  Duration:       {result.TotalTime}");
+            stdout.WriteLine($"  Verified:       {(result.Verified ? "yes" : "no")}{(string.IsNullOrEmpty(result.VerificationNote) ? "" : " - " + result.VerificationNote)}");
+            if (nativeEngine?.LastLogPath != null)
+            {
+                stdout.WriteLine($"  Command log:    {nativeEngine.LastLogPath}");
+            }
             return 0;
         }
 
@@ -2482,7 +2494,7 @@ public static class CliCommandRunner
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
         stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--allow-damaged] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
-        stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite] [--json]");
+        stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");

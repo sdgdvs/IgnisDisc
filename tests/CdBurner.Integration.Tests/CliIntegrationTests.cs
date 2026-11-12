@@ -909,6 +909,41 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task BurnDvd_Native_WritesDirectly_AndReadsBack()
+    {
+        using var medium = VirtualDiscMedium.CreateBlankDvdR47();
+        _recorder.InsertMedia(medium);
+
+        string dvdDir = Path.Combine(_tempDir, "DvdNativeSource");
+        string videoTsDir = Path.Combine(dvdDir, "VIDEO_TS");
+        Directory.CreateDirectory(videoTsDir);
+        byte[] vmg = DvdVideoValidator.CreateSyntheticVmgIfo();
+        byte[] vts = DvdVideoValidator.CreateSyntheticVtsIfo();
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VIDEO_TS.IFO"), vmg);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VIDEO_TS.VOB"), new byte[2048]);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VIDEO_TS.BUP"), (byte[])vmg.Clone());
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_0.IFO"), vts);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_0.VOB"), new byte[2048]);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_1.VOB"), new byte[4096]);
+        File.WriteAllBytes(Path.Combine(videoTsDir, "VTS_01_0.BUP"), (byte[])vts.Clone());
+        string logs = Path.Combine(_tempDir, "dvd-native-logs");
+
+        var (stdout, stderr) = CreateStringWriters();
+        int exitCode = await CliCommandRunner.RunAsync(
+            new[] { "burn-dvd", "--drive", "VDRV-01", "--video-ts", dvdDir, "--native", "--log-dir", logs, "--json" },
+            stdout, stderr, _deviceService, _burnEngine);
+
+        Assert.True(exitCode == 0, stderr.ToString());
+        using var doc = ParseJsonOutput(stdout);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("verified").GetBoolean());
+        var direct = root.GetProperty("directWrite");
+        Assert.Equal("direct", direct.GetProperty("writer").GetString());
+        Assert.True(File.Exists(direct.GetProperty("commandLog").GetString()));
+        Assert.True(medium.IsFinalized);
+    }
+
+    [Fact]
     public async Task BurnDvd_DirectMkvFile_AutoAuthorsMenuAndBurnsSuccessfully()
     {
         using var medium = VirtualDiscMedium.CreateBlankDvdR47();
