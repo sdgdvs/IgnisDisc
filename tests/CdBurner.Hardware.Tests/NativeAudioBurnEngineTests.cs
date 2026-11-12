@@ -475,4 +475,35 @@ public sealed class NativeAudioBurnEngineTests : IDisposable
         Assert.Equal(0, engine.LastWriteOffsetPlan!.ShiftSamples);
         Assert.Contains("read offset is not known", engine.LastWriteOffsetPlan.Explanation);
     }
+
+    [Theory]
+    [InlineData(6)]
+    [InlineData(-6)]
+    [InlineData(700)]   // more than a sector (588 samples)
+    [InlineData(-1300)] // more than two sectors, earlier
+    public void ShiftedProgramArea_IsTheUnshiftedOneMovedByWholeSamples_AllTheWayThrough(int shift)
+    {
+        // Three tracks of odd lengths, the last ending mid-sector, so the shift crosses every kind of boundary.
+        byte[][] audio = [Pcm(11, 307), Pcm(12, 313)[..(313 * SectorSize - 1000)], Pcm(13, 305)[..(305 * SectorSize - 4)]];
+        var tracks = new[] { new SaoTrack(1, 307, 150), new SaoTrack(2, 313), new SaoTrack(3, 305) }; // Red Book: at least 4 s each
+        NativeSaoWriteRequest Request(int s) => new(tracks, i => new MemoryStream(audio[i]), null, null, TestWrite: false) { ShiftSamples = s };
+
+        var plain = new VirtualMmcDrive();
+        var reference = new NativeSaoAudioWriter(plain, sleep: _ => { }).Write(Request(0));
+        Assert.True(reference.Success, reference.Message);
+        var moved = new VirtualMmcDrive();
+        var result = new NativeSaoAudioWriter(moved, sleep: _ => { }).Write(Request(shift));
+        Assert.True(result.Success, result.Message);
+        Assert.True(result.Verification!.Passed, result.Verification.Message);
+
+        byte[] a = plain.ProgramAreaWritten.ToArray(), b = moved.ProgramAreaWritten.ToArray();
+        Assert.Equal(a.Length, b.Length);
+        int bytes = shift * 4;
+        for (int i = 0; i < b.Length; i++)
+        {
+            int from = i - bytes;
+            byte expected = from >= 0 && from < a.Length ? a[from] : (byte)0;
+            Assert.True(expected == b[i], $"byte {i} (sector {i / SectorSize}) differs");
+        }
+    }
 }

@@ -471,8 +471,12 @@ public sealed class NativeSaoVerifier
 
     // ---- Careful re-read of the sectors that differed ----
 
-    /// <summary>Most sectors re-read one by one; beyond this (about a minute of audio) the disc is not marginal but bad.</summary>
-    public const int MaxRecheckSectors = 4_500;
+    /// <summary>
+    /// Most sectors re-read carefully (about 6.7 minutes of audio; the expected audio for them is held in memory, up to
+    /// about 70 MB). It was 4,500 until a CD-R of a weak batch read 2.5 million samples wrong straight after its burn,
+    /// over more than 4,500 sectors, yet ripped sample-exact minutes later with 198 re-reads (2026-11-11).
+    /// </summary>
+    public const int MaxRecheckSectors = 30_000;
 
     /// <summary>Re-read rounds; the drive's cache is flushed before each so the reads come from the disc.</summary>
     public const int RecheckRounds = 5;
@@ -481,6 +485,12 @@ public sealed class NativeSaoVerifier
     private const int CacheFlushSectors = 1024;
 
     private const int C2Bytes = 294;
+
+    /// <summary>
+    /// Sectors per READ CD with C2 pointers: 24 × 2,646 bytes = 63,504, inside the 64 KiB per command that USB bridges such
+    /// as the GP60NB50's pass (27 would be 71,442 and fail with Win32 error 87).
+    /// </summary>
+    public const int C2SectorsPerCommand = 65_536 / (SectorSize + C2Bytes);
 
     private sealed record RecheckOutcome(List<int> HardToRead, List<int> WrittenWrong, List<int> Unreadable, bool C2Available);
 
@@ -506,7 +516,7 @@ public sealed class NativeSaoVerifier
             }
 
             FlushReadCache(remaining[0], totalSectors);
-            foreach (var (start, count) in Runs(remaining))
+            foreach (var (start, count) in Runs(remaining, C2SectorsPerCommand))
             {
                 ct.ThrowIfCancellationRequested();
                 int stride = c2 ? SectorSize + C2Bytes : SectorSize;
@@ -624,13 +634,13 @@ public sealed class NativeSaoVerifier
     }
 
     /// <summary>Groups sorted sector numbers into contiguous runs of at most one READ CD each.</summary>
-    private static IEnumerable<(int Start, int Count)> Runs(List<int> sorted)
+    private static IEnumerable<(int Start, int Count)> Runs(List<int> sorted, int maxPerRun)
     {
         int i = 0;
         while (i < sorted.Count)
         {
             int start = sorted[i], count = 1;
-            while (i + count < sorted.Count && sorted[i + count] == start + count && count < ReadSectorsPerCommand)
+            while (i + count < sorted.Count && sorted[i + count] == start + count && count < maxPerRun)
             {
                 count++;
             }

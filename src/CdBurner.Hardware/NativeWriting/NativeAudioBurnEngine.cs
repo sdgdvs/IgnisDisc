@@ -267,9 +267,10 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
                     log.Note($"Combined offset measured {measured:+0;-0;0}, where an earlier burn measured {old:+0;-0;0}; the new value is kept.");
                 }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                // Not saved: the next burn just measures it again.
+                // Not saved: the next burn just measures it again. The disc is written either way.
+                log.Note($"The measured combined offset could not be saved: {ex.Message}");
             }
         }
         if (result.DiscRecorded && recorder is VirtualDiscRecorder { CurrentMedium: { } medium } && virtualDrive != null)

@@ -156,6 +156,25 @@ public class NativeSaoRealWriteTests
         Assert.True(drive.C2ReadCommands > 0);
     }
 
+
+    [Fact]
+    public void ManyMarginalSectors_BeyondTheOldLimit_AreStillReReadAndPass()
+    {
+        // As the old CD-R batch straight after a burn (2026-11-11): thousands of sectors misread in the fast pass,
+        // all of them right on a careful re-read. The old limit of 4,500 sectors failed such a disc unread.
+        const int sectors = 2_500;
+        var request = new NativeSaoWriteRequest(
+            new[] { new SaoTrack(1, sectors, 150), new SaoTrack(2, sectors) },
+            i => new MemoryStream(Pcm(i + 1, sectors)), null, null, TestWrite: false);
+        var drive = new VirtualMmcDrive { MarginalBadReads = 1 };
+        drive.MarginalLbas.UnionWith(Enumerable.Range(100, 4_701));
+
+        var result = Run(drive, request);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(4_701, result.Verification!.HardToReadSectors);
+        Assert.Contains("hard to read", result.Verification.Warning);
+    }
     [Fact]
     public void MarginalSector_ThatNeverReadsRight_FailsAsUnreadable()
     {

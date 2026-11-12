@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace CdBurner.Core.Audio;
 
@@ -167,21 +168,44 @@ public sealed class DriveOffsetStore
         var all = Load();
         all.TryGetValue(driveName, out var old);
         all[driveName] = new Entry(samples, (old?.Measurements ?? 0) + 1, DateTime.UtcNow);
+        // Written by hand (no reflection), so it works the same in trimmed or AOT builds.
+        var root = new JsonObject();
+        foreach (var (name, e) in all.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            root[name] = new JsonObject
+            {
+                ["combinedOffsetSamples"] = e.CombinedOffsetSamples,
+                ["measurements"] = e.Measurements,
+                ["lastMeasuredUtc"] = e.LastMeasuredUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+            };
+        }
         string temp = _path + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(temp, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         File.Move(temp, _path, overwrite: true);
         return old != null && old.CombinedOffsetSamples != samples ? old.CombinedOffsetSamples : null;
     }
 
     private Dictionary<string, Entry> Load()
     {
+        var all = new Dictionary<string, Entry>();
         try
         {
-            return File.Exists(_path)
-                ? JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(_path)) ?? new()
-                : new();
+            if (!File.Exists(_path) || JsonNode.Parse(File.ReadAllText(_path)) is not JsonObject root)
+            {
+                return all;
+            }
+            foreach (var (name, node) in root)
+            {
+                if (node is JsonObject o && o["combinedOffsetSamples"]?.GetValue<int>() is int combined)
+                {
+                    DateTime.TryParse(o["lastMeasuredUtc"]?.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out DateTime when);
+                    all[name] = new Entry(combined, o["measurements"]?.GetValue<int>() ?? 1, when);
+                }
+            }
+            return all;
         }
-        catch (Exception ex) when (ex is JsonException or IOException)
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or FormatException)
         {
             return new(); // a damaged file only means measuring again
         }
