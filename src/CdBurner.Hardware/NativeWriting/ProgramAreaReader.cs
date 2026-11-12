@@ -1,7 +1,8 @@
 namespace CdBurner.Hardware.NativeWriting;
 
 /// <summary>
-/// Produces the program area of a Session-at-Once audio disc one 2,352-byte sector at a time, starting at LBA −150:
+/// Produces the program area of a Session-at-Once audio disc one 2,352-byte sector at a time, starting at LBA −150
+/// (on a mixed-mode CD: at the first audio track, <see cref="SaoAudioLayout.AudioStartLba"/>; the data track is skipped):
 /// for each track its pre-gap (silence, then any pre-gap audio from the track's stream) and then its audio. The
 /// writer sends these sectors to the drive and the read-back check builds the same sequence again to compare, so
 /// both always agree on what belongs on the disc.
@@ -38,8 +39,8 @@ internal sealed class ProgramAreaReader : IDisposable
         _note = note ?? (_ => { });
         _shiftBytes = checked(shiftSamples * 4);
         _leadingSilence = Math.Max(0, _shiftBytes);
-        _totalSectors = layout.Tracks.Sum(t => t.PreGapSectors + t.SectorCount);
-        if (Math.Abs(_shiftBytes) >= (long)_totalSectors * SectorSize)
+        _totalSectors = layout.Tracks.Where(t => !t.IsData).Sum(t => t.PreGapSectors + t.SectorCount);
+        if (_shiftBytes != 0 && Math.Abs(_shiftBytes) >= (long)_totalSectors * SectorSize)
         {
             throw new ArgumentOutOfRangeException(nameof(shiftSamples), "The shift is longer than the program area.");
         }
@@ -114,6 +115,14 @@ internal sealed class ProgramAreaReader : IDisposable
         while (_track < _layout.Tracks.Count)
         {
             var track = _layout.Tracks[_track];
+            if (track.IsData)
+            {
+                // A mixed-mode CD's data track is written by the writer itself in 2,048-byte sectors; this reader
+                // produces the audio only, starting at the first audio track (SaoAudioLayout.AudioStartLba).
+                _track++;
+                _sectorInTrack = 0;
+                continue;
+            }
             int total = track.PreGapSectors + track.SectorCount;
             if (_sectorInTrack >= total)
             {

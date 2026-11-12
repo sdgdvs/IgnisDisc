@@ -58,6 +58,9 @@ public sealed record NativeSaoWriteResult
 
     /// <summary>Average speed the drive took the audio at (program area, from the host side), in audio "x"; 0 when not measured.</summary>
     public double AverageWriteMultiplier { get; init; }
+
+    /// <summary>Mode 1 sectors written for a mixed-mode CD's data track (its pre-gap and post-gap included).</summary>
+    public int DataSectorsWritten { get; init; }
 }
 
 /// <summary>
@@ -69,6 +72,8 @@ public sealed record NativeSaoWriteResult
 public sealed class NativeSaoAudioWriter
 {
     public const ushort AudioSectorsPerWrite = 27;     // 63,504 bytes, under the common 64 KiB transfer limit
+    public const ushort DataSectorsPerWrite = 32;      // 65,536 bytes of Mode 1 user data: exactly the 64 KiB limit
+    public const int DataSectorSize = 2048;
     public const ushort LeadInSectorsPerWrite = 640;   // 61,440 bytes
     public const ushort ProfileCdR = 0x0009;
     public const ushort ProfileCdRw = 0x000A;
@@ -141,6 +146,12 @@ public sealed class NativeSaoAudioWriter
         }
 
         bool cdText = leadInCycle != null;
+        if (layout.HasDataTrack && request.ShiftSamples != 0)
+        {
+            // The shift moves audio across sector boundaries; the data track's sectors cannot move with it.
+            _note($"Mixed-mode CD: the write-offset correction ({request.ShiftSamples:+0;-0} samples) is not applied.");
+            request = request with { ShiftSamples = 0 };
+        }
         Check(ct);
 
         // 1. Drive ready, disc type, Session-at-Once support.
@@ -302,7 +313,8 @@ public sealed class NativeSaoAudioWriter
             DiscStillBlankAfterTestWrite = stillBlank,
             DiscRecorded = !request.TestWrite,
             Verification = verification,
-            AverageWriteMultiplier = averageMultiplier
+            AverageWriteMultiplier = averageMultiplier,
+            DataSectorsWritten = state.DataSectors
         };
     }
 
@@ -344,16 +356,21 @@ public sealed class NativeSaoAudioWriter
     private void WriteProgramArea(NativeSaoWriteRequest request, SaoAudioLayout layout, RunState state, ProgressReporter reporter, int doneBefore, CancellationToken ct)
     {
         const int sectorSize = ProgramAreaReader.SectorSize;
+        if (layout.HasDataTrack)
+        {
+            WriteDataTrack(request, layout.Tracks[0], state, reporter, doneBefore, ct);
+        }
+
         byte[] buffer = new byte[AudioSectorsPerWrite * sectorSize];
         int filled = 0;
-        int chunkLba = SaoAudioLayout.FirstWritableLba;
+        int chunkLba = layout.AudioStartLba; // -150, or right after a mixed-mode CD's data track
 
         void FlushChunk()
         {
             if (filled == 0) return;
             WriteBlocks(chunkLba, (ushort)filled, buffer.AsSpan(0, filled * sectorSize), state);
             state.AudioSectors += filled;
-            reporter.Report(doneBefore + state.AudioSectors, "Writing audio");
+            reporter.Report(doneBefore + state.DataSectors + state.AudioSectors, "Writing audio");
             chunkLba += filled;
             filled = 0;
         }
@@ -387,6 +404,80 @@ public sealed class NativeSaoAudioWriter
         {
             throw Stop($"Internal error: wrote up to LBA {chunkLba}, expected {layout.LeadOutLba}.");
         }
+    }
+
+    /// <summary>
+    /// A mixed-mode CD's data track: its pre-gap from LBA -150, the image, and the post-gap, all as 2,048-byte Mode 1
+    /// sectors (data form 10h: the drive adds sync, header, EDC and ECC). No WRITE reaches past the track, because the
+    /// audio after it is sent in 2,352-byte sectors and one WRITE has one block size.
+    /// </summary>
+    private void WriteDataTrack(NativeSaoWriteRequest request, SaoTrackPlacement track, RunState state, ProgressReporter reporter, int doneBefore, CancellationToken ct)
+    {
+        int dataSectors = track.SectorCount - track.PostGapSectors;
+        byte[] buffer = new byte[DataSectorsPerWrite * DataSectorSize];
+        Stream image;
+        try
+        {
+            image = request.OpenTrackAudio(0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw Stop($"Could not open the data track: {ex.Message}");
+        }
+
+        using (image)
+        {
+            int lba = track.PreGapLba;
+            bool imageEnded = false;
+            while (lba < track.EndLba)
+            {
+                Check(ct, state);
+                int count = Math.Min(DataSectorsPerWrite, track.EndLba - lba);
+                var chunk = buffer.AsSpan(0, count * DataSectorSize);
+                chunk.Clear();
+                for (int i = 0; i < count; i++)
+                {
+                    int sector = lba + i;
+                    bool holdsImage = sector >= track.Index01Lba && sector < track.Index01Lba + dataSectors;
+                    if (!holdsImage || imageEnded)
+                    {
+                        continue; // pre-gap, post-gap, or padding after a short image: zeros
+                    }
+                    int got;
+                    try
+                    {
+                        got = ReadFully(image, chunk.Slice(i * DataSectorSize, DataSectorSize));
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        throw Stop($"Could not read the data track: {ex.Message}");
+                    }
+                    if (got < DataSectorSize)
+                    {
+                        imageEnded = true;
+                        _note($"The data track's image ended at sector {sector - track.Index01Lba}; the rest of the track is zeros.");
+                    }
+                }
+
+                WriteBlocks(lba, (ushort)count, chunk, state);
+                state.DataSectors += count;
+                reporter.Report(doneBefore + state.DataSectors, "Writing the data track");
+                lba += count;
+            }
+        }
+        _note($"Data track written: {dataSectors:N0} sectors of data, {track.PostGapSectors} of post-gap, from LBA {track.PreGapLba} to {track.EndLba}.");
+    }
+
+    private static int ReadFully(Stream s, Span<byte> destination)
+    {
+        int total = 0;
+        while (total < destination.Length)
+        {
+            int n = s.Read(destination.Slice(total));
+            if (n <= 0) break;
+            total += n;
+        }
+        return total;
     }
 
     private void WriteBlocks(int lba, ushort count, Span<byte> data, RunState state)
@@ -638,6 +729,7 @@ public sealed class NativeSaoAudioWriter
         public bool TestWriteNotOffered;
         public int LeadInSectors;
         public int AudioSectors;
+        public int DataSectors;
         public CueSheetVariant? Variant;
         public byte? BlockType;
     }

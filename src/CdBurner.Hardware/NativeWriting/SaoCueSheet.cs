@@ -11,6 +11,8 @@ namespace CdBurner.Hardware.NativeWriting;
 /// hidden audio that a player reaches by rewinding from the start of the disc.</param>
 /// <param name="PreEmphasis">Sets the pre-emphasis flag in the track's control bits.</param>
 /// <param name="CopyPermitted">Sets the digital-copy-permitted flag in the track's control bits.</param>
+/// <param name="IsData">A CD-ROM Mode 1 data track: <paramref name="SectorCount"/> 2,048-byte sectors, which the drive
+/// frames with sync, header and error correction itself. Only track 1 may be one (a mixed-mode CD: data, then audio).</param>
 public sealed record SaoTrack(
     int TrackNumber,
     int SectorCount,
@@ -18,7 +20,8 @@ public sealed record SaoTrack(
     string? Isrc = null,
     int PreGapAudioSectors = 0,
     bool PreEmphasis = false,
-    bool CopyPermitted = false);
+    bool CopyPermitted = false,
+    bool IsData = false);
 
 /// <summary>Where each track lands on the disc.</summary>
 public sealed record SaoTrackPlacement(int TrackNumber, int PreGapLba, int Index01Lba, int EndLba, string? Isrc)
@@ -32,12 +35,21 @@ public sealed record SaoTrackPlacement(int TrackNumber, int PreGapLba, int Index
     public bool PreEmphasis { get; init; }
     public bool CopyPermitted { get; init; }
 
+    /// <summary>A Mode 1 data track (written in 2,048-byte sectors, data form 10h).</summary>
+    public bool IsData { get; init; }
+
+    /// <summary>
+    /// Sectors of zeros at the end of a data track that is followed by audio: the Yellow Book's post-gap of at least two
+    /// seconds, written in the data track's mode. Included in <see cref="SectorCount"/>; 0 for audio tracks.
+    /// </summary>
+    public int PostGapSectors { get; init; }
+
     /// <summary>
     /// The control bits as SEND CUE SHEET wants them (high nibble of the CTL/ADR byte): 0x10 pre-emphasis,
-    /// 0x20 digital copy permitted. The same bits appear in the low nibble of the TOC's ADR/CONTROL byte
-    /// (<see cref="TocControl"/>).
+    /// 0x20 digital copy permitted, 0x40 data track. The same bits appear in the low nibble of the TOC's ADR/CONTROL
+    /// byte (<see cref="TocControl"/>).
     /// </summary>
-    public byte CueControl => (byte)((PreEmphasis ? 0x10 : 0) | (CopyPermitted ? 0x20 : 0));
+    public byte CueControl => (byte)(IsData ? 0x40 : (PreEmphasis ? 0x10 : 0) | (CopyPermitted ? 0x20 : 0));
 
     public byte TocControl => (byte)(CueControl >> 4);
 }
@@ -53,6 +65,15 @@ public sealed class SaoAudioLayout
     public IReadOnlyList<SaoTrackPlacement> Tracks { get; }
     public int LeadOutLba { get; }
     public int TotalSectors => LeadOutLba - FirstWritableLba;
+
+    /// <summary>Track 1 is a Mode 1 data track (a mixed-mode CD).</summary>
+    public bool HasDataTrack => Tracks[0].IsData;
+
+    /// <summary>Where the audio starts: the first audio track's pre-gap (-150 on an all-audio disc).</summary>
+    public int AudioStartLba => Tracks.FirstOrDefault(t => !t.IsData)?.PreGapLba ?? LeadOutLba;
+
+    /// <summary>Sectors that carry audio, from <see cref="AudioStartLba"/> to the lead-out.</summary>
+    public int AudioSectors => LeadOutLba - AudioStartLba;
 
     private SaoAudioLayout(IReadOnlyList<SaoTrackPlacement> tracks, int leadOutLba)
     {
@@ -81,6 +102,12 @@ public sealed class SaoAudioLayout
             {
                 throw new ArgumentException($"Track {t.TrackNumber} is shorter than the 4-second Red Book minimum.", nameof(tracks));
             }
+            if (t.IsData && (i != 0 || t.PreGapAudioSectors != 0 || t.PreEmphasis || t.Isrc != null))
+            {
+                throw new ArgumentException(i != 0
+                    ? $"Track {t.TrackNumber} is a data track; only track 1 can be (a mixed-mode CD has its data first)."
+                    : "A data track has no pre-gap audio, pre-emphasis or ISRC.", nameof(tracks));
+            }
             if (t.PreGapSectors < 0)
             {
                 throw new ArgumentException($"Track {t.TrackNumber} has a negative pre-gap.", nameof(tracks));
@@ -99,12 +126,16 @@ public sealed class SaoAudioLayout
             }
 
             int index01 = lba + preGap;
-            int end = index01 + t.SectorCount;
+            // A data track followed by audio ends with a post-gap of two seconds in data mode (Yellow Book; libburn's cookbook).
+            int postGap = t.IsData && i + 1 < tracks.Count ? 2 * Msf.FramesPerSecond : 0;
+            int end = index01 + t.SectorCount + postGap;
             placements.Add(new SaoTrackPlacement(t.TrackNumber, lba, index01, end, NormalizeIsrc(t.Isrc))
             {
                 PreGapAudioSectors = t.PreGapAudioSectors,
                 PreEmphasis = t.PreEmphasis,
-                CopyPermitted = t.CopyPermitted
+                CopyPermitted = t.CopyPermitted,
+                IsData = t.IsData,
+                PostGapSectors = postGap
             });
             lba = end;
         }
@@ -204,6 +235,12 @@ public static class SaoCueSheetBuilder
     /// <summary>Data form for the lead-in and lead-out: CD-DA generated by the drive.</summary>
     public const byte DataFormGenerated = 0x01;
 
+    /// <summary>
+    /// Data form for a CD-ROM Mode 1 track: 2,048 bytes of user data a sector from the host; the drive adds sync, header,
+    /// EDC and ECC (MMC; libburn's cookbook: "10h for data").
+    /// </summary>
+    public const byte DataFormMode1 = 0x10;
+
     /// <summary>Data form for a CD-Text lead-in: main data generated by the drive, R-W sub-channel from the host.</summary>
     public const byte DataFormLeadInWithRw = 0x41;
 
@@ -217,9 +254,11 @@ public static class SaoCueSheetBuilder
     {
         ArgumentNullException.ThrowIfNull(layout);
         var entries = new List<byte[]>();
-        // Lead-in, catalog number and lead-out entries carry plain two-channel audio control bits. Each track's own
-        // entries carry that track's pre-emphasis and copy-permitted bits, as cdrdao's generic MMC driver sends them.
-        const byte ctl = 0x00;
+        // Lead-in and catalog number entries carry the first track's data bit, the lead-out the last track's (libburn's
+        // cookbook); audio control bits stay plain two-channel there. Each track's own entries carry that track's
+        // pre-emphasis and copy-permitted bits, as cdrdao's generic MMC driver sends them, or the data bit.
+        byte ctl = (byte)(layout.Tracks[0].IsData ? 0x40 : 0x00);
+        byte leadOutCtl = (byte)(layout.Tracks[^1].IsData ? 0x40 : 0x00);
 
         string? catalog = SaoAudioLayout.NormalizeMcn(mcn);
         if (catalog != null)
@@ -249,15 +288,16 @@ public static class SaoCueSheetBuilder
                 entries.Add(Entry(isrcCtlAdr, tno, (byte)isrc[6], (byte)isrc[7], (byte)isrc[8], (byte)isrc[9], (byte)isrc[10], (byte)isrc[11]));
             }
 
+            byte form = t.IsData ? DataFormMode1 : DataFormAudio;
             if (i == 0 || t.PreGapSectors > 0)
             {
-                entries.Add(Entry((byte)(trackCtl | 0x01), tno, 0x00, DataFormAudio, 0x00, Msf.FromLba(t.PreGapLba)));
+                entries.Add(Entry((byte)(trackCtl | 0x01), tno, 0x00, form, 0x00, Msf.FromLba(t.PreGapLba)));
             }
 
-            entries.Add(Entry((byte)(trackCtl | 0x01), tno, 0x01, DataFormAudio, 0x00, Msf.FromLba(t.Index01Lba)));
+            entries.Add(Entry((byte)(trackCtl | 0x01), tno, 0x01, form, 0x00, Msf.FromLba(t.Index01Lba)));
         }
 
-        entries.Add(Entry((byte)(ctl | 0x01), LeadOutTrackNumber, 0x01, DataFormGenerated, 0x00, Msf.FromLba(layout.LeadOutLba)));
+        entries.Add(Entry((byte)(leadOutCtl | 0x01), LeadOutTrackNumber, 0x01, DataFormGenerated, 0x00, Msf.FromLba(layout.LeadOutLba)));
 
         byte[] sheet = new byte[entries.Count * EntrySize];
         for (int i = 0; i < entries.Count; i++)

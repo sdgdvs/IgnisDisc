@@ -394,6 +394,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
     public byte[]? RecordedCueSheet { get; private set; }
 
     private List<(byte TrackNumber, int Index01Lba, byte CueControl)> _recordedTracks = new();
+    private int _recordedDataEndLba = SaoAudioLayout.FirstWritableLba;
     private bool _recordedCdText;
 
     /// <summary>Ejecting and reloading the disc: the drive forgets a simulated session.</summary>
@@ -735,7 +736,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
 
         bool leadIn = lba < SaoAudioLayout.FirstWritableLba;
-        int blockSize = leadIn ? CdTextLeadInEncoder.SubChannelBytesPerSector : 2352;
+        bool dataTrack = !leadIn && lba < _cue.DataEndLba;
+        int blockSize = leadIn ? CdTextLeadInEncoder.SubChannelBytesPerSector : dataTrack ? 2048 : 2352;
+        if (dataTrack && lba + count > _cue.DataEndLba)
+        {
+            return Sense(0x05, 0x24, 0x00); // one WRITE has one block size: it may not run from the data track into the audio
+        }
         if (leadIn && lba + count > SaoAudioLayout.FirstWritableLba)
         {
             return Sense(0x05, 0x24, 0x00); // one WRITE may not cross from the lead-in into the program area
@@ -760,12 +766,58 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x03, 0x0C, 0x00);
         }
 
-        if (CaptureWrites)
+        if (CaptureWrites && dataTrack)
+        {
+            // Data form 10h: the drive adds sync, header, EDC and ECC, and records the full Mode 1 sector.
+            for (int i = 0; i < count; i++)
+            {
+                ProgramAreaWritten.Write(CdBurner.Core.Images.RawSectorCodec.Convert2048To2352Mode1(data.Slice(i * 2048, 2048), lba + i));
+            }
+        }
+        else if (CaptureWrites)
         {
             (leadIn ? LeadInWritten : ProgramAreaWritten).Write(data);
         }
         _nextLba = lba + count;
         return Good((uint)data.Length);
+    }
+
+    /// <summary>
+    /// READ CD of a mixed-mode CD's data track: Mode 1 sectors, with no read offset (they carry their own address).
+    /// User data only (main channel 10h) gives 2,048 bytes a sector; anything wider gives the whole 2,352-byte sector.
+    /// Read as CD-DA (sector type 1), or across into the audio, they are refused with 5/64/00 as drives do.
+    /// </summary>
+    private ScsiExecutionResult ReadDataSectors(int lba, int count, int sectorType, bool withC2, byte mainChannel, Span<byte> data)
+    {
+        if (sectorType == 1 || lba + count > _recordedDataEndLba)
+        {
+            return Sense(0x05, 0x64, 0x00);
+        }
+        if (ReadErrorAtLba is int bad && bad >= lba && bad < lba + count)
+        {
+            return Sense(0x03, 0x11, 0x00);
+        }
+
+        bool userDataOnly = (mainChannel & 0xF8) == 0x10;
+        int size = (userDataOnly ? 2048 : 2352) + (withC2 ? 294 : 0);
+        if (data.Length < count * size)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+
+        ReadOnlySpan<byte> program = ProgramAreaWritten.GetBuffer().AsSpan(0, (int)ProgramAreaWritten.Length);
+        var destination = data.Slice(0, count * size);
+        destination.Clear();
+        for (int i = 0; i < count; i++)
+        {
+            ReadOnlySpan<byte> raw = program.Slice((lba + i + 150) * 2352, 2352);
+            (userDataOnly ? raw.Slice(16, 2048) : raw).CopyTo(destination.Slice(i * size));
+        }
+        if (withC2)
+        {
+            C2ReadCommands++;
+        }
+        return Good((uint)(count * size));
     }
 
     /// <summary>
@@ -781,6 +833,15 @@ public sealed class VirtualMmcDrive : IScsiTransport
         if (withC2 && RejectsC2Pointers)
         {
             return Sense(0x05, 0x24, 0x00);
+        }
+        int sectorType = (cdb[1] >> 2) & 0x07; // 0 any, 1 CD-DA, 2 Mode 1
+        if (Recorded && lba >= 0 && count > 0 && lba < _recordedDataEndLba)
+        {
+            return ReadDataSectors(lba, count, sectorType, withC2, cdb[9], data);
+        }
+        if (sectorType == 2)
+        {
+            return Sense(0x05, 0x64, 0x00); // illegal mode for this track: audio read as Mode 1
         }
         if (!Recorded || lba < 0 || count == 0 || data.Length < count * stride || lba + count > RecordedLeadOutLba)
         {
@@ -1080,6 +1141,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
                 Recorded = true;
                 DiscStatus = ClosesDiscAfterWrite ? 2 : 1;
                 _recordedTracks = _cue.Tracks;
+                _recordedDataEndLba = _cue.DataEndLba;
                 _recordedCdText = _cue.CdText;
                 RecordedLeadOutLba = _cue.LeadOutLba;
                 RecordedCueSheet = _cue.Raw;
@@ -1613,6 +1675,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
         public int FirstWriteLba { get; init; }
         public List<(byte TrackNumber, int Index01Lba, byte CueControl)> Tracks { get; init; } = new();
 
+        /// <summary>First LBA after a mixed-mode CD's data track (its sectors are 2,048 bytes); -150 when there is none.</summary>
+        public int DataEndLba { get; init; } = SaoAudioLayout.FirstWritableLba;
+
         public static CueSheetState? Parse(ReadOnlySpan<byte> sheet, VirtualMmcDrive drive)
         {
             int entries = sheet.Length / 8;
@@ -1656,6 +1721,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             int lastLba = int.MinValue;
             bool sawIndex01ForTrack = false;
             bool firstEntry = true;
+            bool sawAudio = false;
+            int? dataEnd = null;
             for (; i < entries - 1; i++)
             {
                 var e = sheet.Slice(i * 8, 8);
@@ -1666,7 +1733,14 @@ public sealed class VirtualMmcDrive : IScsiTransport
                     for (int k = 2; k < 8; k++) if (!char.IsAsciiLetterOrDigit((char)e[k])) return null;
                     continue;
                 }
-                if (adr != 0x01 || e[3] != SaoCueSheetBuilder.DataFormAudio) return null;
+                bool dataEntry = (e[0] & 0x40) != 0;
+                if (adr != 0x01 || e[3] != (dataEntry ? SaoCueSheetBuilder.DataFormMode1 : SaoCueSheetBuilder.DataFormAudio)) return null;
+                if (dataEntry && sawAudio) return null; // a mixed-mode CD has its data first
+                if (!dataEntry && !sawAudio)
+                {
+                    sawAudio = true;
+                    dataEnd = new Msf(e[5], e[6], e[7]).ToLba();
+                }
 
                 int tno = e[1];
                 if (sawIndex01ForTrack && tno == expectedTrack + 1)
@@ -1700,12 +1774,14 @@ public sealed class VirtualMmcDrive : IScsiTransport
             int leadOutLba = new Msf(leadOut[5], leadOut[6], leadOut[7]).ToLba();
             if (leadOutLba <= lastLba) return null;
 
+            bool anyData = tracks.Any(tr => (tr.CueControl & 0x40) != 0);
             return new CueSheetState
             {
                 Raw = sheet.ToArray(),
                 CdText = cdText,
                 LeadOutLba = leadOutLba,
                 Tracks = tracks,
+                DataEndLba = anyData ? dataEnd ?? leadOutLba : SaoAudioLayout.FirstWritableLba,
                 FirstWriteLba = cdText ? drive.LeadInStart.ToLba() : SaoAudioLayout.FirstWritableLba
             };
         }

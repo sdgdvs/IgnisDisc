@@ -51,6 +51,7 @@ public sealed class NativeSaoVerifier
     private readonly Action<string> _note;
     private readonly Action<TimeSpan> _sleep;
     private int _shiftSamples; // the write-offset shift the writer applied: compare with what was really sent
+    private int _baseLba;      // first audio sector compared (0, or after a mixed-mode CD's data track)
 
     public NativeSaoVerifier(IScsiTransport transport, Action<string>? note = null, Action<TimeSpan>? sleep = null)
     {
@@ -99,6 +100,19 @@ public sealed class NativeSaoVerifier
         if (problem != null)
         {
             return Fail(problem);
+        }
+
+        if (layout.HasDataTrack)
+        {
+            problem = CheckDataTrack(layout.Tracks[0], openTrackAudio, cancellationToken);
+            if (problem != null)
+            {
+                return Fail(problem);
+            }
+            if (layout.AudioSectors == 0)
+            {
+                return new NativeVerifyResult(true, "Read-back check passed: the data track matches.");
+            }
         }
 
         try
@@ -150,11 +164,13 @@ public sealed class NativeSaoVerifier
             }
 
             int control = actual.AdrControl & 0x0F;
-            if ((control & 0x04) != 0)
+            if (((control & 0x04) != 0) != expected.IsData)
             {
-                return $"Track {expected.TrackNumber} is marked as a data track on the disc.";
+                return expected.IsData
+                    ? $"Track {expected.TrackNumber} was written as a data track but is marked as audio on the disc."
+                    : $"Track {expected.TrackNumber} is marked as a data track on the disc.";
             }
-            if ((control & 0x03) != expected.TocControl)
+            if (!expected.IsData && (control & 0x03) != expected.TocControl)
             {
                 return $"Track {expected.TrackNumber} has control bits 0x{control:X} on the disc; pre-emphasis {(expected.PreEmphasis ? "on" : "off")} and copy permitted {(expected.CopyPermitted ? "on" : "off")} were written.";
             }
@@ -317,11 +333,77 @@ public sealed class NativeSaoVerifier
         return CodeState.NotOnDisc;
     }
 
+    // ---- Data track (mixed-mode CD) ----
+
+    /// <summary>
+    /// Reads a mixed-mode CD's data track back as Mode 1 user data (READ CD, sector type 2, 2,048 bytes a sector) and
+    /// compares it with the image, then checks that the post-gap reads as zeros. Data sectors carry their own address,
+    /// so there is no offset to find.
+    /// </summary>
+    private string? CheckDataTrack(SaoTrackPlacement track, Func<int, Stream> openTrackAudio, CancellationToken ct)
+    {
+        const int dataSize = 2048;
+        const int perRead = 32; // 64 KiB
+        int dataSectors = track.SectorCount - track.PostGapSectors;
+        byte[] read = new byte[perRead * dataSize];
+        byte[] expected = new byte[perRead * dataSize];
+        int different = 0;
+        int firstDifferent = -1;
+        bool imageEnded = false;
+
+        using var image = openTrackAudio(0);
+        for (int lba = track.Index01Lba; lba < track.EndLba; lba += perRead)
+        {
+            ct.ThrowIfCancellationRequested();
+            int count = Math.Min(perRead, track.EndLba - lba);
+            var r = _transport.ExecuteCommand(
+                MmcCommandBuilder.BuildReadCdCdb(lba, count, expectedSectorType: 2, mainChannelSelectionBits: 0x10),
+                read.AsSpan(0, count * dataSize), ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, Timeout);
+            if (!r.IsSuccess || r.DataTransferLength < (uint)(count * dataSize))
+            {
+                return $"The data track could not be read back at LBA {lba}: {Describe(r)}";
+            }
+
+            Array.Clear(expected);
+            for (int i = 0; i < count; i++)
+            {
+                int index = lba + i - track.Index01Lba;
+                if (index < dataSectors && !imageEnded)
+                {
+                    int got = 0;
+                    while (got < dataSize)
+                    {
+                        int n = image.Read(expected, i * dataSize + got, dataSize - got);
+                        if (n <= 0) { imageEnded = true; break; }
+                        got += n;
+                    }
+                }
+                if (!read.AsSpan(i * dataSize, dataSize).SequenceEqual(expected.AsSpan(i * dataSize, dataSize)))
+                {
+                    different++;
+                    if (firstDifferent < 0) firstDifferent = lba + i;
+                }
+            }
+        }
+
+        if (different > 0)
+        {
+            return $"{different:N0} of {track.SectorCount:N0} data track sectors read back differently, the first at LBA {firstDifferent}.";
+        }
+        _note($"Data track matches: {dataSectors:N0} sectors and a {track.PostGapSectors}-sector post-gap.");
+        return null;
+    }
+
     // ---- Audio ----
 
     private NativeVerifyResult CompareAudio(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, Action<int, int>? progress, CancellationToken ct)
     {
-        int totalSectors = layout.LeadOutLba; // LBA 0 up to the lead-out; the two seconds before LBA 0 cannot be read
+        // The audio is read from its first readable sector: LBA 0 on an all-audio disc (the two seconds before it cannot
+        // be read), or the first audio track's pre-gap after a mixed-mode CD's data track. Inside this method LBAs are
+        // counted from there; _baseLba turns them back into disc addresses.
+        _baseLba = Math.Max(0, layout.AudioStartLba);
+        int skip = _baseLba - layout.AudioStartLba;
+        int totalSectors = layout.LeadOutLba - _baseLba;
         if (totalSectors <= 0)
         {
             return Fail("There is no audio to compare.");
@@ -330,7 +412,7 @@ public sealed class NativeSaoVerifier
         int offset;
         using (var probeSource = new ProgramAreaReader(layout, openTrackAudio, shiftSamples: _shiftSamples))
         {
-            probeSource.Skip(-SaoAudioLayout.FirstWritableLba);
+            probeSource.Skip(skip);
             var found = FindOffset(probeSource, totalSectors, out string? offsetProblem);
             if (found is null)
             {
@@ -341,7 +423,7 @@ public sealed class NativeSaoVerifier
         _note($"Audio reads back {offset} sample(s) {(offset >= 0 ? "later" : "earlier")} than written (drive offset).");
 
         using var expectedSource = new ProgramAreaReader(layout, openTrackAudio, shiftSamples: _shiftSamples);
-        expectedSource.Skip(-SaoAudioLayout.FirstWritableLba);
+        expectedSource.Skip(skip);
 
         int nextReadLba = 0;
         string? readProblem = null;
@@ -361,7 +443,7 @@ public sealed class NativeSaoVerifier
             {
                 return 0;
             }
-            readProblem = ReadAudio(nextReadLba, sectors, buffer.AsSpan(0, sectors * SectorSize));
+            readProblem = ReadAudio(_baseLba + nextReadLba, sectors, buffer.AsSpan(0, sectors * SectorSize));
             if (readProblem != null)
             {
                 return 0;
@@ -419,7 +501,7 @@ public sealed class NativeSaoVerifier
                         }
 
                         // Written sample p reads back as disc sample p + offset.
-                        int discLba = (int)Math.Clamp((expectedPosition + i / 4 + offset) / SamplesPerSector, 0, totalSectors - 1);
+                        int discLba = _baseLba + (int)Math.Clamp((expectedPosition + i / 4 + offset) / SamplesPerSector, 0, totalSectors - 1);
                         if (!tooManyToRecheck && suspects.Add(discLba) && suspects.Count > MaxRecheckSectors)
                         {
                             tooManyToRecheck = true;
@@ -440,7 +522,7 @@ public sealed class NativeSaoVerifier
 
         if (different > 0)
         {
-            int lba = (int)(firstDifferent / SamplesPerSector);
+            int lba = _baseLba + (int)(firstDifferent / SamplesPerSector);
             string fastPass = $"{different:N0} of {compared:N0} audio samples read back differently in the fast pass, the first in track {TrackAt(layout, lba)} near LBA {lba}.";
             if (tooManyToRecheck)
             {
@@ -448,7 +530,7 @@ public sealed class NativeSaoVerifier
             }
 
             _note($"{fastPass} Re-reading the {suspects.Count:N0} sector(s) involved with C2 error pointers.");
-            var recheck = Recheck(layout, openTrackAudio, offset, suspects.ToList(), totalSectors, ct);
+            var recheck = Recheck(layout, openTrackAudio, offset, suspects.ToList(), ct);
             return Classify(layout, recheck, offset, compared);
         }
 
@@ -500,7 +582,7 @@ public sealed class NativeSaoVerifier
     /// reads differently at least twice while the drive flags no error in it was written wrong. Anything else never
     /// read cleanly: unreadable. Without C2 pointers the drive cannot say which, and such sectors count as unreadable.
     /// </summary>
-    private RecheckOutcome Recheck(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> suspects, int totalSectors, CancellationToken ct)
+    private RecheckOutcome Recheck(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> suspects, CancellationToken ct)
     {
         Dictionary<int, byte[]> expected = ExpectedDiscSectors(layout, openTrackAudio, offset, suspects);
         var matched = new HashSet<int>();
@@ -515,7 +597,7 @@ public sealed class NativeSaoVerifier
                 break;
             }
 
-            FlushReadCache(remaining[0], totalSectors);
+            FlushReadCache(remaining[0], layout.LeadOutLba);
             foreach (var (start, count) in Runs(remaining, C2SectorsPerCommand))
             {
                 ct.ThrowIfCancellationRequested();
@@ -598,7 +680,7 @@ public sealed class NativeSaoVerifier
     private Dictionary<int, byte[]> ExpectedDiscSectors(SaoAudioLayout layout, Func<int, Stream> openTrackAudio, int offset, List<int> lbas)
     {
         using var source = new ProgramAreaReader(layout, openTrackAudio, shiftSamples: _shiftSamples);
-        source.Skip(-SaoAudioLayout.FirstWritableLba);
+        source.Skip(_baseLba - layout.AudioStartLba);
         var reader = new ChunkReader(buffer =>
         {
             int sectors = 0;
@@ -614,7 +696,7 @@ public sealed class NativeSaoVerifier
         foreach (int lba in lbas)
         {
             byte[] sector = new byte[SectorSize]; // samples from outside the written audio read as silence
-            long start = ((long)lba * SamplesPerSector - offset) * 4;
+            long start = ((long)(lba - _baseLba) * SamplesPerSector - offset) * 4;
             int into = 0;
             if (start < 0)
             {
@@ -650,14 +732,18 @@ public sealed class NativeSaoVerifier
     }
 
     /// <summary>Reads about 2.4 MB half a disc away so the sectors about to be re-read are no longer in the drive's cache.</summary>
-    private void FlushReadCache(int nearLba, int totalSectors)
+    private void FlushReadCache(int nearLba, int endLba)
     {
-        int span = Math.Min(CacheFlushSectors, totalSectors);
-        int far = Math.Clamp((nearLba + totalSectors / 2) % Math.Max(1, totalSectors), 0, Math.Max(0, totalSectors - span));
-        if (nearLba >= far && nearLba < far + span)
+        // Within the audio (a READ CD for audio of a data sector fails), as far from nearLba as the audio allows.
+        int first = _baseLba, total = endLba - _baseLba;
+        int span = Math.Min(CacheFlushSectors, total);
+        int near = nearLba - first;
+        int far = Math.Clamp((near + total / 2) % Math.Max(1, total), 0, Math.Max(0, total - span));
+        if (near >= far && near < far + span)
         {
-            far = nearLba >= span ? 0 : Math.Max(0, totalSectors - span);
+            far = near >= span ? 0 : Math.Max(0, total - span);
         }
+        far += first;
 
         byte[] buffer = new byte[ReadSectorsPerCommand * SectorSize];
         for (int done = 0; done < span; done += ReadSectorsPerCommand)
@@ -711,7 +797,7 @@ public sealed class NativeSaoVerifier
         int firstLba = probe - marginSectors;
         int sectors = 2 + 2 * marginSectors;
         byte[] read = new byte[sectors * SectorSize];
-        string? readProblem = ReadAudio(firstLba, sectors, read);
+        string? readProblem = ReadAudio(_baseLba + firstLba, sectors, read);
         if (readProblem != null)
         {
             problem = readProblem;
@@ -730,7 +816,7 @@ public sealed class NativeSaoVerifier
             }
         }
 
-        problem = $"The audio read back near LBA {probe} does not match what was written, at any shift up to {MaxOffsetSamples} samples.";
+        problem = $"The audio read back near LBA {_baseLba + probe} does not match what was written, at any shift up to {MaxOffsetSamples} samples.";
         return null;
     }
 
