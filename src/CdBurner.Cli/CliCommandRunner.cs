@@ -2445,15 +2445,17 @@ public static class CliCommandRunner
         var recorder = FindRecorder(deviceService, driveId);
         var verifier = new DiscVerificationService();
 
+        // --strict-verify forces every read from the disc; without it the saved setting decides.
+        bool? strict = cmd.HasFlag("strict-verify") ? true : null;
         VerificationResult result;
         if (LegacyDiscImageConverter.IsLegacyImageFile(isoPath))
         {
             await using var legacyStream = LegacyDiscImageConverter.OpenIsoUserDataStream(isoPath);
-            result = await verifier.VerifyDiscAgainstStreamAsync(recorder, burnEngine, legacyStream, raw2352Mode: false).ConfigureAwait(false);
+            result = await verifier.VerifyDiscAgainstStreamAsync(recorder, burnEngine, legacyStream, raw2352Mode: false, strict: strict).ConfigureAwait(false);
         }
         else
         {
-            result = await verifier.VerifyDiscAgainstIsoFileAsync(recorder, burnEngine, isoPath).ConfigureAwait(false);
+            result = await verifier.VerifyDiscAgainstIsoFileAsync(recorder, burnEngine, isoPath, strict: strict).ConfigureAwait(false);
         }
 
         if (cmd.IsJson)
@@ -2825,7 +2827,7 @@ public static class CliCommandRunner
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
         stdout.WriteLine("  recover (--drive <id> | --image <file.iso>) --out <folder> [--retries N] [--keep-image] [--json]");
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");
-        stdout.WriteLine("  verify --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--json]");
+        stdout.WriteLine("  verify --drive <id> --iso <file.iso|.nrg|.mdf|.mds|.ccd|.img> [--strict-verify] [--json]");
         stdout.WriteLine("      Verifies disc sectors against an ISO image with SHA-256 and defect mapping.");
         stdout.WriteLine("  verify --drive <id> --cue <file.cue> [--title <album>] [--artist <name>] [--no-cd-text] [--write-offset <samples|auto>] [--log-dir <folder>] [--json]");
         stdout.WriteLine("      Checks a recorded audio or mixed-mode CD against the .cue it was burned from (track table, CD-Text, codes, every sample), without writing.");

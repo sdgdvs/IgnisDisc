@@ -210,12 +210,58 @@ public class VerifyReadBackTests
 
     // ---- The separate disc-against-image check (Image screen, verify command) ----
 
-    private static async Task<VerificationResult> VerifyAgainstImage(MmcDataEngine engine, byte[] image)
+    private static async Task<VerificationResult> VerifyAgainstImage(MmcDataEngine engine, byte[] image, bool? strict = null)
     {
         using var recorder = new VirtualDiscRecorder();
         using var medium = VirtualDiscMedium.CreateBlankCdR700();
         recorder.InsertMedia(medium);
-        return await new DiscVerificationService().VerifyDiscAgainstStreamAsync(recorder, engine, new MemoryStream(image), raw2352Mode: false);
+        return await new DiscVerificationService().VerifyDiscAgainstStreamAsync(
+            recorder, engine, new MemoryStream(image), raw2352Mode: false, strict: strict);
+    }
+
+    [Fact]
+    public async Task ImageCheck_Strict_ForcesEveryRead_AndCatchesStaleCacheDamageInTheMiddle()
+    {
+        // The drive hands back the good copy of one middle sector from its memory unless the read is forced.
+        byte[] image = BuildLargeImage();
+        int bad = FirstLbaOf(image, "/2-middle.bin") + 300;
+        Assert.InRange(bad, Guard, image.Length / 2048 - Guard - 1);
+
+        var fastDrive = SmallBufferDrive();
+        var fastEngine = new MmcDataEngine(fastDrive) { DamageLba = bad, KeepInDriveMemory = lba => lba == bad };
+        await fastEngine.BurnDataStreamAsync(null!, new MemoryStream(image), new DataBurnOptions(), null, default);
+        Assert.True((await VerifyAgainstImage(fastEngine, image, strict: false)).IsMatch, "default mode reads the middle without FUA");
+        Assert.Contains(fastDrive.Read10Log, r => !r.Fua);
+
+        var strictDrive = SmallBufferDrive();
+        var strictEngine = new MmcDataEngine(strictDrive) { DamageLba = bad, KeepInDriveMemory = lba => lba == bad };
+        await strictEngine.BurnDataStreamAsync(null!, new MemoryStream(image), new DataBurnOptions(), null, default);
+        var result = await VerifyAgainstImage(strictEngine, image, strict: true);
+
+        Assert.False(result.IsMatch);
+        Assert.Contains(bad, result.MismatchedLbas);
+        Assert.All(strictDrive.Read10Log, r => Assert.True(r.Fua, $"READ (10) of LBA {r.Lba} had no FUA"));
+    }
+
+    [Fact]
+    public async Task ImageCheck_FollowsTheSavedStrictSetting_WhenNotToldOtherwise()
+    {
+        byte[] image = BuildLargeImage();
+        var drive = SmallBufferDrive();
+        var engine = new MmcDataEngine(drive);
+        await engine.BurnDataStreamAsync(null!, new MemoryStream(image), new DataBurnOptions(), null, default);
+        bool saved = VerifyPreferences.StrictByDefault;
+        try
+        {
+            VerifyPreferences.StrictByDefault = true;
+            var result = await VerifyAgainstImage(engine, image);
+            Assert.True(result.IsMatch, result.ErrorMessage);
+            Assert.All(drive.Read10Log, r => Assert.True(r.Fua));
+        }
+        finally
+        {
+            VerifyPreferences.StrictByDefault = saved;
+        }
     }
 
     [Fact]

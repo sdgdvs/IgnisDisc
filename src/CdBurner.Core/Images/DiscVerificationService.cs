@@ -238,6 +238,8 @@ public class DiscVerificationService
 {
     /// <summary>
     /// Verifies a recorded disc sector-by-sector against an expected image stream.
+    /// <paramref name="strict"/> forces every read from the disc; null follows <see cref="VerifyPreferences.StrictByDefault"/>.
+    /// Without it only the stretches that can still sit in the drive's memory are forced.
     /// </summary>
     public async Task<VerificationResult> VerifyDiscAgainstStreamAsync(
         IDiscRecorderBackend recorder,
@@ -246,7 +248,8 @@ public class DiscVerificationService
         bool raw2352Mode,
         IReadOnlyList<LbaFileExtentMap>? fileMap = null,
         IProgress<BurnProgressSnapshot>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool? strict = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(engine);
@@ -381,7 +384,7 @@ public class DiscVerificationService
             cancellationToken: ct,
             // The disc may have been burned a moment ago: make the drive read it, not what the burn left in its memory.
             readFromDisc: !raw2352Mode,
-            strict: VerifyPreferences.StrictByDefault).ConfigureAwait(false);
+            strict: strict ?? VerifyPreferences.StrictByDefault).ConfigureAwait(false);
 
         progress?.Report(new BurnProgressSnapshot
         {
@@ -433,7 +436,8 @@ public class DiscVerificationService
         string isoFilePath,
         IReadOnlyList<LbaFileExtentMap>? fileMap = null,
         IProgress<BurnProgressSnapshot>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool? strict = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(isoFilePath);
         if (!File.Exists(isoFilePath))
@@ -442,7 +446,7 @@ public class DiscVerificationService
         }
 
         await using var fs = new FileStream(isoFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
-        return await VerifyDiscAgainstStreamAsync(recorder, engine, fs, raw2352Mode: false, fileMap, progress, ct).ConfigureAwait(false);
+        return await VerifyDiscAgainstStreamAsync(recorder, engine, fs, raw2352Mode: false, fileMap, progress, ct, strict).ConfigureAwait(false);
     }
 
     /// <summary>

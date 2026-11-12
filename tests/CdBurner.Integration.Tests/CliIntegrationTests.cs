@@ -1193,6 +1193,19 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(vRoot.GetProperty("success").GetBoolean());
         Assert.True(vRoot.GetProperty("isMatch").GetBoolean());
         Assert.Equal(0, vRoot.GetProperty("mismatchedLbaCount").GetInt32());
+
+        // 4. The same check with every read forced from the disc is accepted and passes too
+        var (strictOut, strictErr) = CreateStringWriters();
+        int strictCode = await CliCommandRunner.RunAsync(
+            new[] { "verify", "--drive", "VDRV-01", "--iso", originalIso, "--strict-verify", "--json" },
+            strictOut,
+            strictErr,
+            _deviceService,
+            _burnEngine);
+
+        Assert.Equal(0, strictCode);
+        using var strictDoc = ParseJsonOutput(strictOut);
+        Assert.True(strictDoc.RootElement.GetProperty("isMatch").GetBoolean());
     }
 
     #endregion
