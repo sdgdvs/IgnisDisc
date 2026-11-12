@@ -953,6 +953,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                         UpcEanCode = tempComp.UpcEan;
                     }
 
+                    AudioTrackRowViewModel? previousCueRow = null;
                     foreach (var cueTrk in tempComp.Tracks)
                     {
                         if (Tracks.Count >= AudioCdCompilation.MaxTracks) break;
@@ -1005,11 +1006,19 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                             CustomPcmStreamFactory = cueTrk.CustomPcmStreamFactory,
                             DataTrack = cueTrk.DataTrack,
                             RawFileType = cueTrk.RawFileType,
+                            PreEmphasis = cueTrk.PreEmphasis,
+                            CopyPermitted = cueTrk.CopyPermitted,
+                            Index00LeadFrames = cueTrk.Index00LeadFrames,
+                            Index00Predecessor = cueTrk.Index00LeadFrames > 0 ? previousCueRow : null,
+                            HiddenAudioPcmStreamFactory = cueTrk.HiddenAudioPcmStreamFactory,
+                            HiddenAudioFrames = cueTrk.HiddenAudioFrames,
+                            AlbumSource = cueTrk.AlbumSource,
                             SourceStartFrame = cueTrk.SourceStartFrame,
                             SourceFrameCount = cueTrk.SourceFrameCount
                         };
 
                         Tracks.Add(cueRow);
+                        previousCueRow = cueRow;
                         SelectedTrack = cueRow;
                         ctx.AddedCount++;
                     }
@@ -1589,7 +1598,15 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 SourceStartFrame = row.SourceStartFrame,
                 SourceFrameCount = row.SourceFrameCount,
                 DataTrack = row.DataTrack,
-                RawFileType = row.RawFileType
+                RawFileType = row.RawFileType,
+                PreEmphasis = row.PreEmphasis,
+                CopyPermitted = row.CopyPermitted,
+                // A gap mark stays only while the track it came after is still directly in front of it.
+                Index00LeadFrames = i > 0 && row.Index00Predecessor != null && ReferenceEquals(Tracks[i - 1], row.Index00Predecessor)
+                    ? row.Index00LeadFrames : 0,
+                HiddenAudioPcmStreamFactory = row.HiddenAudioPcmStreamFactory,
+                HiddenAudioFrames = row.HiddenAudioFrames,
+                AlbumSource = row.AlbumSource
             });
         }
 

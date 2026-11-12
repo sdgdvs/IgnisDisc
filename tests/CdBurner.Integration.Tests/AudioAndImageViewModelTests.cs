@@ -701,6 +701,44 @@ public sealed class AudioAndImageViewModelTests : IDisposable
     }
 
     [Fact]
+    public void AudioBurnViewModel_CueFlagsGapMarksAndHiddenAudio_ReachTheBurn_AndAGapMarkGoesWhenItsTrackMoves()
+    {
+        // One WAV of noise: 10 s before track 1's INDEX 01, track 2 with flags and a 2-second INDEX 00, then track 3.
+        var pcm = new byte[100 * 75 * OpticalConstants.RawSectorSize];
+        new Random(77).NextBytes(pcm);
+        WavFileCodec.WriteWavFile(Path.Combine(_tempDir, "album.wav"), pcm);
+        string cuePath = Path.Combine(_tempDir, "flags.cue");
+        File.WriteAllLines(cuePath, new[]
+        {
+            "FILE \"album.wav\" WAVE",
+            "  TRACK 01 AUDIO", "    TITLE \"First\"", "    INDEX 01 00:10:00",
+            "  TRACK 02 AUDIO", "    TITLE \"Second\"", "    FLAGS PRE DCP", "    INDEX 00 00:38:00", "    INDEX 01 00:40:00",
+            "  TRACK 03 AUDIO", "    TITLE \"Third\"", "    INDEX 01 01:10:00"
+        });
+        var vm = new AudioBurnViewModel(_deviceManager, _burnEngine);
+
+        vm.AddAudioFilesCommand.Execute(new[] { cuePath });
+        var compilation = vm.BuildCurrentCompilation();
+
+        Assert.Equal(new[] { "First", "Second", "Third" }, compilation.Tracks.Select(t => t.Title));
+        Assert.Equal(750, compilation.Tracks[0].HiddenAudioFrames);           // 10 s in front of track 1
+        Assert.NotNull(compilation.Tracks[0].HiddenAudioPcmStreamFactory);
+        Assert.True(compilation.Tracks[1].PreEmphasis);
+        Assert.True(compilation.Tracks[1].CopyPermitted);
+        Assert.Equal(150, compilation.Tracks[1].Index00LeadFrames);           // the 2-second count-in
+        Assert.False(compilation.Tracks[2].PreEmphasis);
+
+        // Move "Third" above "Second": the frames before "Second" now end "Third", so the mark is not kept.
+        vm.SelectedTrack = vm.Tracks[2];
+        vm.MoveTrackUpCommand.Execute(null);
+        var reordered = vm.BuildCurrentCompilation();
+
+        Assert.Equal(new[] { "First", "Third", "Second" }, reordered.Tracks.Select(t => t.Title));
+        Assert.Equal(0, reordered.Tracks[2].Index00LeadFrames);
+        Assert.True(reordered.Tracks[2].PreEmphasis);                          // a track's own flags stay with it
+    }
+
+    [Fact]
     public async Task DiscCopyService_MixedModeCd_WarnsThatOnlyAudioIsCopied_EvenInRawMode()
     {
         // Arrange: Populate VDRV-01 with a mixed-mode medium (1 data track + 1 audio track)

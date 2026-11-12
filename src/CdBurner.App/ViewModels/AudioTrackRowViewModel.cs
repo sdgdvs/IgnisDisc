@@ -42,6 +42,31 @@ public class AudioTrackRowViewModel : ObservableObject
     /// <summary>"BINARY" or "MOTOROLA" for raw CD audio read straight from a CUE sheet's .bin; null when decoded.</summary>
     public string? RawFileType { get; set; }
 
+    /// <summary>CUE "FLAGS PRE": mastered with pre-emphasis (written by the direct writer as the track's control bit).</summary>
+    public bool PreEmphasis { get; set; }
+
+    /// <summary>CUE "FLAGS DCP": digital copying permitted.</summary>
+    public bool CopyPermitted { get; set; }
+
+    /// <summary>
+    /// Frames at the end of <see cref="Index00Predecessor"/>'s audio that are this track's INDEX 00 (its count-in) in the
+    /// CUE sheet. Used only while that row is still directly in front of this one: after a reorder the frames would be
+    /// the end of a different track.
+    /// </summary>
+    public int Index00LeadFrames { get; set; }
+
+    /// <summary>The row whose audio ends in this track's INDEX 00 frames (the track before it in the CUE sheet).</summary>
+    public AudioTrackRowViewModel? Index00Predecessor { get; set; }
+
+    /// <summary>Audio in front of track 1's INDEX 01 in a single-file CUE album; written only while this row is first.</summary>
+    public Func<Stream>? HiddenAudioPcmStreamFactory { get; set; }
+
+    /// <summary>Length of <see cref="HiddenAudioPcmStreamFactory"/>'s audio in CD frames.</summary>
+    public int HiddenAudioFrames { get; set; }
+
+    /// <summary>The decoded single-file album this row is a slice of, so its buffer is released after a burn.</summary>
+    public CdBurner.Core.Audio.SingleFileAlbumSource? AlbumSource { get; set; }
+
     /// <summary>
     /// Slice start (75 fps frames) inside <see cref="SourceFilePath"/> for single-file CUE album tracks; null = whole file.
     /// Carried into the compilation so project files can rebuild the slice.
