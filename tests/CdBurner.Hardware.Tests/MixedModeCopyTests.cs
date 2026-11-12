@@ -136,7 +136,8 @@ public sealed class MixedModeCopyTests : IDisposable
         Assert.True(target.QueryMediaStatus().IsBlank);
     }
 
-    private async Task<(DiscCopyResult Result, VirtualDiscRecorder Target, VirtualMmcDrive Source, VirtualMmcDrive? Copy)> CopyWithMisread(int badReads, bool allow)
+    private async Task<(DiscCopyResult Result, VirtualDiscRecorder Target, VirtualMmcDrive Source, VirtualMmcDrive? Copy)> CopyWithMisread(
+        int badReads, bool allow, Func<string, CancellationToken, Task<bool>>? confirm = null)
     {
         var (source, sourceDrive) = await SourceDisc();
         source.CurrentMedium!.SimulatedC2Errors[800] = badReads;   // an audio sector in track 2
@@ -144,7 +145,7 @@ public sealed class MixedModeCopyTests : IDisposable
         VirtualMmcDrive? copyDrive = null;
         var writer = new NativeAudioBurnEngine(_dir) { Wait = _ => { }, ConfigureVirtualDrive = d => copyDrive = d };
         var result = await new DiscCopyService(new VirtualBurnEngine(source)).CopyDiscAsync(source, target,
-            new DiscCopyOptions { MixedModeWriter = writer, AllowSuspectAudio = allow });
+            new DiscCopyOptions { MixedModeWriter = writer, AllowSuspectAudio = allow, ConfirmSuspectAudioAsync = confirm });
         return (result, target, sourceDrive, copyDrive);
     }
 
@@ -166,6 +167,29 @@ public sealed class MixedModeCopyTests : IDisposable
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Contains("1 audio sector(s) were copied as read, with errors", result.WarningMessage);
+    }
+
+    [Fact]
+    public async Task AskedAndAnsweredYes_CopiesAsRead_AndTheQuestionNamesTheTrack()
+    {
+        string? asked = null;
+
+        var (result, _, _, _) = await CopyWithMisread(badReads: 1000, allow: false,
+            confirm: (problem, _) => { asked = problem; return Task.FromResult(true); });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Contains("(track 2: 1)", asked);
+        Assert.Contains("copied as read, with errors", result.WarningMessage);
+    }
+
+    [Fact]
+    public async Task AskedAndAnsweredNo_Stops_BeforeTheTargetIsTouched()
+    {
+        var (result, target, _, _) = await CopyWithMisread(badReads: 1000, allow: false, confirm: (_, _) => Task.FromResult(false));
+
+        Assert.False(result.Success);
+        Assert.Contains("Nothing was written", result.ErrorMessage);
+        Assert.True(target.QueryMediaStatus().IsBlank);
     }
 
     [Fact]

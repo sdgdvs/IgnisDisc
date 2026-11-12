@@ -62,6 +62,13 @@ public sealed class DiscCopyOptions
     /// clicks or wrong samples there). Off by default: the copy stops before the target disc is touched.
     /// </summary>
     public bool AllowSuspectAudio { get; set; }
+
+    /// <summary>
+    /// Asked, with a description of the problem, when source audio still reads with errors and
+    /// <see cref="AllowSuspectAudio"/> is off; true copies the sectors as read. Nothing has been written when it is asked.
+    /// Without it the copy stops.
+    /// </summary>
+    public Func<string, CancellationToken, Task<bool>>? ConfirmSuspectAudioAsync { get; set; }
 }
 
 /// <summary>
@@ -224,10 +231,16 @@ public sealed class DiscCopyService
                     string where = string.Join(", ", audioRip.TrackInfos
                         .Where(t => t.SuspectSectors + t.UnreadableSectors > 0)
                         .Select(t => $"track {t.TrackNumber}: {t.SuspectSectors + t.UnreadableSectors:N0}"));
-                    return DiscCopyResult.Failed(
-                        $"{suspect:N0} audio sector(s) of the source still read with errors after re-reading ({where}), so the copy would have "
-                        + "clicks or wrong samples there. Nothing was written to the disc. Clean the source disc or try another drive, or copy anyway to accept them.",
-                        copyCount, 0, stagedPath);
+                    string problem = $"{suspect:N0} audio sector(s) of the source still read with errors after re-reading ({where}), "
+                        + "so the copy would have clicks or wrong samples there.";
+                    bool accepted = options.ConfirmSuspectAudioAsync != null
+                        && await options.ConfirmSuspectAudioAsync(problem, ct).ConfigureAwait(false);
+                    if (!accepted)
+                    {
+                        return DiscCopyResult.Failed(
+                            $"{problem} Nothing was written to the disc. Clean the source disc or try another drive, or copy anyway to accept them.",
+                            copyCount, 0, stagedPath);
+                    }
                 }
                 string? readWarning = audioRip.SecureModeUsed ? null
                     : "The drive does not report read errors (C2 pointers), so a misread in the audio would not be noticed.";

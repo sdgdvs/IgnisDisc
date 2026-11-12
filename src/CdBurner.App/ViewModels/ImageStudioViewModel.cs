@@ -1930,6 +1930,18 @@ public class ImageStudioViewModel : ObservableObject
                     // A mixed-mode CD's data track is copied only by the direct writer, and only when the user turned it on.
                     MixedModeWriter = UseDirectDriveCommands
                         ? new CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine(DirectBurnLogDirectory)
+                        : null,
+                    // Source audio that still reads wrong: ask before writing (as for damaged FLAC files). Unattended, the copy stops.
+                    ConfirmSuspectAudioAsync = CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession
+                        ? async (problem, _) =>
+                        {
+                            AppendLog(problem);
+                            var answer = await ShowMessageOnUiThreadAsync(
+                                problem + Environment.NewLine + Environment.NewLine
+                                    + "Copy anyway? The copy will have those errors. Choose No to stop: nothing has been written yet.",
+                                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+                            return answer == System.Windows.MessageBoxResult.Yes;
+                        }
                         : null
                 },
                 progress,
