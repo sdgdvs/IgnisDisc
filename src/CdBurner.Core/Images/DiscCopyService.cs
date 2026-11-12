@@ -56,6 +56,12 @@ public sealed class DiscCopyOptions
     /// copied whole: its data track is read and written ahead of the audio. Without it only the audio is copied.
     /// </summary>
     public IBurnEngineBackend? MixedModeWriter { get; set; }
+
+    /// <summary>
+    /// Copy an audio CD even when some sectors still read with errors after the careful re-reads (the copy then has
+    /// clicks or wrong samples there). Off by default: the copy stops before the target disc is touched.
+    /// </summary>
+    public bool AllowSuspectAudio { get; set; }
 }
 
 /// <summary>
@@ -201,7 +207,8 @@ public sealed class DiscCopyService
                     sourceRecorder,
                     _burnEngine,
                     audioRipDir,
-                    new AudioRipOptions { GenerateCueSheet = true },
+                    // Secure mode: C2 error pointers and re-reads, so a sector the drive reads wrongly is found, not copied.
+                    new AudioRipOptions { GenerateCueSheet = true, SecureMode = true },
                     progress,
                     ct).ConfigureAwait(false);
 
@@ -211,6 +218,19 @@ public sealed class DiscCopyService
                 }
 
                 stagedPath = audioRip.CueSheetPath;
+                int suspect = audioRip.TrackInfos.Sum(t => t.SuspectSectors + t.UnreadableSectors);
+                if (suspect > 0 && !options.AllowSuspectAudio)
+                {
+                    string where = string.Join(", ", audioRip.TrackInfos
+                        .Where(t => t.SuspectSectors + t.UnreadableSectors > 0)
+                        .Select(t => $"track {t.TrackNumber}: {t.SuspectSectors + t.UnreadableSectors:N0}"));
+                    return DiscCopyResult.Failed(
+                        $"{suspect:N0} audio sector(s) of the source still read with errors after re-reading ({where}), so the copy would have "
+                        + "clicks or wrong samples there. Nothing was written to the disc. Clean the source disc or try another drive, or copy anyway to accept them.",
+                        copyCount, 0, stagedPath);
+                }
+                string? readWarning = audioRip.SecureModeUsed ? null
+                    : "The drive does not report read errors (C2 pointers), so a misread in the audio would not be noticed.";
                 var compilation = new AudioCdCompilation
                 {
                     RecordingMode = AudioRecordingMode.DiscAtOnceGapless,
@@ -287,7 +307,7 @@ public sealed class DiscCopyService
                     WasAudioCd = true,
                     IsMixedMode = isMixedMode,
                     CopiedDataTrack = copyDataTrack,
-                    WarningMessage = mixedModeWarning,
+                    WarningMessage = string.Join(" ", new[] { mixedModeWarning, readWarning, suspect > 0 ? $"{suspect:N0} audio sector(s) were copied as read, with errors." : null }.Where(w => w != null)) is { Length: > 0 } w ? w : null,
                     StagedImagePath = options.KeepStagedImage ? stagedPath : null,
                     TotalTime = sw.Elapsed
                 };

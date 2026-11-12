@@ -133,6 +133,48 @@ public sealed class MixedModeCopyTests : IDisposable
         Assert.True(target.QueryMediaStatus().IsBlank);
     }
 
+    private async Task<(DiscCopyResult Result, VirtualDiscRecorder Target, VirtualMmcDrive Source, VirtualMmcDrive? Copy)> CopyWithMisread(int badReads, bool allow)
+    {
+        var (source, sourceDrive) = await SourceDisc();
+        source.CurrentMedium!.SimulatedC2Errors[800] = badReads;   // an audio sector in track 2
+        var target = Target();
+        VirtualMmcDrive? copyDrive = null;
+        var writer = new NativeAudioBurnEngine(_dir) { Wait = _ => { }, ConfigureVirtualDrive = d => copyDrive = d };
+        var result = await new DiscCopyService(new VirtualBurnEngine(source)).CopyDiscAsync(source, target,
+            new DiscCopyOptions { MixedModeWriter = writer, AllowSuspectAudio = allow });
+        return (result, target, sourceDrive, copyDrive);
+    }
+
+    [Fact]
+    public async Task ASectorThatKeepsReadingWrong_StopsTheCopy_BeforeTheTargetIsTouched()
+    {
+        var (result, target, _, _) = await CopyWithMisread(badReads: 1000, allow: false);
+
+        Assert.False(result.Success);
+        Assert.Contains("1 audio sector(s) of the source still read with errors after re-reading (track 2: 1)", result.ErrorMessage);
+        Assert.Contains("Nothing was written", result.ErrorMessage);
+        Assert.True(target.QueryMediaStatus().IsBlank);
+    }
+
+    [Fact]
+    public async Task CopyAnyway_WritesTheSectorAsRead_AndSaysSo()
+    {
+        var (result, _, _, _) = await CopyWithMisread(badReads: 1000, allow: true);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Contains("1 audio sector(s) were copied as read, with errors", result.WarningMessage);
+    }
+
+    [Fact]
+    public async Task AMisreadThatTheReReadsRecover_LeavesAnExactCopy()
+    {
+        var (result, _, sourceDrive, copyDrive) = await CopyWithMisread(badReads: 1, allow: false);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Null(result.WarningMessage);
+        Assert.Equal(sourceDrive.ProgramAreaWritten.ToArray(), copyDrive!.ProgramAreaWritten.ToArray());
+    }
+
     [Fact]
     public async Task ReadingTheDataTrack_GivesItsUserData_NotTheRawSectors()
     {
