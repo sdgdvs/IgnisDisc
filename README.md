@@ -90,6 +90,10 @@ ignisdisc-cli <command> [options]
   rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
              [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--continue-on-error] [--cover <image>]
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)
+  copy-disc  --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]]
+             [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>]
+                                               Copy a disc with one drive (the tray opens, it waits for a blank) or two;
+                                               stops before writing if source audio still reads wrong
   check-disc --drive <id>                      Read a CD once with C2 error pointers: where it is weak (may skip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
              [--redundancy <min %>] [--no-fill]      Recovery data fills each disc; --no-fill keeps exactly that %
@@ -182,6 +186,7 @@ ignisdisc-cli burn-iso --drive D: --iso C:\Images\ubuntu.iso --speed 8
 ignisdisc-cli burn-data --drive D: --input "C:\Deploy" --label INSTALLER --boot-bios etfsboot.com --boot-uefi efisys.bin
 ignisdisc-cli burn-audio --drive D: --tracks "01.wav,02.wav,03.wav" --title "Demo Album" --artist "Me" --dao
 ignisdisc-cli rip --drive D: --output C:\Backup\disc.iso
+ignisdisc-cli copy-disc --source D: --native
 ignisdisc-cli rip-audio --drive D: --output C:\Music\Album --format flac --lookup --verify-accuraterip
 ignisdisc-cli archive-stage --input "C:\Photos" --staging C:\temp\archive --media dvd --redundancy 10
 ignisdisc-cli recover --drive D: --out C:\Rescued\disc01

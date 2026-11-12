@@ -204,6 +204,18 @@ public class VirtualDiscMedium : IDisposable, IBookTypeTarget
     /// <summary>
     /// Creates a blank 80-minute / 700 MB CD-R virtual medium (360,000 sectors).
     /// </summary>
+    /// <summary>A blank virtual disc big enough for a copy of a disc with <paramref name="sourceStatus"/>.</summary>
+    public static VirtualDiscMedium CreateBlankFor(CdBurner.Core.Abstractions.MediaStatusDto sourceStatus)
+    {
+        ArgumentNullException.ThrowIfNull(sourceStatus);
+        int used = Math.Max(0, sourceStatus.UsedSectors);
+        if (sourceStatus.MediaType.IsDvd() || used > OpticalConstants.Cd700MbSectors)
+        {
+            return used > OpticalConstants.DvdMinusR5Sectors ? CreateBlankDvdPlusRDL85() : CreateBlankDvdR47();
+        }
+        return CreateBlankCdR700();
+    }
+
     public static VirtualDiscMedium CreateBlankCdR700(string? backingFile = null) =>
         new(DiscMediaType.CdR, OpticalConstants.Cd700MbSectors, isBlank: true, backingFilePath: backingFile);
 

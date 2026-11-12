@@ -1982,18 +1982,8 @@ public class ImageStudioViewModel : ObservableObject
     /// Picks the smallest blank virtual medium that can hold a copy of the source disc
     /// (CD-R 700 MB, DVD-R 4.7 GB, or DVD+R DL 8.5 GB).
     /// </summary>
-    public static VirtualDiscMedium CreateBlankVirtualMediumFor(MediaStatusDto sourceStatus)
-    {
-        int used = Math.Max(0, sourceStatus.UsedSectors);
-        if (sourceStatus.MediaType.IsDvd() || used > OpticalConstants.Cd700MbSectors)
-        {
-            return used > OpticalConstants.DvdMinusR5Sectors
-                ? VirtualDiscMedium.CreateBlankDvdPlusRDL85()
-                : VirtualDiscMedium.CreateBlankDvdR47();
-        }
-
-        return VirtualDiscMedium.CreateBlankCdR700();
-    }
+    public static VirtualDiscMedium CreateBlankVirtualMediumFor(MediaStatusDto sourceStatus) =>
+        VirtualDiscMedium.CreateBlankFor(sourceStatus);
 
     /// <summary>
     /// Ejects the target drive and asks the user to insert a blank disc for <paramref name="copyIndex"/>, then waits for the

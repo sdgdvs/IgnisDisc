@@ -200,6 +200,7 @@ public static class CliCommandRunner
             "rip-audio" or "ripaudio" => await HandleRipAudioAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "detect-offset" or "detectoffset" => await HandleDetectOffsetAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "check-disc" or "checkdisc" => HandleCheckDisc(cmd, stdout, deviceService),
+            "copy-disc" or "copydisc" or "copy" => await HandleCopyDiscAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "archive-stage" or "archivestage" => await HandleArchiveStageAsync(cmd, stdout).ConfigureAwait(false),
             "archive-verify" or "archiveverify" => await HandleArchiveVerifyAsync(cmd, stdout).ConfigureAwait(false),
             "recover" or "archive-recover" => await HandleRecoverAsync(cmd, stdout, deviceService, burnEngine).ConfigureAwait(false),
@@ -1185,6 +1186,134 @@ public static class CliCommandRunner
     /// <summary>
     /// check-disc: reads every sector of the CD in the drive once with C2 error pointers and says where it is weak (read-only).
     /// </summary>
+    /// <summary>
+    /// <c>copy-disc</c>: the app's disc copy (<see cref="DiscCopyService"/>). Messages for the person at the drive go to
+    /// stderr, so <c>--json</c> output stays one object on stdout.
+    /// </summary>
+    private static async Task<int> HandleCopyDiscAsync(CommandLineArgs cmd, TextWriter stdout, TextWriter stderr,
+        IDiscDeviceService deviceService, IBurnEngineBackend burnEngine)
+    {
+        var source = FindRecorder(deviceService, cmd.GetRequiredOption("source", "--source <id>"));
+        var target = cmd.GetOption("target") is { } targetId ? FindRecorder(deviceService, targetId) : source;
+        bool singleDrive = string.Equals(source.UniqueId, target.UniqueId, StringComparison.OrdinalIgnoreCase);
+        int copies = int.TryParse(cmd.GetOption("copies") ?? "1", out int n) && n is >= 1 and <= 99
+            ? n : throw new CommandLineException("--copies takes a number from 1 to 99.");
+        int waitMinutes = int.TryParse(cmd.GetOption("wait-minutes") ?? "30", out int w) && w is >= 1 and <= 1440
+            ? w : throw new CommandLineException("--wait-minutes takes a number from 1 to 1440.");
+        bool native = cmd.HasFlag("native");
+        if (cmd.GetOption("log-dir") != null && !native)
+        {
+            throw new CommandLineException("--log-dir needs --native.");
+        }
+        string? keep = cmd.GetOption("keep-image");
+
+        var sourceStatus = source.QueryMediaStatus();
+        if (!sourceStatus.MediaPresent || sourceStatus.IsBlank)
+        {
+            throw new CommandLineException($"There is no recorded disc to copy in {source.VolumePath ?? source.UniqueId}.");
+        }
+        bool isAudio = DiscCopyService.IsSourceAudioCd(source);
+        var speed = ParseSpeed(cmd.GetOption("speed"), target, sourceStatus.MediaType, isAudio);
+
+        async Task<bool> PrepareTarget(int copyIndex, CancellationToken ct)
+        {
+            if (target is VirtualDiscRecorder virtualTarget)
+            {
+                var status = virtualTarget.QueryMediaStatus();
+                if (singleDrive || copyIndex > 1 || !status.MediaPresent || !status.IsBlank)
+                {
+                    virtualTarget.InsertMedia(VirtualDiscMedium.CreateBlankFor(sourceStatus));
+                }
+                return true;
+            }
+            if (!singleDrive && copyIndex == 1)
+            {
+                return true; // the blank disc already in the second drive
+            }
+
+            target.EjectMedia();
+            stderr.WriteLine($"Copy {copyIndex} of {copies}: put a blank disc in {target.VolumePath ?? target.UniqueId} and close the tray"
+                + $" (waiting up to {waitMinutes} min).");
+            var deadline = DateTime.UtcNow.AddMinutes(waitMinutes);
+            await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            while (DateTime.UtcNow < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var status = target.QueryMediaStatus();
+                    if (status.MediaPresent && status.IsBlank)
+                    {
+                        stderr.WriteLine($"Blank {status.MediaType} found; copying.");
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+                {
+                    // The drive is still loading the disc; ask again.
+                }
+                await Task.Delay(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false);
+            }
+            stderr.WriteLine($"No blank disc within {waitMinutes} min.");
+            return false;
+        }
+
+        var nativeEngine = native ? new NativeAudioBurnEngine(cmd.GetOption("log-dir")) : null;
+        using var decoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
+        string? stagingFolder = null;
+        if (keep != null)
+        {
+            Directory.CreateDirectory(keep);
+            stagingFolder = keep;
+        }
+
+        var result = await new DiscCopyService(burnEngine, decoder).CopyDiscAsync(source, target, new DiscCopyOptions
+        {
+            CopyCount = copies,
+            RawCloneMode = cmd.HasFlag("raw"),
+            WriteSpeed = speed,
+            KeepStagedImage = keep != null,
+            CustomStagingImagePath = stagingFolder != null ? Path.Combine(stagingFolder, isAudio ? "album.cue" : cmd.HasFlag("raw") ? "staged_disc.bin" : "staged_disc.iso") : null,
+            MixedModeWriter = nativeEngine,
+            AllowSuspectAudio = cmd.HasFlag("allow-suspect"),
+            OnPrepareTargetDiscAsync = PrepareTarget
+        }).ConfigureAwait(false);
+
+        if (cmd.IsJson)
+        {
+            WriteJsonResult(stdout, new
+            {
+                success = result.Success,
+                error = result.ErrorMessage,
+                warning = result.WarningMessage,
+                copiesRequested = result.CopiesRequested,
+                copiesCompleted = result.CopiesCompleted,
+                audioCd = result.WasAudioCd,
+                mixedMode = result.IsMixedMode,
+                copiedDataTrack = result.CopiedDataTrack,
+                sectorsPerDisc = result.SectorsPerDisc,
+                totalSectorsWritten = result.TotalSectorsWritten,
+                totalTimeSeconds = result.TotalTime.TotalSeconds,
+                stagedImage = result.StagedImagePath,
+                verified = nativeEngine?.LastResult?.Verification?.Passed,
+                verifyMessage = nativeEngine?.LastResult?.Verification?.Message,
+                commandLog = nativeEngine?.LastLogPath
+            });
+        }
+        else if (result.Success)
+        {
+            stdout.WriteLine($"Copied: {result.CopiesCompleted} of {result.CopiesRequested} disc(s), {result.SectorsPerDisc:N0} sectors each, in {result.TotalTime.TotalSeconds:N0} s.");
+            if (result.CopiedDataTrack) stdout.WriteLine("  The mixed-mode CD's data track was copied with the audio.");
+            if (nativeEngine?.LastResult?.Verification is { } v) stdout.WriteLine($"  {v.Message}");
+            if (result.WarningMessage != null) stdout.WriteLine($"  Warning: {result.WarningMessage}");
+        }
+        else
+        {
+            stderr.WriteLine($"Copy failed: {result.ErrorMessage}");
+        }
+        return result.Success ? 0 : 1;
+    }
+
     private static int HandleCheckDisc(CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService)
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
@@ -2597,6 +2726,9 @@ public static class CliCommandRunner
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
         stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--json]");
         stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup.");
+        stdout.WriteLine("  copy-disc --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]] [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>] [--json]");
+        stdout.WriteLine("      Copies a disc, with one drive or two. With one drive (or for each further copy) the tray opens and the copy waits for a blank disc.");
+        stdout.WriteLine("      Audio is read with error checks; a copy stops before writing if sectors still read wrong, unless --allow-suspect. --native copies a mixed-mode CD's data track too.");
         stdout.WriteLine("  check-disc --drive <id> [--json]");
         stdout.WriteLine("      Reads a CD once with C2 error pointers and says where it is weak (where a player may skip). Read-only.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
