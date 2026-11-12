@@ -125,6 +125,27 @@ public sealed class FfmpegDvdTranscodeBuilder
         return this;
     }
 
+    /// <summary>
+    /// The picture fitted to the disc's display shape without stretching. A DVD frame is always 720 pixels wide; the
+    /// player widens it to 4:3 or 16:9. So the source is first taken to square pixels (honouring its own pixel shape,
+    /// e.g. 10:11 for DV camcorder video), fitted inside a square-pixel canvas of the target shape (16:9 NTSC 854×480,
+    /// 4:3 NTSC 640×480; PAL 1024×576 / 768×576) with bars where it is narrower or wider, and only then squeezed to
+    /// 720 pixels wide. Before, the source was fitted to 720×480 as pixels and then labelled 16:9, so a 4:3 video
+    /// played a third too wide.
+    /// </summary>
+    public static string BuildScaleAndPadFilter(DvdVideoStandard standard, DvdAspectRatio aspectRatio)
+    {
+        int height = standard == DvdVideoStandard.Ntsc ? 480 : 576;
+        int canvasWidth = aspectRatio == DvdAspectRatio.Standard4x3
+            ? height * 4 / 3
+            : (int)Math.Round(height * 16 / 9.0 / 2) * 2;
+        // A source without a pixel shape (sar 0) is taken as square. Commas inside expressions are escaped for the filtergraph.
+        return "scale=trunc(iw*if(gt(sar\\,0)\\,sar\\,1)/2)*2:ih,setsar=1," +
+               $"scale={canvasWidth}:{height}:force_original_aspect_ratio=decrease," +
+               $"pad={canvasWidth}:{height}:(ow-iw)/2:(oh-ih)/2," +
+               $"scale=720:{height},format=yuv420p";
+    }
+
     public FfmpegDvdTranscodeBuilder WithAspectRatio(DvdAspectRatio aspectRatio)
     {
         AspectRatio = aspectRatio;
@@ -200,9 +221,8 @@ public sealed class FfmpegDvdTranscodeBuilder
 
         if (EnableScaleAndPadFilter)
         {
-            string resolution = Standard == DvdVideoStandard.Ntsc ? "720:480" : "720:576";
             args.Add("-vf");
-            args.Add($"scale={resolution}:force_original_aspect_ratio=decrease,pad={resolution}:(ow-iw)/2:(oh-ih)/2,format=yuv420p");
+            args.Add(BuildScaleAndPadFilter(Standard, AspectRatio));
         }
 
         // Optional custom video bitrates

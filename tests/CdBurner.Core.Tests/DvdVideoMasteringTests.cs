@@ -545,6 +545,28 @@ public class DvdVideoMasteringTests
         Assert.Contains("-target ntsc-dvd -aspect 16:9", cli);
     }
 
+    [Theory]
+    [InlineData(DvdVideoStandard.Ntsc, DvdAspectRatio.Widescreen16x9, 854, 480)]
+    [InlineData(DvdVideoStandard.Ntsc, DvdAspectRatio.Standard4x3, 640, 480)]
+    [InlineData(DvdVideoStandard.Pal, DvdAspectRatio.Widescreen16x9, 1024, 576)]
+    [InlineData(DvdVideoStandard.Pal, DvdAspectRatio.Standard4x3, 768, 576)]
+    public void ScaleAndPad_FitsThePictureToTheDisplayShape_BeforeSqueezingTo720(
+        DvdVideoStandard standard, DvdAspectRatio aspect, int canvasWidth, int height)
+    {
+        // Measured with the bundled ffmpeg (2026-11-11): a 4:3 source into a 16:9 NTSC disc comes out 540x480 with
+        // 90-pixel side bars, which shows as 640x480 on a 16:9 screen; before, it filled 720x480 and played a third too wide.
+        string filter = FfmpegDvdTranscodeBuilder.BuildScaleAndPadFilter(standard, aspect);
+
+        double shape = aspect == DvdAspectRatio.Standard4x3 ? 4.0 / 3 : 16.0 / 9;
+        Assert.InRange((double)canvasWidth / height, shape - 0.005, shape + 0.005);
+        Assert.Contains($"scale={canvasWidth}:{height}:force_original_aspect_ratio=decrease,pad={canvasWidth}:{height}:", filter);
+        Assert.EndsWith($"scale=720:{height},format=yuv420p", filter);
+        Assert.StartsWith("scale=trunc(iw*if(gt(sar\\,0)\\,sar\\,1)/2)*2:ih,setsar=1,", filter); // the source's own pixel shape first
+
+        var args = FfmpegDvdTranscodeBuilder.ForNtsc("in.mp4", "out.vob", aspect).WithScaleAndPadFilter(true).BuildArgumentList().ToList();
+        Assert.Equal(FfmpegDvdTranscodeBuilder.BuildScaleAndPadFilter(DvdVideoStandard.Ntsc, aspect), args[args.IndexOf("-vf") + 1]);
+    }
+
     [Fact]
     public void FfmpegBuilder_Pal_GeneratesDeterministicArgumentsWith16x9()
     {
