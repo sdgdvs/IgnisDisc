@@ -396,7 +396,8 @@ def _assert_rejected_or_identical(raw: bytes, payload: bytes):
 def test_bit_flips_and_short_bursts_are_always_detected(data, payload, lba, mode):
     """
     Guaranteed by the EDC polynomial: every odd number of bit errors (factor x + 1), every double bit error
-    (the polynomial's period exceeds the sector) and every burst of 32 bits or fewer.
+    (the polynomial's period exceeds the sector) and every burst of 32 bits or fewer is detected. Since the P/Q
+    repair (F1) many of them are also corrected; either way, different data is never reported as good.
     """
     raw = unb64(call(f"mode{mode}_encode", data=payload, lba=lba)["raw"])
     first, end = _edc_span(mode)
@@ -404,12 +405,7 @@ def test_bit_flips_and_short_bursts_are_always_detected(data, payload, lba, mode
         st.lists(st.integers(first * 8, end * 8 - 1), min_size=1, max_size=3, unique=True),
         bit_bursts(first, end, 32),
     ))
-    damaged = flip_bits(raw, flips)
-    try:
-        reply = call("sector_extract", raw=damaged)
-    except Rejected:
-        return
-    assert reply["edcValid"] is False
+    _assert_rejected_or_identical(flip_bits(raw, flips), payload)
 
 
 @given(st.data(), random_payloads, lbas, st.sampled_from([1, 2]))
@@ -438,9 +434,6 @@ def test_mode1_zero_filled_body_is_rejected(payload, lba):
     _assert_rejected_or_identical(bytes(raw), payload)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "F2: a Mode 2 sector whose body (bytes 16..2351) is zero-filled is a valid codeword - EDC and P/Q parity "
-    "of all-zero data are zero - so Extract2048From2352 returns 2048 zero bytes with edcValid = true."))
 @given(random_payloads, lbas)
 @example(bulk_bytes(2048, "random", 1), 0)
 def test_mode2_zero_filled_body_is_rejected(payload, lba):
@@ -468,9 +461,6 @@ def test_truncated_sector_is_rejected(payload, lba, kept, mode):
     assert rejection.value.kind == "ArgumentException"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "F1: RawSectorCodec writes P/Q parity but has no decoder for it. Extract2048From2352 only compares the "
-    "EDC, so a single wrong byte - the smallest error the sector format can correct - is not recovered."))
 @given(random_payloads, lbas, st.integers(16, 2063), st.integers(1, 255))
 @example(bulk_bytes(2048, "random", 7), 16, 100, 0x01)
 def test_production_decoder_corrects_a_single_byte_error(payload, lba, position, error):

@@ -211,6 +211,9 @@ public sealed class NativeAudioBurnEngineTests : IDisposable
 
         Assert.False(result.Success);
         Assert.Contains("the check afterwards failed", result.ErrorMessage);
+        Assert.Equal(engine.LastResult!.LeadInSectorsWritten + engine.LastResult.AudioSectorsWritten, result.SectorsWritten); // not 0: the disc was written
+        Assert.True(result.SectorsWritten > 0);
+        Assert.Equal(engine.LastResult.Elapsed, result.TotalTime);
         Assert.DoesNotContain("Nothing was written", result.ErrorMessage);
         Assert.True(engine.LastResult!.DiscRecorded);
         Assert.False(recorder.CurrentMedium!.IsBlank);

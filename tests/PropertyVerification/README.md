@@ -45,14 +45,14 @@ today. Fixing the defect turns the suite red until the marker is removed.
 
 | Id | Test | Defect |
 | --- | --- | --- |
-| F1 | `test_production_decoder_corrects_a_single_byte_error` | `Extract2048From2352` checks the EDC only; the P/Q parity is never used for correction |
-| F2 | `test_mode2_zero_filled_body_is_rejected` | A Mode 2 sector with a zero-filled body passes as valid |
 | F3 | `test_flac_corrupt_frame_is_reported`, `test_flac_truncated_stream_is_reported`, `test_flac_length_field_bit_flip_is_reported` | Damaged FLAC input decodes to altered or shorter audio without an error |
 
 ## Fixed defects the suite now guards
 
 | Id | Test | Defect, as found |
 | --- | --- | --- |
+| F1 | `test_production_decoder_corrects_a_single_byte_error` | `Extract2048From2352` checked the EDC only and never used the P/Q parity. It now repairs a damaged sector with it (`SectorParityCorrector`) and keeps the repair only if the EDC then matches |
+| F2 | `test_mode2_zero_filled_body_is_rejected` | A Mode 2 sector with a zero-filled body passed as valid; it is now reported as damaged |
 | F4 | `test_archive_manifest_damage_never_passes_with_fewer_files`, `test_standalone_verify_script_fails_on_zero_filled_manifest` | An empty, zero-filled or shortened manifest verified as intact |
 | F5 | `test_span_plan_rejects_any_file_larger_than_one_disc` | Sector count wrapped for files of 4 TiB and larger |
 | F6 | `test_cdtext_dropped_pack_is_rejected` | A missing CD-Text pack changed titles without an error |

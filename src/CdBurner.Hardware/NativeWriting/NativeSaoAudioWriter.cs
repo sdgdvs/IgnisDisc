@@ -50,6 +50,9 @@ public sealed record NativeSaoWriteResult
 
     /// <summary>After a real write: the read-back check. Null after a test write or when writing did not finish.</summary>
     public NativeVerifyResult? Verification { get; init; }
+
+    /// <summary>Average speed the drive took the audio at (program area, from the host side), in audio "x"; 0 when not measured.</summary>
+    public double AverageWriteMultiplier { get; init; }
 }
 
 /// <summary>
@@ -229,9 +232,11 @@ public sealed class NativeSaoAudioWriter
         var programClock = Stopwatch.StartNew();
         WriteProgramArea(request, layout, state, reporter, leadInSectors, ct);
         double seconds = programClock.Elapsed.TotalSeconds;
+        double averageMultiplier = 0;
         if (seconds > 1 && state.AudioSectors > 0)
         {
-            _note($"Audio sent at an average of {state.AudioSectors / seconds / 75.0:F1}x ({state.AudioSectors:N0} sectors in {seconds:F0} s).");
+            averageMultiplier = state.AudioSectors / seconds / 75.0;
+            _note($"Audio sent at an average of {averageMultiplier:F1}x ({state.AudioSectors:N0} sectors in {seconds:F0} s).");
         }
 
         // 6. Flush; the drive writes the lead-out and closes the session itself.
@@ -290,7 +295,8 @@ public sealed class NativeSaoAudioWriter
             DataBlockTypeAccepted = state.BlockType,
             DiscStillBlankAfterTestWrite = stillBlank,
             DiscRecorded = !request.TestWrite,
-            Verification = verification
+            Verification = verification,
+            AverageWriteMultiplier = averageMultiplier
         };
     }
 

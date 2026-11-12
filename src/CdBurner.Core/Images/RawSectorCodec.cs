@@ -161,13 +161,17 @@ public static class RawSectorCodec
     }
 
     /// <summary>
-    /// Extracts 2048 bytes of user data from a 2352-byte raw CD sector (Mode 1 or Mode 2 XA Form 1)
-    /// and validates the EDC checksum.
+    /// Extracts 2048 bytes of user data from a 2352-byte raw CD sector (Mode 1 or Mode 2 XA Form 1) and checks them.
+    /// When the EDC does not match, the sector is repaired with its P/Q parity (<see cref="SectorParityCorrector"/>)
+    /// and the repair is kept only if the EDC then matches: the data handed back is either exactly what was written
+    /// (<paramref name="edcValid"/> true) or reported as damaged (false), never a guess reported as good.
     /// </summary>
     /// <param name="rawSector2352">Input raw 2352-byte sector buffer.</param>
     /// <param name="userData2048">Destination buffer for 2048 bytes of extracted user data.</param>
-    /// <param name="edcValid">True if the EDC checksum validates; false if data corruption was detected.</param>
-    /// <returns>True if the EDC checksum was valid.</returns>
+    /// <param name="edcValid">True if the data is intact or was repaired; false if damage remains.</param>
+    /// <returns>Same as <paramref name="edcValid"/>.</returns>
+    /// <exception cref="InvalidDataException">No sync pattern, an unknown mode, or a Mode 2 Form 2 sector (which holds
+    /// 2,324 bytes, not 2,048).</exception>
     public static bool Extract2048From2352(ReadOnlySpan<byte> rawSector2352, Span<byte> userData2048, out bool edcValid)
     {
         if (rawSector2352.Length < RawSectorSize)
@@ -186,40 +190,69 @@ public static class RawSectorCodec
         }
 
         byte mode = rawSector2352[15];
-        if (mode == 1)
-        {
-            // Mode 1: 2048 bytes user data at 16..2063
-            rawSector2352.Slice(16, UserDataSectorSize).CopyTo(userData2048.Slice(0, UserDataSectorSize));
-
-            // EDC is 32-bit little-endian at 2064..2067 computed over bytes 0..2063 (2064 bytes)
-            uint computedEdc = ComputeEdc(rawSector2352.Slice(0, 2064));
-            uint storedEdc = BinaryPrimitives.ReadUInt32LittleEndian(rawSector2352.Slice(2064, 4));
-            edcValid = (computedEdc == storedEdc);
-            return edcValid;
-        }
-        else if (mode == 2)
-        {
-            // Mode 2 XA Form 1: 2048 bytes user data at 24..2071
-            rawSector2352.Slice(24, UserDataSectorSize).CopyTo(userData2048.Slice(0, UserDataSectorSize));
-
-            // EDC in Mode 2 Form 1 is at 2072..2075 computed over bytes 16..2071 (2056 bytes)
-            uint computedEdc = ComputeEdc(rawSector2352.Slice(16, 2056));
-            uint storedEdc = BinaryPrimitives.ReadUInt32LittleEndian(rawSector2352.Slice(2072, 4));
-            edcValid = (computedEdc == storedEdc);
-
-            // Fallback check if EDC was computed over bytes 0..2071
-            if (!edcValid && ComputeEdc(rawSector2352.Slice(0, 2072)) == storedEdc)
-            {
-                edcValid = true;
-            }
-
-            return edcValid;
-        }
-        else
+        if (mode is not (1 or 2))
         {
             edcValid = false;
             throw new InvalidDataException($"Unsupported CD sector mode: {mode} (expected Mode 1 or Mode 2 XA).");
         }
+
+        ReadOnlySpan<byte> sector = rawSector2352.Slice(0, RawSectorSize);
+        if (mode == 2 && (sector[18] & 0x20) != 0 && sector[18] == sector[22])
+        {
+            edcValid = false;
+            throw new InvalidDataException("Mode 2 Form 2 sector: it holds 2,324 bytes of user data, not 2,048.");
+        }
+
+        if (IsIntact(sector, mode))
+        {
+            sector.Slice(UserDataOffset(mode), UserDataSectorSize).CopyTo(userData2048);
+            edcValid = true;
+            return true;
+        }
+
+        // Repair a copy with the P/Q parity, then let the EDC judge it.
+        Span<byte> repaired = stackalloc byte[RawSectorSize];
+        sector.CopyTo(repaired);
+        if (mode == 2)
+        {
+            repaired.Slice(12, 4).Clear(); // Mode 2 Form 1 parity is computed with the header taken as zero
+        }
+        int changed = SectorParityCorrector.Correct(repaired);
+        if (mode == 2)
+        {
+            sector.Slice(12, 4).CopyTo(repaired.Slice(12, 4));
+        }
+
+        if (changed > 0 && repaired[15] == mode && IsIntact(repaired, mode))
+        {
+            repaired.Slice(UserDataOffset(mode), UserDataSectorSize).CopyTo(userData2048);
+            edcValid = true;
+            return true;
+        }
+
+        sector.Slice(UserDataOffset(mode), UserDataSectorSize).CopyTo(userData2048);
+        edcValid = false;
+        return false;
+    }
+
+    private static int UserDataOffset(byte mode) => mode == 1 ? 16 : 24;
+
+    /// <summary>
+    /// True when the stored EDC matches. A Mode 2 sector whose subheader, data and EDC are all zero also matches (the
+    /// EDC of zeros is zero) but is what a zero-filled or blanked sector looks like; it is not taken as intact.
+    /// </summary>
+    private static bool IsIntact(ReadOnlySpan<byte> sector, byte mode)
+    {
+        if (mode == 1)
+        {
+            return ComputeEdc(sector.Slice(0, 2064)) == BinaryPrimitives.ReadUInt32LittleEndian(sector.Slice(2064, 4));
+        }
+
+        if (!sector.Slice(16, 2060).ContainsAnyExcept((byte)0))
+        {
+            return false;
+        }
+        return ComputeEdc(sector.Slice(16, 2056)) == BinaryPrimitives.ReadUInt32LittleEndian(sector.Slice(2072, 4));
     }
 
     /// <summary>

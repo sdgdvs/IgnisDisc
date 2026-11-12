@@ -195,10 +195,14 @@ public class CueSheetAndRawSectorTests
         Assert.True(edcValid);
         Assert.Equal(userData, extractedData);
 
-        // Verify flipping 1 byte in user data sets edcValid == false
+        // One wrong byte is inside the P/Q parity bound: repaired exactly. A 300-byte burst is not.
         rawSector[100] ^= 0x55; // byte 100 is within user data 16..2063
         RawSectorCodec.Extract2048From2352(rawSector, extractedData, out bool edcValidAfterFlip);
-        Assert.False(edcValidAfterFlip);
+        Assert.True(edcValidAfterFlip);
+        Assert.Equal(userData, extractedData);
+        for (int i = 0; i < 300; i++) rawSector[100 + i] ^= 0xFF;
+        RawSectorCodec.Extract2048From2352(rawSector, extractedData, out bool edcValidAfterTwo);
+        Assert.False(edcValidAfterTwo);
     }
 
     [Theory]
@@ -247,8 +251,12 @@ public class CueSheetAndRawSectorTests
         Assert.True(edcValid);
         Assert.Equal(userData, extracted);
 
-        // Corrupt user data
+        // One wrong byte is repaired from the parity; a 300-byte burst is reported.
         rawSector[1000] ^= 0xAA;
+        RawSectorCodec.Extract2048From2352(rawSector, extracted, out bool edcValidOne);
+        Assert.True(edcValidOne);
+        Assert.Equal(userData, extracted);
+        for (int i = 0; i < 300; i++) rawSector[1000 + i] ^= 0xFF;
         RawSectorCodec.Extract2048From2352(rawSector, extracted, out bool edcValidCorrupt);
         Assert.False(edcValidCorrupt);
     }

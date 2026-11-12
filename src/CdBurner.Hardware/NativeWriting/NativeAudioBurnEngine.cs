@@ -204,7 +204,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
 
         if (result.Success)
         {
-            return BurnOperationResult.Succeeded(result.LeadInSectorsWritten + result.AudioSectorsWritten, result.Elapsed);
+            return BurnOperationResult.Succeeded(result.LeadInSectorsWritten + result.AudioSectorsWritten, result.Elapsed, result.AverageWriteMultiplier);
         }
 
         string message = result.StoppedBeforeWriting ? $"{result.Message} Nothing was written to the disc." : result.Message;
@@ -212,7 +212,23 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend
         {
             message += $" Command log: {LastLogPath}";
         }
-        return result.Cancelled ? BurnOperationResult.CancelledResult(message) : BurnOperationResult.Failed(message);
+        if (result.Cancelled)
+        {
+            return BurnOperationResult.CancelledResult(message);
+        }
+
+        // A disc that was written but failed its check still had those sectors written, at that speed.
+        return result.DiscRecorded
+            ? new BurnOperationResult
+            {
+                Success = false,
+                Status = BurnStatus.Failed,
+                ErrorMessage = message,
+                SectorsWritten = result.LeadInSectorsWritten + result.AudioSectorsWritten,
+                TotalTime = result.Elapsed,
+                AverageSpeedMultiplier = result.AverageWriteMultiplier
+            }
+            : BurnOperationResult.Failed(message);
     }
 
     private NativeSaoWriteResult WriteWithTestFirst(NativeSaoAudioWriter writer, NativeSaoWriteRequest request, LoggingScsiTransport log,
