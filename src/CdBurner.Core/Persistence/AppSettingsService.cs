@@ -19,10 +19,11 @@ public enum ThemeMode
 public class AppSettings
 {
     /// <summary>
-    /// Default write speed: <see cref="WriteSpeedPolicy.Safest"/> (-1, the default) for the slowest speed the drive offers
+    /// Default write speed: <see cref="WriteSpeedPolicy.Recommended"/> (-1, the default) for the drive-aware choice,
+    /// <see cref="WriteSpeedPolicy.Slowest"/> (-2) for the slowest speed the drive offers
     /// for the disc, <see cref="WriteSpeedPolicy.Maximum"/> (0) for the fastest, or a multiplier such as 16.
     /// </summary>
-    public int DefaultWriteSpeedMultiplier { get; set; } = WriteSpeedPolicy.Safest;
+    public int DefaultWriteSpeedMultiplier { get; set; } = WriteSpeedPolicy.Recommended;
 
     /// <summary>
     /// Whether to automatically verify written media sectors against source hash after burning.
@@ -115,7 +116,7 @@ public class AppSettings
 
         if (SettingsVersion < 2)
         {
-            if (DefaultWriteSpeedMultiplier == 16) DefaultWriteSpeedMultiplier = WriteSpeedPolicy.Safest; // old default 16x
+            if (DefaultWriteSpeedMultiplier == 16) DefaultWriteSpeedMultiplier = WriteSpeedPolicy.Recommended; // old default 16x
             if (EnableVirtualDrive) EnableVirtualDrive = false;                                        // old default on
             if (!SecureAudioRipByDefault) SecureAudioRipByDefault = true;                              // old default off
         }

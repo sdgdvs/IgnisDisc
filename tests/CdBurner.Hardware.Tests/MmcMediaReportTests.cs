@@ -134,6 +134,25 @@ public class MmcMediaReportTests
         Assert.Equal(22_160_000, speeds[0].BytesPerSecond);
     }
 
+
+    [Fact]
+    public void WriteRotationControl_IsReadFromBits3And4_AndASpeedOfferedBothWaysIsKeptTwice()
+    {
+        // Byte 0 per Windows' CDROM_WRITE_SPEED_DESCRIPTOR: bit 0 MRW, bit 1 Exact, bits 3-4 WRC (0 CLV, 1 CAV).
+        byte[] clv16 = Speed(2_822, exact: false);
+        byte[] cav16 = Speed(2_822, exact: false); cav16[0] = 0x08;
+        byte[] cav24 = Speed(4_234, exact: true); cav24[0] = 0x0A;     // CAV and Exact
+        byte[] odd = Speed(1_764, exact: false); odd[0] = 0x10;        // WRC 2: reserved
+
+        var speeds = MmcMediaReport.ParseWriteSpeeds(Speeds(clv16, cav16, cav24, odd));
+
+        Assert.Equal(4, speeds.Count);
+        Assert.Equal(WriteRotation.Cav, speeds[0].Rotation);
+        Assert.True(speeds[0].Exact);
+        Assert.Equal(new[] { WriteRotation.Clv, WriteRotation.Cav }, speeds.Where(s => s.KilobytesPerSecond == 2_822).Select(s => s.Rotation).Order());
+        Assert.Equal(WriteRotation.Unknown, speeds[^1].Rotation);
+        Assert.Equal(WriteRotation.Clv, Assert.Single(MmcMediaReport.ParseWriteSpeeds(Gp60CdRwWriteSpeeds)).Rotation);
+    }
     [Fact]
     public void BluRaySpeeds_UseTheBluRay1xRate()
     {

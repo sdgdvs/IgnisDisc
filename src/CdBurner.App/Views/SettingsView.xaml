@@ -93,7 +93,7 @@
                                   SelectedValuePath="Value"
                                   SelectedValue="{Binding DefaultWriteSpeedMultiplier}" />
                         <TextBlock Grid.Column="2"
-                                   Text="Safest uses the slowest speed the drive offers for the inserted disc. A speed it does not offer becomes the nearest one it does."
+                                   Text="Recommended uses the fastest speed the drive writes at a constant linear velocity for the inserted disc, up to 16x for CD and 8x for DVD. A speed the drive does not offer becomes the nearest one it does."
                                    TextWrapping="Wrap"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextMutedBrush}"

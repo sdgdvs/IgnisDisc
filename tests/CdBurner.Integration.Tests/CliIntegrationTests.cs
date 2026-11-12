@@ -486,7 +486,7 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task BurnIso_WithNoOptions_UsesTheSlowestOfferedSpeed_AndChecksTheDisc()
+    public async Task BurnIso_WithNoOptions_UsesTheRecommendedSpeed_AndChecksTheDisc()
     {
         string iso = await BuildSmallIsoAsync("defaults");
         using var medium = VirtualDiscMedium.CreateBlankCdR700();
@@ -498,8 +498,8 @@ public sealed class CliIntegrationTests : IDisposable
 
         using var doc = ParseJsonOutput(burnOut);
         Assert.True(doc.RootElement.GetProperty("verified").GetBoolean());
-        // The virtual drive offers 8x to 48x for CD-R; the default is the slowest.
-        Assert.Equal(8.0, doc.RootElement.GetProperty("averageSpeedMultiplier").GetDouble(), 1);
+        // The virtual drive offers 8x to 48x for CD-R and says nothing about rotation: the 16x ceiling applies.
+        Assert.Equal(16.0, doc.RootElement.GetProperty("averageSpeedMultiplier").GetDouble(), 1);
     }
 
     [Fact]

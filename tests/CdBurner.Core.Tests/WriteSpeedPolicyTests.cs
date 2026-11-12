@@ -18,9 +18,9 @@ public class WriteSpeedPolicyTests
     private static readonly WriteSpeedDescriptor[] RealCdRList = [Cd(10), Cd(15.99), Cd(23.99), Cd(24), Cd(16), Cd(10)];
 
     [Fact]
-    public void Safest_IsTheSlowestSpeedOffered()
+    public void Slowest_IsTheSlowestSpeedOffered()
     {
-        Assert.Equal(10, WriteSpeedPolicy.Choose(RealCdRList, WriteSpeedPolicy.Safest)!.Value.Multiplier, 1);
+        Assert.Equal(10, WriteSpeedPolicy.Choose(RealCdRList, WriteSpeedPolicy.Slowest)!.Value.Multiplier, 1);
     }
 
     [Fact]
@@ -42,9 +42,9 @@ public class WriteSpeedPolicyTests
     [Fact]
     public void NoSpeedsOffered_LeavesTheDriveItsOwnSpeed()
     {
-        Assert.Null(WriteSpeedPolicy.Choose([], WriteSpeedPolicy.Safest));
+        Assert.Null(WriteSpeedPolicy.Choose([], WriteSpeedPolicy.Slowest));
         Assert.Null(WriteSpeedPolicy.Choose(null, WriteSpeedPolicy.Maximum));
-        Assert.Null(WriteSpeedPolicy.Choose([new WriteSpeedDescriptor(0, DiscMediaType.CdR)], WriteSpeedPolicy.Safest));
+        Assert.Null(WriteSpeedPolicy.Choose([new WriteSpeedDescriptor(0, DiscMediaType.CdR)], WriteSpeedPolicy.Slowest));
     }
 
     [Fact]
@@ -58,14 +58,105 @@ public class WriteSpeedPolicyTests
         Assert.Equal(48, WriteSpeedPolicy.Choose(forCdRw, WriteSpeedPolicy.Maximum)!.Value.Multiplier, 0);
 
         var forDvd = WriteSpeedPolicy.ForDisc(mixed, DiscMediaType.DvdPlusR);
-        Assert.Equal(2, WriteSpeedPolicy.Choose(forDvd, WriteSpeedPolicy.Safest)!.Value.Multiplier, 0);
+        Assert.Equal(2, WriteSpeedPolicy.Choose(forDvd, WriteSpeedPolicy.Slowest)!.Value.Multiplier, 0);
+    }
+
+    // ---- Recommended: from what the drive reports ----
+
+    private static WriteSpeedDescriptor Clv(double x, DiscMediaType t = DiscMediaType.CdR) =>
+        WriteSpeedDescriptor.FromMultiplier(x, t) with { Rotation = WriteRotation.Clv };
+
+    private static WriteSpeedDescriptor Cav(double x, DiscMediaType t = DiscMediaType.CdR) =>
+        WriteSpeedDescriptor.FromMultiplier(x, t) with { Rotation = WriteRotation.Cav };
+
+    private static double Recommended(params WriteSpeedDescriptor[] speeds) =>
+        WriteSpeedPolicy.Choose(speeds, WriteSpeedPolicy.Recommended)!.Value.Multiplier;
+
+    [Fact]
+    public void Recommended_SlimDrive_TakesItsOnlyClvSpeed()
+    {
+        // LG's published modes for a slim drive of this family: CD-R 10x CLV, 16x partial CAV, 24x CAV.
+        Assert.Equal(10, Recommended(Clv(10), Cav(16), Cav(24)), 1);
+    }
+
+    [Fact]
+    public void Recommended_DesktopDrive_TakesItsFastestClvSpeedUpTo16x()
+    {
+        // A typical half-height writer: CLV up to 16x, faster speeds CAV.
+        Assert.Equal(16, Recommended(Clv(4), Clv(8), Clv(16), Cav(24), Cav(32), Cav(48)), 1);
+    }
+
+    [Fact]
+    public void Recommended_IsNotTheSlowest_WhenFasterClvSpeedsExist()
+    {
+        Assert.NotEqual(Recommended(Clv(4), Clv(8), Clv(16), Cav(48)),
+            WriteSpeedPolicy.Choose([Clv(4), Clv(8), Clv(16), Cav(48)], WriteSpeedPolicy.Slowest)!.Value.Multiplier);
+    }
+
+    [Fact]
+    public void Recommended_WithoutRotationInformation_UsesTheCeiling()
+    {
+        Assert.Equal(16, Recommended(RealCdRList), 1);              // Windows' list: no rotation
+        Assert.Equal(16, Recommended(Clv(10), Clv(16), Clv(24)), 1); // all one way: says nothing, ceiling applies
+    }
+
+    [Fact]
+    public void Recommended_NothingAtOrBelowTheCeiling_TakesTheSlowest()
+    {
+        Assert.Equal(24, Recommended(Cd(24), Cd(48)), 1);
+    }
+
+    [Fact]
+    public void Recommended_Dvd_TakesTheFastestClvSpeedUpTo8x()
+    {
+        const DiscMediaType d = DiscMediaType.DvdPlusR;
+        Assert.Equal(8, Recommended(Clv(2.4, d), Clv(4, d), Clv(6, d), Clv(8, d), Cav(12, d), Cav(16, d)), 1);
+        Assert.Equal(8, Recommended(Dvd(4), Dvd(8), Dvd(16)), 1);
+        Assert.Equal(4, Recommended(Clv(4, d), Cav(8, d), Cav(16, d)), 1);
+    }
+
+    [Fact]
+    public void Recommended_BluRay_HasNoCeilingButStaysClv()
+    {
+        const DiscMediaType b = DiscMediaType.BdR;
+        Assert.Equal(6, Recommended(Clv(2, b), Clv(4, b), Clv(6, b), Cav(8, b), Cav(12, b)), 1);
+        Assert.Equal(12, Recommended(WriteSpeedDescriptor.FromMultiplier(6, b), WriteSpeedDescriptor.FromMultiplier(12, b)), 1);
+    }
+
+    [Fact]
+    public void AChosenSpeedOfferedBothWays_PrefersClv()
+    {
+        Assert.Equal(WriteRotation.Clv, WriteSpeedPolicy.Choose([Cav(16), Clv(16)], 16)!.Value.Rotation);
+    }
+
+    [Fact]
+    public void WindowsList_IsMarkedWithTheDrivesRotation()
+    {
+        // Windows reports 10/16/24x with no rotation; the drive says 10x CLV, 16x and 24x CAV.
+        var marked = WriteSpeedPolicy.WithRotationFrom([Cd(10), Cd(15.99), Cd(24)], [Clv(10), Cav(16), Cav(24)]);
+
+        Assert.Equal([WriteRotation.Clv, WriteRotation.Cav, WriteRotation.Cav], marked.Select(s => s.Rotation));
+        Assert.Equal(10, Recommended([.. marked]), 1);
+
+        // A drive that reports nothing leaves Windows' list as it was, and the ceiling decides.
+        var unmarked = WriteSpeedPolicy.WithRotationFrom([Cd(10), Cd(16), Cd(24)], []);
+        Assert.All(unmarked, s => Assert.Equal(WriteRotation.Unknown, s.Rotation));
+        Assert.Equal(16, Recommended([.. unmarked]), 1);
+    }
+
+    [Fact]
+    public void ExplainRecommended_SaysWhatItUsed()
+    {
+        Assert.Equal("10x: the fastest of the speeds the drive writes at a constant linear velocity up to 16x.",
+            WriteSpeedPolicy.ExplainRecommended([Clv(10), Cav(16), Cav(24)]));
+        Assert.Equal("The drive lists no write speeds for this disc, so it keeps its own.", WriteSpeedPolicy.ExplainRecommended([]));
     }
 
     [Fact]
     public void NewSettings_AreTheSafeOnes()
     {
         var s = new AppSettings();
-        Assert.Equal(WriteSpeedPolicy.Safest, s.DefaultWriteSpeedMultiplier);
+        Assert.Equal(WriteSpeedPolicy.Recommended, s.DefaultWriteSpeedMultiplier);
         Assert.True(s.VerifyAfterBurnByDefault);
         Assert.True(s.EnableBurnFreeByDefault);
         Assert.True(s.SecureAudioRipByDefault);
@@ -103,7 +194,7 @@ public class WriteSpeedPolicyTests
 
             var loaded = AppSettingsService.LoadFromFile(path);
 
-            Assert.Equal(WriteSpeedPolicy.Safest, loaded.DefaultWriteSpeedMultiplier);
+            Assert.Equal(WriteSpeedPolicy.Recommended, loaded.DefaultWriteSpeedMultiplier);
             Assert.False(loaded.EnableVirtualDrive);
             Assert.True(loaded.SecureAudioRipByDefault);
             Assert.True(loaded.StrictVerify); // not one of the changed defaults: kept

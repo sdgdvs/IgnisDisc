@@ -512,7 +512,7 @@ public class ProjectPersistenceTests : IDisposable
 
         // Verify default settings
         var def = service1.CurrentSettings;
-        Assert.Equal(WriteSpeedPolicy.Safest, def.DefaultWriteSpeedMultiplier);
+        Assert.Equal(WriteSpeedPolicy.Recommended, def.DefaultWriteSpeedMultiplier);
         Assert.True(def.SecureAudioRipByDefault);
         Assert.True(def.VerifyAfterBurnByDefault);
         Assert.False(def.EjectAfterBurnByDefault);
@@ -563,7 +563,7 @@ public class ProjectPersistenceTests : IDisposable
         // 5. Test ResetToDefaults
         service2.ResetToDefaults();
         var reset = service2.CurrentSettings;
-        Assert.Equal(WriteSpeedPolicy.Safest, reset.DefaultWriteSpeedMultiplier);
+        Assert.Equal(WriteSpeedPolicy.Recommended, reset.DefaultWriteSpeedMultiplier);
         Assert.True(reset.VerifyAfterBurnByDefault);
         Assert.Equal(ThemeMode.System, reset.ThemeMode);
     }

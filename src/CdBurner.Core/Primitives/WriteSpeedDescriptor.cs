@@ -1,5 +1,16 @@
 namespace CdBurner.Core.Primitives;
 
+/// <summary>How the drive turns the disc at a given write speed, as it reports it (MMC Write Rotation Control).</summary>
+public enum WriteRotation
+{
+    /// <summary>The drive did not say (Windows' own speed list carries no rotation).</summary>
+    Unknown,
+    /// <summary>Constant linear velocity: the same speed from the first track to the last.</summary>
+    Clv,
+    /// <summary>Constant angular velocity (or partial CAV): the speed climbs from the centre outwards; the figure is a top or inner speed.</summary>
+    Cav
+}
+
 /// <summary>
 /// Optical drive read/write speed descriptor representing transfer rate in bytes/sec
 /// and as an optical multiplier (e.g., 24.0x, 16.0x, 8.0x) relative to CD/DVD 1X reference rates.
@@ -9,6 +20,9 @@ public readonly record struct WriteSpeedDescriptor : IComparable<WriteSpeedDescr
     public int BytesPerSecond { get; }
     public DiscMediaType MediaType { get; }
     public double Multiplier { get; }
+
+    /// <summary>Rotation the drive reported for this speed; <see cref="WriteRotation.Unknown"/> when it gave none.</summary>
+    public WriteRotation Rotation { get; init; }
 
     public WriteSpeedDescriptor(int bytesPerSecond, DiscMediaType mediaType, bool isAudio = false)
     {

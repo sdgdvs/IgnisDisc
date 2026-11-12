@@ -224,7 +224,15 @@ public sealed class NativeSaoAudioWriter
             WriteLeadIn(leadInCycle, leadInStartLba, leadInSectors, state, reporter, ct);
         }
 
+        // The drive may round the speed asked for (this one wrote CD-R at 10x when asked for 8x), so log what it did:
+        // sectors accepted over time. Its buffer holds about a second of audio, so this is close but not exact.
+        var programClock = Stopwatch.StartNew();
         WriteProgramArea(request, layout, state, reporter, leadInSectors, ct);
+        double seconds = programClock.Elapsed.TotalSeconds;
+        if (seconds > 1 && state.AudioSectors > 0)
+        {
+            _note($"Audio sent at an average of {state.AudioSectors / seconds / 75.0:F1}x ({state.AudioSectors:N0} sectors in {seconds:F0} s).");
+        }
 
         // 6. Flush; the drive writes the lead-out and closes the session itself.
         reporter.Report(totalSectors, "Writing the lead-out");
@@ -295,7 +303,7 @@ public sealed class NativeSaoAudioWriter
         BinaryPrimitives.WriteUInt16BigEndian(cdb.AsSpan(4, 2), (ushort)Math.Min(kiloBytesPerSecond, 0xFFFF));
         var r = _transport.ExecuteCommand(cdb, Span<byte>.Empty, ScsiPassThroughNative.SCSI_IOCTL_DATA_UNSPECIFIED, ShortTimeout);
         _note(r.IsSuccess
-            ? $"Write speed set to {kiloBytesPerSecond} kB/s ({kiloBytesPerSecond / 176.4:F0}x)."
+            ? $"Asked the drive to write at {kiloBytesPerSecond} kB/s ({kiloBytesPerSecond / 176.4:F0}x); it may round that to a speed it supports."
             : $"The drive did not accept a write speed of {kiloBytesPerSecond} kB/s and keeps its own: {Describe(r)}");
     }
 

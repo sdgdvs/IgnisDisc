@@ -371,9 +371,14 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
 
         // Windows gives no speeds for a disc it can't write as it is (a finalized CD-RW, for one). Ask the drive
         // which speeds it offers for the inserted disc before falling back to generic figures.
-        if (writeSpeeds.Count == 0 && insertedMediaType is not (DiscMediaType.Unknown or DiscMediaType.NoMedia))
+        // The drive's own list (GET PERFORMANCE) says which speeds it writes at a constant linear velocity, which the
+        // default speed choice needs; Windows' list does not. It also fills in when Windows gives no speeds at all.
+        if (insertedMediaType is not (DiscMediaType.Unknown or DiscMediaType.NoMedia))
         {
-            writeSpeeds.AddRange(PhysicalSectorReader.ProbeDriveMediaReport(VolumePath).ToWriteSpeedDescriptors(insertedMediaType));
+            var fromDrive = PhysicalSectorReader.ProbeDriveMediaReport(VolumePath).ToWriteSpeedDescriptors(insertedMediaType);
+            var marked = writeSpeeds.Count == 0 ? fromDrive : WriteSpeedPolicy.WithRotationFrom(writeSpeeds, fromDrive);
+            writeSpeeds.Clear();
+            writeSpeeds.AddRange(marked);
         }
 
         if (writeSpeeds.Count == 0)

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Primitives;
 
 namespace CdBurner.Hardware.Scsi;
 
@@ -93,7 +94,9 @@ public static class MmcMediaReport
     /// <summary>
     /// Parses a GET PERFORMANCE type 03h response: an 8-byte header (bytes 0–3 = length of what follows the length
     /// field), then 16-byte Write Speed descriptors (End LBA in bytes 4–7, read and write speed in kB/s in bytes
-    /// 8–11 and 12–15, Exact in byte 0 bit 1). Speeds are de-duplicated and sorted fastest first; zero entries skipped.
+    /// 8–11 and 12–15, Exact in byte 0 bit 1, Write Rotation Control in byte 0 bits 3–4: 0 = default/CLV, 1 = CAV, as
+    /// in Windows' CDROM_WRITE_SPEED_DESCRIPTOR). A speed offered both CLV and CAV is kept once per rotation; sorted
+    /// fastest first; zero entries skipped.
     /// </summary>
     public static IReadOnlyList<DriveWriteSpeed> ParseWriteSpeeds(ReadOnlySpan<byte> response)
     {
@@ -106,12 +109,14 @@ public static class MmcMediaReport
         long end = Math.Min(response.Length, 4 + dataLength);
 
         var speeds = new List<DriveWriteSpeed>();
-        var seen = new HashSet<int>();
+        var seen = new HashSet<(int, WriteRotation)>();
         for (int offset = 8; offset + 16 <= end; offset += 16)
         {
             ReadOnlySpan<byte> d = response.Slice(offset, 16);
             int writeKb = (int)Math.Min(int.MaxValue, BinaryPrimitives.ReadUInt32BigEndian(d.Slice(12, 4)));
-            if (writeKb <= 0 || !seen.Add(writeKb))
+            int wrc = (d[0] >> 3) & 0x03;
+            var rotation = wrc switch { 0 => WriteRotation.Clv, 1 => WriteRotation.Cav, _ => WriteRotation.Unknown };
+            if (writeKb <= 0 || !seen.Add((writeKb, rotation)))
             {
                 continue;
             }
@@ -120,7 +125,8 @@ public static class MmcMediaReport
                 KilobytesPerSecond: writeKb,
                 EndLba: (int)Math.Min(int.MaxValue, BinaryPrimitives.ReadUInt32BigEndian(d.Slice(4, 4))),
                 ReadKilobytesPerSecond: (int)Math.Min(int.MaxValue, BinaryPrimitives.ReadUInt32BigEndian(d.Slice(8, 4))),
-                Exact: (d[0] & 0x02) != 0));
+                Exact: (d[0] & 0x02) != 0,
+                Rotation: rotation));
         }
 
         speeds.Sort((a, b) => b.KilobytesPerSecond.CompareTo(a.KilobytesPerSecond));

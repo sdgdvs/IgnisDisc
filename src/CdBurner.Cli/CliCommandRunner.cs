@@ -316,6 +316,9 @@ public static class CliCommandRunner
 
         var status = recorder.WithManufacturerId(recorder.QueryMediaStatus());
         var caps = recorder.GetCapabilities();
+        string? recommendedSpeed = status.MediaPresent
+            ? WriteSpeedPolicy.ExplainRecommended(WriteSpeedPolicy.ForDisc(caps.SupportedWriteSpeeds, status.MediaType))
+            : null;
         // Straight from the drive (read-only): formatted size and the write speeds it offers for this disc.
         var driveReport = status.MediaPresent && recorder is IDriveMediaReportProvider reportProvider
             ? reportProvider.ReadDriveMediaReport()
@@ -377,13 +380,15 @@ public static class CliCommandRunner
                         typeParameter = f.TypeParameter
                     }).ToList()
                 },
+                recommendedWriteSpeed = recommendedSpeed,
                 writeSpeedsFromDrive = driveReport.WriteSpeeds.Select(s => new
                 {
                     multiplier = s.Multiplier(status.MediaType),
                     kilobytesPerSecond = s.KilobytesPerSecond,
                     bytesPerSecond = s.BytesPerSecond,
                     endLba = s.EndLba,
-                    exact = s.Exact
+                    exact = s.Exact,
+                    rotation = s.Rotation.ToString().ToUpperInvariant()
                 }).ToList()
             };
 
@@ -425,7 +430,11 @@ public static class CliCommandRunner
             }
             if (driveReport.WriteSpeeds.Count > 0)
             {
-                stdout.WriteLine($"  Drive's Write Speeds:  {string.Join(", ", driveReport.WriteSpeeds.Select(s => $"{s.Multiplier(status.MediaType):0.#}x"))}");
+                stdout.WriteLine($"  Drive's Write Speeds:  {string.Join(", ", driveReport.WriteSpeeds.Select(s => $"{s.Multiplier(status.MediaType):0.#}x{(s.Rotation == WriteRotation.Unknown ? "" : " " + s.Rotation.ToString().ToUpperInvariant())}"))}");
+            }
+            if (recommendedSpeed != null)
+            {
+                stdout.WriteLine($"  Default Write Speed:   {recommendedSpeed}");
             }
         }
 
@@ -2306,22 +2315,25 @@ public static class CliCommandRunner
     }
 
     /// <summary>
-    /// The write speed for a burn. No <c>--speed</c>: the slowest speed the drive offers for the inserted disc
-    /// (<see cref="WriteSpeedPolicy.Safest"/>), so an unattended burn takes the cautious choice. <c>--speed max</c>:
-    /// the fastest. A number such as <c>8</c> or <c>8x</c> is sent as asked; the drive rounds it to a speed it supports.
-    /// Returns null when the drive should keep its own speed (it reports no speeds).
+    /// The write speed for a burn. No <c>--speed</c> (or <c>recommended</c>): <see cref="WriteSpeedPolicy.Recommended"/>,
+    /// the fastest speed the drive writes at a constant linear velocity for this disc, up to 16x on CD and 8x on DVD.
+    /// <c>slowest</c> and <c>max</c> take the ends of the drive's list. A number such as <c>8</c> or <c>8x</c> is sent
+    /// as asked; the drive rounds it to a speed it supports. Returns null when the drive should keep its own speed
+    /// (it reports no speeds).
     /// </summary>
     private static WriteSpeedDescriptor? ParseSpeed(string? speedStr, IDiscRecorderBackend recorder, DiscMediaType mediaType, bool isAudio = false)
     {
         string text = speedStr?.Trim() ?? string.Empty;
-        if (text.Length == 0 || text.Equals("safest", StringComparison.OrdinalIgnoreCase))
+        int? preference = text.ToLowerInvariant() switch
         {
-            return WriteSpeedPolicy.Choose(WriteSpeedPolicy.ForDisc(DriveSpeeds(recorder), mediaType), WriteSpeedPolicy.Safest);
-        }
-
-        if (text.Equals("max", StringComparison.OrdinalIgnoreCase) || text.Equals("maximum", StringComparison.OrdinalIgnoreCase))
+            "" or "recommended" => WriteSpeedPolicy.Recommended,
+            "slowest" or "min" => WriteSpeedPolicy.Slowest,
+            "max" or "maximum" => WriteSpeedPolicy.Maximum,
+            _ => null
+        };
+        if (preference is { } p)
         {
-            return WriteSpeedPolicy.Choose(WriteSpeedPolicy.ForDisc(DriveSpeeds(recorder), mediaType), WriteSpeedPolicy.Maximum);
+            return WriteSpeedPolicy.Choose(WriteSpeedPolicy.ForDisc(DriveSpeeds(recorder), mediaType), p);
         }
 
         string cleaned = text.EndsWith('x') || text.EndsWith('X') ? text[..^1].Trim() : text; // one optional x: "8xx" is a typo
@@ -2331,7 +2343,7 @@ public static class CliCommandRunner
         }
 
         // Before, an unreadable value silently meant "fastest"; a typo must not change how a disc is burned.
-        throw new CommandLineException($"--speed '{speedStr}' is not a speed. Use a number such as 8 or 8x, 'safest' (the default) or 'max'.");
+        throw new CommandLineException($"--speed '{speedStr}' is not a speed. Use a number such as 8 or 8x, 'recommended' (the default), 'slowest' or 'max'.");
     }
 
     /// <summary>The drive's write speeds; none when this kind of drive cannot list them (it then keeps its own speed).</summary>
@@ -2482,7 +2494,8 @@ public static class CliCommandRunner
         stdout.WriteLine("  --json           Format output as machine-readable JSON.");
         stdout.WriteLine();
         stdout.WriteLine("Safe defaults (each can be turned off):");
-        stdout.WriteLine("  Burns use the slowest speed the drive offers for the disc; --speed <X> or --speed max to change it.");
+        stdout.WriteLine("  Burns use the fastest speed the drive writes at a constant linear velocity for the disc, up to 16x on CD");
+        stdout.WriteLine("  and 8x on DVD; --speed <X>, --speed slowest or --speed max to change it.");
         stdout.WriteLine("  Data and DVD-Video burns are read back and compared afterwards; --no-verify skips that.");
         stdout.WriteLine("  rip-audio reads with C2 error pointers and re-reads doubtful sectors; --no-secure reads once.");
     }

@@ -264,10 +264,10 @@ public class SettingsViewModel : ObservableObject
     };
 
     /// <summary>
-    /// Default write speed choices: Safest (the default) first, then Maximum, then fixed multipliers.
+    /// Default write speed choices: Recommended (the default) first, then Slowest, Maximum and fixed multipliers.
     /// </summary>
     public IReadOnlyList<SpeedChoice> AvailableSpeeds { get; } =
-        new[] { WriteSpeedPolicy.Safest, WriteSpeedPolicy.Maximum, 4, 8, 16, 24, 32, 48, 52 }
+        new[] { WriteSpeedPolicy.Recommended, WriteSpeedPolicy.Slowest, WriteSpeedPolicy.Maximum, 4, 8, 10, 16, 24, 32, 48, 52 }
             .Select(v => new SpeedChoice(v, WriteSpeedPolicy.Describe(v)))
             .ToArray();
 

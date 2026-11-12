@@ -38,7 +38,8 @@ public sealed record FormattedCapacityInfo(
 /// <param name="EndLba">Last address the speed applies to (the disc's end for constant-speed writing).</param>
 /// <param name="ReadKilobytesPerSecond">Read speed reported alongside it.</param>
 /// <param name="Exact">The drive says the descriptor is exact for this disc rather than a general figure.</param>
-public sealed record DriveWriteSpeed(int KilobytesPerSecond, int EndLba, int ReadKilobytesPerSecond, bool Exact)
+/// <param name="Rotation">Write Rotation Control (byte 0, bits 3-4): 0 = the default, constant linear velocity; 1 = CAV.</param>
+public sealed record DriveWriteSpeed(int KilobytesPerSecond, int EndLba, int ReadKilobytesPerSecond, bool Exact, WriteRotation Rotation = WriteRotation.Unknown)
 {
     public long BytesPerSecond => KilobytesPerSecond * 1000L;
 
@@ -70,12 +71,13 @@ public sealed record DriveMediaReport(FormattedCapacityInfo? FormattedCapacity, 
             return Array.Empty<WriteSpeedDescriptor>();
         }
 
+        // The same figure can be offered both CLV and CAV; keep each pairing once.
         return WriteSpeeds
-            .Select(s => s.Multiplier(mediaType))
-            .Where(m => m > 0)
+            .Select(s => (Multiplier: s.Multiplier(mediaType), s.Rotation))
+            .Where(p => p.Multiplier > 0)
             .Distinct()
-            .OrderBy(m => m)
-            .Select(m => WriteSpeedDescriptor.FromMultiplier(m, mediaType))
+            .OrderBy(p => p.Multiplier)
+            .Select(p => WriteSpeedDescriptor.FromMultiplier(p.Multiplier, mediaType) with { Rotation = p.Rotation })
             .ToList();
     }
 }

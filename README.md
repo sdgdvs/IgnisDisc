@@ -113,6 +113,13 @@ drive reports. The rest is read normally. `--strict-verify` sets that bit on eve
 to the drive's buffer size, and is several times slower (measured on one USB DVD writer: 1.2 MB/s against 3.5 MB/s).
 The app has the same choice under Settings ("Strict verify").
 
+Write speed (when `--speed` is not given, and in the app unless Settings says otherwise): the fastest speed the drive
+writes at a constant linear velocity for the inserted disc, up to 16x for CD and 8x for DVD, taken from the drive's
+own speed list. CAV and partial-CAV speeds rise towards the outer edge, so the drive keeps adjusting the laser; the
+slowest speed is not automatically the best either. On a slim USB writer that offers CD-R at 10x CLV, 16x and 24x CAV,
+this is 10x.
+`media-info` shows the choice and why; `--speed <X>`, `--speed slowest` and `--speed max` override it.
+
 `--overwrite`: a used DVD+RW or DVD-RAM is rewritten from the start, so a burn replaces every file on it. Burns refuse
 to do that unless you pass `--overwrite`. Sequential rewritable discs (CD-RW, sequential DVD-RW) cannot be overwritten
 in place once finalized—run `ignisdisc-cli erase --drive <id>` before burning them again.
@@ -136,7 +143,7 @@ only been run against the built-in drive simulator, and no disc has been tried i
 
 `--native` on `burn-iso` and `burn-data` (experimental, also "Direct drive commands" on the app's Data Disc and Disc
 Image screens) writes the image to a blank CD-R or CD-RW with IgnisDisc's own drive commands: one Mode 1 data track,
-Track-at-Once, at a speed picked from the drive's own list for that disc (the slowest unless `--speed max` or another `--speed` is given,
+Track-at-Once, at a speed picked from the drive's own list for that disc (by default its fastest constant-velocity speed up to 16x, or the `--speed` given,
 rounded down to one the drive offers), never left to Windows. The disc is always read back sector by sector from the
 disc itself afterwards, even with `--no-verify`. A blank single-layer DVD-R or DVD-RW is written Disc-At-Once (or in
 packets when `--no-close` leaves it open) and a DVD+R in sequence, then closed or finalized; this DVD path has only

@@ -357,7 +357,7 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
             vm.ResetSettingsCommand.Execute(null);
 
             // Assert 2: Reset back to defaults
-            Assert.Equal(CdBurner.Core.Primitives.WriteSpeedPolicy.Safest, vm.DefaultWriteSpeedMultiplier);
+            Assert.Equal(CdBurner.Core.Primitives.WriteSpeedPolicy.Recommended, vm.DefaultWriteSpeedMultiplier);
             Assert.True(vm.VerifyAfterBurnByDefault);
             Assert.False(vm.StrictVerify);
             Assert.Equal(ThemeMode.System, vm.ThemeMode);
@@ -435,7 +435,7 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
     }
 
     [Fact]
-    public void MainViewModel_DefaultWriteSpeed_IsTheSlowestOffered_AndAChosenSpeedIsKept()
+    public void MainViewModel_DefaultWriteSpeed_IsRecommended_AndAChosenSpeedIsKept()
     {
         using var mainVm = new MainViewModel(_deviceManager, _burnEngine);
 
@@ -443,19 +443,23 @@ public sealed class ProgressAndUtilitiesViewModelTests : IDisposable
         Assert.NotNull(virtualCd);
         mainVm.SelectedRecorder = virtualCd;
 
-        // Default: the slowest CD speed the virtual drive offers (8x of 8x..48x), so a first burn takes the cautious choice.
+        // Default: Recommended. The virtual drive offers 8x..48x with no rotation, so the 16x ceiling applies.
         Assert.NotEmpty(mainVm.AvailableWriteSpeeds);
         Assert.NotNull(mainVm.SelectedWriteSpeed);
-        Assert.Equal(8.0, mainVm.SelectedWriteSpeed.Value.Multiplier);
+        Assert.Equal(16.0, mainVm.SelectedWriteSpeed.Value.Multiplier);
 
         // A speed chosen in Settings is used instead.
-        mainVm.Settings.DefaultWriteSpeedMultiplier = 16;
+        mainVm.Settings.DefaultWriteSpeedMultiplier = 24;
         mainVm.SelectDefaultWriteSpeed();
-        Assert.Equal(16.0, mainVm.SelectedWriteSpeed!.Value.Multiplier);
+        Assert.Equal(24.0, mainVm.SelectedWriteSpeed!.Value.Multiplier);
 
         mainVm.Settings.DefaultWriteSpeedMultiplier = CdBurner.Core.Primitives.WriteSpeedPolicy.Maximum;
         mainVm.SelectDefaultWriteSpeed();
         Assert.Equal(48.0, mainVm.SelectedWriteSpeed!.Value.Multiplier);
+
+        mainVm.Settings.DefaultWriteSpeedMultiplier = CdBurner.Core.Primitives.WriteSpeedPolicy.Slowest;
+        mainVm.SelectDefaultWriteSpeed();
+        Assert.Equal(8.0, mainVm.SelectedWriteSpeed!.Value.Multiplier);
     }
 
     #endregion
