@@ -586,6 +586,48 @@ public sealed class CliIntegrationTests : IDisposable
         Assert.True(medium.IsBlank);
     }
 
+    [Fact]
+    public async Task BurnData_Native_AddsASessionToAnOpenDisc_AndKeepsTheEarlierFiles()
+    {
+        string first = CreateSampleDataFolder("NativeSessionOne");
+        string second = Path.Combine(_tempDir, "NativeSessionTwo");
+        Directory.CreateDirectory(second);
+        byte[] added = new byte[50_000];
+        new Random(15).NextBytes(added);
+        File.WriteAllBytes(Path.Combine(second, "ADDED.BIN"), added);
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+        string logs = Path.Combine(_tempDir, "append-logs");
+
+        var (out1, err1) = CreateStringWriters();
+        Assert.True(0 == await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", first, "--native", "--no-close", "--log-dir", logs, "--json" },
+            out1, err1, _deviceService, _burnEngine), err1.ToString());
+        Assert.False(medium.IsFinalized);
+        int next = medium.NextWritableLba;
+
+        var (out2, err2) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "burn-data", "--drive", "VDRV-01", "--input", second, "--native", "--log-dir", logs, "--json" },
+            out2, err2, _deviceService, _burnEngine);
+
+        Assert.True(code == 0, err2.ToString() + out2);
+        using var doc = ParseJsonOutput(out2);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("verified").GetBoolean());
+        var direct = root.GetProperty("directWrite");
+        Assert.Equal("direct", direct.GetProperty("writer").GetString());
+        Assert.Contains($"Session 2 was added at sector {next:N0}", direct.GetProperty("writerMessage").GetString());
+        Assert.Equal(2, medium.Sessions.Count);
+        Assert.Equal(next, medium.Sessions[1].StartLba);
+        Assert.True(medium.IsFinalized);
+
+        using var reader = CdBurner.Core.Iso.IsoImageReader.FromStream(medium.CreateReadStream(), sessionStartLba: next);
+        Assert.Equal(added, reader.ReadFileBytes("ADDED.BIN"));
+        Assert.Equal("CLI sample data file.", Encoding.UTF8.GetString(reader.ReadFileBytes("README.TXT")));
+        Assert.Equal("Nested content for directory recursion testing.", Encoding.UTF8.GetString(reader.ReadFileBytes("SUBDIR/NESTED.TXT")));
+    }
+
     #endregion
 
     #region 5. scan command tests

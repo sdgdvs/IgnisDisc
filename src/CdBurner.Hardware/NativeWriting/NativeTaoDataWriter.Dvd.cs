@@ -90,7 +90,14 @@ public sealed partial class NativeTaoDataWriter
 
         bool dualLayer = profile == ProfileDvdPlusRDualLayer;
         bool plusR = profile is ProfileDvdPlusR or ProfileDvdPlusRDualLayer;
-        var mode = plusR ? DvdWriteMode.PlusR : request.CloseDisc ? DvdWriteMode.DiscAtOnce : DvdWriteMode.Incremental;
+        if (request.AppendsSession && dualLayer)
+        {
+            state.UnsupportedDisc = true;
+            throw Stop($"Direct writing adds sessions to single-layer DVDs only so far (the disc is {discName}).");
+        }
+        // Disc-At-Once needs a blank disc; a session added to a DVD-R/-RW is written incrementally, and closing the
+        // disc then comes from the multi-session field (00b: CLOSE SESSION closes the disc).
+        var mode = plusR ? DvdWriteMode.PlusR : request.CloseDisc && !request.AppendsSession ? DvdWriteMode.DiscAtOnce : DvdWriteMode.Incremental;
         string kind = dualLayer ? "DVD+R DL" : plusR ? "DVD+R" : profile == ProfileDvdMinusR ? "DVD-R" : "DVD-RW";
         state.WriteMode = mode switch
         {
@@ -126,31 +133,44 @@ public sealed partial class NativeTaoDataWriter
             bufferUnderrunFree = (dvdWrite.Flags & 0x40) != 0;
             if (mode == DvdWriteMode.Incremental && !ReadFeature(FeatureIncrementalStreaming).Current)
             {
-                throw Stop("The drive does not offer incremental writing for this disc, which leaving the disc open needs.");
+                throw Stop(request.AppendsSession
+                    ? "The drive does not offer incremental writing for this disc, which adding a session needs."
+                    : "The drive does not offer incremental writing for this disc, which leaving the disc open needs.");
             }
         }
 
-        // 2. Blank disc; where writing starts and how much fits.
+        // 2. A blank disc, or an open one with room for another session; where writing starts and how much fits.
         var disc = ReadDiscInformation() ?? throw Stop("The drive did not return disc information.");
-        if (disc.Status != 0)
+        AppendTarget? append = null;
+        if (request.AppendsSession)
+        {
+            append = FindAppendTarget(request, disc, state.ImageSectors);
+        }
+        else if (disc.Status != 0)
         {
             throw Stop($"The disc is not blank. Direct writing needs a blank {kind}.");
         }
-        if (ReadTrackInformation(1) is not { NextWritableAddressValid: true } track)
+        if (ReadTrackInformation(append?.TrackNumber ?? 1) is not { NextWritableAddressValid: true } track)
         {
             throw Stop("The drive did not report where writing starts on this disc.");
         }
-        if (track.NextWritableAddress != 0)
+        if (track.NextWritableAddress != (append?.StartLba ?? 0))
         {
-            throw Stop($"The blank disc's first writable sector is {track.NextWritableAddress}, not 0; the image would not be readable.");
+            throw Stop(append != null
+                ? $"The drive gave two different next writable addresses ({append.Value.StartLba} and {track.NextWritableAddress}); nothing was written."
+                : $"The blank disc's first writable sector is {track.NextWritableAddress}, not 0; the image would not be readable.");
         }
-        int startLba = 0;
+        int startLba = track.NextWritableAddress;
+        if (startLba % WriteParametersPage.DvdPacketBlocks != 0)
+        {
+            throw Stop($"The next writable address {startLba:N0} is not on a 16-sector ECC block boundary; nothing was written.");
+        }
         long freeSectors = track.FreeBlocks;
         if (trackSectors > freeSectors)
         {
             throw Stop($"The image ({state.ImageSectors:N0} sectors) does not fit on this disc ({freeSectors:N0} sectors free).");
         }
-        _note($"Disc blank; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
+        _note($"{(append != null ? $"Adding session {append.Value.TrackNumber}" : "Disc blank")}; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
               (trackSectors > state.ImageSectors ? $" + {trackSectors - state.ImageSectors} padding to a whole 32 KiB block" : "") + $"; {freeSectors} free.");
 
         // 3. Write parameters (DVD-R/-RW only: libburn's cookbook says no mode page is sent for DVD+R), read back.
@@ -220,7 +240,7 @@ public sealed partial class NativeTaoDataWriter
 
         if (request.TestWrite)
         {
-            bool stillBlank = CheckUnwrittenAfterTestWrite(out string extra);
+            bool stillBlank = CheckUnwrittenAfterTestWrite(startLba, out string extra);
             reporter.Report(trackSectors, "Done");
             return DvdResult(state, clock, writing, trackSectors) with
             {
@@ -250,7 +270,8 @@ public sealed partial class NativeTaoDataWriter
             }
 
             reporter.Report(trackSectors, request.CloseDisc ? "Closing the disc" : "Closing the session");
-            closing = request.CloseDisc ? "The data was written and the disc closed." : "The data was written and the session closed.";
+            string written = append != null ? $"Session {append.Value.TrackNumber} was added at sector {startLba:N0}" : "The data was written";
+            closing = request.CloseDisc ? $"{written} and the disc closed." : $"{written} and the session closed.";
             bool closed = false;
             if (plusR && request.CloseDisc)
             {
@@ -273,7 +294,7 @@ public sealed partial class NativeTaoDataWriter
         }
 
         // 8. A quick look at what the drive now reports.
-        string tocNote = CheckTableOfContents(startLba, state.ImageSectors);
+        string tocNote = append is { } added ? CheckAddedSession(added, state.ImageSectors) : CheckTableOfContents(startLba, state.ImageSectors);
         reporter.Report(trackSectors, "Done");
         return DvdResult(state, clock, writing, trackSectors) with
         {

@@ -216,9 +216,125 @@ public sealed class VirtualMmcDrive : IScsiTransport
     public byte? LastCloseFunction { get; private set; }
 
     private bool _taoArmed;        // MODE SELECT set Track-at-Once since the last track
-    private int _taoNextLba;       // next writable address of the open track
+    private int _taoNextLba;       // next writable address of the open track (0: nothing written to it yet)
+    private int _taoStartLba;      // where the open track starts: 0 on a blank disc, the next session's address on an open one
     private int _taoClosedSectors; // sectors of a track flushed with SYNCHRONIZE CACHE, waiting for CLOSE SESSION
     private bool _taoTestWrite;
+
+    // ---- Multi-session data discs ----
+
+    /// <summary>One data session on the disc: its single track's start and length, and the lead-out the drive reports.</summary>
+    public sealed record DataSession(int TrackStartLba, int TrackSectors, int LeadOutLba);
+
+    private readonly List<DataSession> _dataSessions = new();
+    private readonly List<(int StartLba, byte[] Data)> _laterSessionData = new();
+
+    /// <summary>The data sessions on the disc, oldest first.</summary>
+    public IReadOnlyList<DataSession> DataSessions => _dataSessions;
+
+    /// <summary>
+    /// While the disc is open for another session (disc status 1): the start of the invisible track, which READ TRACK
+    /// INFORMATION reports as its next writable address. Null on a blank or closed disc.
+    /// </summary>
+    public int? NextSessionAddress { get; private set; }
+
+    /// <summary>
+    /// CD: the lead-out of the first session takes 6,750 sectors (1:30), of later ones 2,250 (0:30); the next session's
+    /// lead-in 4,500 (1:00) and its first track's pre-gap 150 (0:02), so the next track starts 11,400 sectors after the
+    /// first lead-out begins and 6,900 after later ones (Orange Book multi-session layout; cdrecord -msinfo gives the same).
+    /// </summary>
+    public const int CdFirstSessionGapSectors = 6_750 + 4_500 + 150;
+
+    /// <inheritdoc cref="CdFirstSessionGapSectors"/>
+    public const int CdLaterSessionGapSectors = 2_250 + 4_500 + 150;
+
+    /// <summary>
+    /// DVD-R on the GP60NB50: a first session is never shorter than this in the table of contents (a 36,032-sector
+    /// track was reported with its lead-out at 65,264), and the next session starts <see cref="DvdSessionGapSectors"/>
+    /// later (93,952 there; and 131,152 after a 102,464-sector first track written by the Windows writer). Both
+    /// measured 2026-11-11 and 2026-11-10. Used for DVD-RW and DVD+R as well until they are measured.
+    /// </summary>
+    public const int DvdFirstSessionMinimumEndLba = 65_264;
+
+    /// <inheritdoc cref="DvdFirstSessionMinimumEndLba"/>
+    public const int DvdSessionGapSectors = 28_688;
+
+    /// <summary>
+    /// Loads a disc that already holds data sessions (from a virtual disc): each one track of 2,048-byte sectors.
+    /// <paramref name="nextSessionAddress"/> leaves the disc open with the next session starting there; null closes it.
+    /// </summary>
+    public void LoadDataSessions(IReadOnlyList<(int StartLba, byte[] Data)> sessions, int? nextSessionAddress)
+    {
+        ArgumentNullException.ThrowIfNull(sessions);
+        _dataSessions.Clear();
+        _laterSessionData.Clear();
+        _recordedTracks = new();
+        DataDiscImage = null;
+        foreach (var (start, data) in sessions.OrderBy(s => s.StartLba))
+        {
+            int sectors = data.Length / 2048;
+            StoreSessionData(start, data);
+            _dataSessions.Add(new DataSession(start, sectors, start + sectors));
+            _recordedTracks.Add(((byte)_dataSessions.Count, start, 0x40));
+        }
+        Recorded = _dataSessions.Count > 0;
+        RecordedLeadOutLba = _dataSessions.Count > 0 ? _dataSessions[^1].LeadOutLba : 0;
+        NextSessionAddress = Recorded ? nextSessionAddress : null;
+        DiscStatus = !Recorded ? 0 : nextSessionAddress.HasValue ? 1 : 2;
+    }
+
+    /// <summary>The recorded user data of one session, as the drive would read it.</summary>
+    public byte[] ReadSessionData(DataSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        byte[] data = new byte[session.TrackSectors * 2048];
+        if (TryFindRecorded(session.TrackStartLba, session.TrackSectors, out byte[]? source, out int offset))
+        {
+            source.AsSpan(offset, data.Length).CopyTo(data);
+        }
+        return data;
+    }
+
+    /// <summary>The sessions' data: the first from LBA 0 in <see cref="DataDiscImage"/>, later ones kept apart (the gaps
+    /// between sessions hold nothing and cannot be read).</summary>
+    private void StoreSessionData(int startLba, byte[] data)
+    {
+        if (startLba == 0)
+        {
+            DataDiscImage = data;
+            return;
+        }
+        _laterSessionData.RemoveAll(e => e.StartLba == startLba);
+        _laterSessionData.Add((startLba, data));
+    }
+
+    private bool TryFindRecorded(int lba, int count, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out byte[]? source, out int offset)
+    {
+        if (DataDiscImage is { } first && lba >= 0 && (long)(lba + count) * 2048 <= first.Length)
+        {
+            source = first;
+            offset = lba * 2048;
+            return true;
+        }
+        foreach (var (start, data) in _laterSessionData)
+        {
+            if (lba >= start && (long)(lba - start + count) * 2048 <= data.Length)
+            {
+                source = data;
+                offset = (lba - start) * 2048;
+                return true;
+            }
+        }
+        source = null;
+        offset = 0;
+        return false;
+    }
+
+    /// <summary>Where the session after one ending (lead-out included) at <paramref name="endLba"/> starts.</summary>
+    private int NextSessionStart(int sessionNumber, int endLba) =>
+        WritesLikeDvd
+            ? endLba + DvdSessionGapSectors
+            : endLba + (sessionNumber == 1 ? CdFirstSessionGapSectors : CdLaterSessionGapSectors);
 
     // ---- DVD writing ----
 
@@ -562,6 +678,18 @@ public sealed class VirtualMmcDrive : IScsiTransport
         BinaryPrimitives.WriteUInt16BigEndian(r, 32);
         r[2] = (byte)(DiscStatus & 0x03 | (Profile is NativeSaoAudioWriter.ProfileCdRw or NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x10 : 0));
         r[3] = 1; r[4] = 1; r[5] = 1; r[6] = 1;
+        int sessions = _dataSessions.Count;
+        if (sessions > 0)
+        {
+            // MMC READ DISC INFORMATION: byte 4 number of sessions, bytes 5/6 first and last track in the last session.
+            // An open disc counts its empty last session and the invisible track in it; byte 2 bits 3-2 give that
+            // session's state (00b empty, 11b complete).
+            bool open = DiscStatus == 1 && NextSessionAddress.HasValue;
+            int count = open ? sessions + 1 : sessions;
+            r[2] |= (byte)(open ? 0x00 : 0x0C);
+            r[4] = (byte)count; r[5] = (byte)count; r[6] = (byte)count;
+            r[9] = (byte)(count >> 8); r[10] = (byte)(count >> 8); r[11] = (byte)(count >> 8);
+        }
         if (IsDvdPlusRw)
         {
             r[7] = (byte)(BackgroundFormatStatus & 0x03);
@@ -920,8 +1048,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x03, 0x11, 0x00); // the simulated closed disc after a test write: nothing to read
         }
-        int sectors = image == null ? 0 : image.Length / 2048;
-        if (image == null || lba < 0 || count == 0 || data.Length < count * 2048 || lba + count > sectors)
+        // A later session lies past an unrecorded gap; a read that touches the gap fails like an unwritten sector.
+        if (lba < 0 || count == 0 || data.Length < count * 2048 || !TryFindRecorded(lba, count, out image, out int imageOffset))
         {
             return Sense(0x05, 0x21, 0x00);
         }
@@ -939,7 +1067,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
                 continue;
             }
 
-            image.AsSpan((lba + i) * 2048, 2048).CopyTo(destination);
+            image.AsSpan(imageOffset + i * 2048, 2048).CopyTo(destination);
             if (ReadBackDifferenceAtLba == lba + i)
             {
                 destination[100] ^= 0x01;
@@ -1123,9 +1251,9 @@ public sealed class VirtualMmcDrive : IScsiTransport
             }
             else
             {
-                _taoClosedSectors = _taoNextLba;
+                _taoClosedSectors = _taoNextLba - _taoStartLba;
                 DiscStatus = 1; // an open session until it is closed
-                DataDiscImage = DataTrackWritten.ToArray(); // the recorded track reads back even before the close
+                StoreSessionData(_taoStartLba, DataTrackWritten.ToArray()); // the recorded track reads back even before the close
             }
             ReservedSectors = 0;
             _taoNextLba = 0;
@@ -1170,11 +1298,13 @@ public sealed class VirtualMmcDrive : IScsiTransport
     {
         int lba = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
         int count = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(7, 2));
-        if (_taoNextLba == 0 && DiscStatus != 0)
+        bool firstWrite = _taoNextLba == 0;
+        if (firstWrite && DiscStatus != 0 && !(DiscStatus == 1 && NextSessionAddress.HasValue && _taoClosedSectors == 0))
         {
-            return Sense(0x05, 0x21, 0x02); // not blank: no writable address
+            return Sense(0x05, 0x21, 0x02); // not blank and not open for another session: no writable address
         }
-        if (lba != _taoNextLba)
+        int expected = !firstWrite ? _taoNextLba : DiscStatus == 0 ? 0 : NextSessionAddress!.Value;
+        if (lba != expected)
         {
             return Sense(0x05, 0x21, 0x02);
         }
@@ -1202,9 +1332,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x03, 0x0C, 0x00);
         }
 
-        if (lba == 0)
+        if (firstWrite)
         {
             DataTrackWritten.SetLength(0);
+            _taoStartLba = lba;
             // A drive that ignores the test-write bit (RecordsDuringTestWrite) records for real.
             _taoTestWrite = TestWriteActive && !RecordsDuringTestWrite;
         }
@@ -1224,7 +1355,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return Sense(0x05, 0x20, 0x00);
         }
         int number = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
-        if ((cdb[1] & 0x03) != 0x01 || number is not (1 or 0xFF))
+        int sessions = _dataSessions.Count;
+        if ((cdb[1] & 0x03) != 0x01 || !(number is 1 or 0xFF || (number >= 1 && number <= sessions + 1)))
         {
             return Sense(0x05, 0x24, 0x00);
         }
@@ -1233,6 +1365,46 @@ public sealed class VirtualMmcDrive : IScsiTransport
         byte[] r = new byte[36];
         BinaryPrimitives.WriteUInt16BigEndian(r, 34);
         r[2] = 1; r[3] = 1; // track 1, session 1
+
+        if (sessions > 0 && number >= 1 && number <= sessions)
+        {
+            // A recorded track (one per session): start in bytes 8-11, size in 24-27, not blank, no next writable address.
+            var s = _dataSessions[number - 1];
+            r[2] = (byte)number; r[3] = (byte)number;
+            r[5] = 0x04;
+            r[6] = 0x01;
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(8), s.TrackStartLba);
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), s.TrackSectors);
+            return CopyOut(r, data);
+        }
+        if (sessions > 0 && DiscStatus == 1 && NextSessionAddress is int next && (number == 0xFF || number == sessions + 1))
+        {
+            // The invisible track of an open disc: blank, starting at the next session's address.
+            int track = sessions + 1;
+            r[2] = (byte)track; r[3] = (byte)track;
+            r[6] = 0x40 | 0x01;
+            int written = _taoNextLba > 0 ? _taoNextLba : next;
+            if (_taoClosedSectors > 0)
+            {
+                // Flushed, not yet closed: an incomplete track with nothing more to write.
+                r[5] = 0x04;
+                r[6] = 0x01;
+                BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(8), next);
+                BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), _taoClosedSectors);
+                return CopyOut(r, data);
+            }
+            int nwa = NextWritableAddressOverride ?? written;
+            r[7] = 0x01;
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(8), next);
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(12), nwa);
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(16), Math.Max(0, capacity - nwa));
+            BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(24), Math.Max(0, capacity - next));
+            return CopyOut(r, data);
+        }
+        if (number != 1 && number != 0xFF)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
         if (Recorded || _taoClosedSectors > 0 || DiscStatus != 0)
         {
             int size = Recorded ? RecordedLeadOutLba : _taoClosedSectors + (WritesLikeDvd ? 0 : 2);
@@ -1281,20 +1453,37 @@ public sealed class VirtualMmcDrive : IScsiTransport
         return Good(0);
     }
 
-    /// <summary>One data track from LBA 0 is now on the disc: READ (10) reads it and READ TOC lists it.</summary>
+    /// <summary>
+    /// The data track written from <see cref="_taoStartLba"/> is now a closed session: READ (10) reads it and READ TOC
+    /// lists it after the earlier ones. Left open (status 1), the next session's address is worked out the way the
+    /// drive lays the disc out (<see cref="CdFirstSessionGapSectors"/>, <see cref="DvdSessionGapSectors"/>).
+    /// </summary>
     private void RecordDataDisc(int sectors, int runOutSectors, int discStatus)
     {
+        int start = _taoStartLba;
         byte[] image = DataTrackWritten.ToArray();
         if (image.Length < sectors * 2048)
         {
             Array.Resize(ref image, sectors * 2048);
         }
-        DataDiscImage = image;
+        if (start == 0)
+        {
+            _dataSessions.Clear();
+            _laterSessionData.Clear();
+            _recordedTracks = new();
+        }
+        StoreSessionData(start, image);
+        int end = start + sectors + runOutSectors; // CD Track-at-Once ends with two run-out blocks; DVD with none
+        int sessionNumber = _dataSessions.Count + 1;
+        // A DVD-R session left open with less on it than the drive's minimum still reports its lead-out there.
+        int leadOut = discStatus == 1 && sessionNumber == 1 && IsDvd ? Math.Max(end, DvdFirstSessionMinimumEndLba) : end;
+        _dataSessions.Add(new DataSession(start, sectors, leadOut));
         Recorded = true;
-        _recordedTracks = new() { (1, 0, 0x40) };
+        _recordedTracks.Add(((byte)sessionNumber, start, 0x40));
         _recordedCdText = false;
-        RecordedLeadOutLba = sectors + runOutSectors; // CD Track-at-Once ends with two run-out blocks; DVD with none
+        RecordedLeadOutLba = leadOut;
         DiscStatus = discStatus;
+        NextSessionAddress = discStatus == 1 ? NextSessionStart(sessionNumber, leadOut) : null;
         _taoClosedSectors = 0;
         SessionClosed = true;
     }
@@ -1373,7 +1562,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
             {
                 return Sense(0x05, 0x2C, 0x00);
             }
-            if (track != 1)
+            if (track != _dataSessions.Count + 1)
             {
                 return Sense(0x05, 0x24, 0x00);
             }

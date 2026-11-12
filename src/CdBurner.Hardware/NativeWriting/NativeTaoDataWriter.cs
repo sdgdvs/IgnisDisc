@@ -18,6 +18,9 @@ namespace CdBurner.Hardware.NativeWriting;
 /// it, a DVD+RW that holds a file system is left alone.</param>
 /// <param name="LayerBreakSectors">Dual-layer DVD+R: the sectors to put on layer 0 (a multiple of 16, at least half the
 /// image). Null: chosen automatically, as growisofs does.</param>
+/// <param name="SessionStartLba">Adding a session to a disc that already holds one: the sector the image's file system was
+/// laid out to start at (the next writable address the disc reported when it was built). The drive's own next writable
+/// address must be the same, or nothing is written. Null or 0: the disc must be blank.</param>
 public sealed record NativeDataWriteRequest(
     Stream Image,
     long StartPosition,
@@ -26,7 +29,12 @@ public sealed record NativeDataWriteRequest(
     bool CloseDisc = true,
     int? WriteSpeedKiloBytesPerSecond = null,
     bool OverwriteExistingData = false,
-    int? LayerBreakSectors = null);
+    int? LayerBreakSectors = null,
+    int? SessionStartLba = null)
+{
+    /// <summary>True when the image is a new session for a disc that already holds one.</summary>
+    public bool AppendsSession => SessionStartLba is > 0;
+}
 
 /// <summary>Outcome of a native Track-at-Once data write.</summary>
 public sealed record NativeDataWriteResult
@@ -186,6 +194,11 @@ public sealed partial class NativeTaoDataWriter
         // 1. Drive ready, disc type, Track-at-Once support. A DVD goes its own way from here (NativeTaoDataWriter.Dvd.cs).
         WaitUntilReady(TimeSpan.FromSeconds(30), ct, state, "before writing");
         var tao = ReadTrackAtOnceFeature();
+        if (request.AppendsSession && (IsBluRayProfile(tao.Profile) || OverwritableKindOf(tao.Profile) != null))
+        {
+            state.UnsupportedDisc = true;
+            throw Stop($"Direct writing adds sessions to CD-R, CD-RW, DVD-R, DVD-RW and DVD+R so far (the disc in the drive has profile 0x{tao.Profile:X4}).");
+        }
         if (IsDvdProfile(tao.Profile))
         {
             return RunDvd(request, tao.Profile, progress, ct, clock, state);
@@ -209,17 +222,22 @@ public sealed partial class NativeTaoDataWriter
             throw Stop("The drive does not offer test writes in Track-at-Once mode.");
         }
 
-        // 2. Blank disc; where writing starts and how much fits.
+        // 2. A blank disc, or an open one with room for another session; where writing starts and how much fits.
         var disc = ReadDiscInformation() ?? throw Stop("The drive did not return disc information.");
-        if (disc.Status != 0)
+        int startLba = 0;
+        long freeSectors;
+        AppendTarget? append = null;
+        if (request.AppendsSession)
+        {
+            append = FindAppendTarget(request, disc, state.ImageSectors);
+            startLba = append.Value.StartLba;
+            freeSectors = append.Value.FreeSectors;
+        }
+        else if (disc.Status != 0)
         {
             throw Stop("The disc is not blank. Direct writing needs a blank CD-R or an erased CD-RW.");
         }
-
-        var track = ReadTrackInformation(1);
-        int startLba = 0;
-        long freeSectors;
-        if (track is { NextWritableAddressValid: true } t)
+        else if (ReadTrackInformation(1) is { NextWritableAddressValid: true } t)
         {
             if (t.NextWritableAddress != 0)
             {
@@ -239,7 +257,7 @@ public sealed partial class NativeTaoDataWriter
         {
             throw Stop($"The image ({state.ImageSectors:N0} sectors) does not fit on this disc ({freeSectors:N0} sectors free).");
         }
-        _note($"Disc blank; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
+        _note($"{(append != null ? $"Adding session {append.Value.TrackNumber}" : "Disc blank")}; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
               (trackSectors > state.ImageSectors ? $" + {trackSectors - state.ImageSectors} padding" : "") + $"; {freeSectors} free.");
 
         // 3. Write parameters, then read them back.
@@ -278,7 +296,7 @@ public sealed partial class NativeTaoDataWriter
 
         if (request.TestWrite)
         {
-            bool stillBlank = CheckUnwrittenAfterTestWrite(out string extra);
+            bool stillBlank = CheckUnwrittenAfterTestWrite(startLba, out string extra);
             reporter.Report(trackSectors, "Done");
             return new NativeDataWriteResult
             {
@@ -306,13 +324,14 @@ public sealed partial class NativeTaoDataWriter
         }
         WaitUntilReady(FlushTimeout, CancellationToken.None, state, "while closing the session");
 
-        // 8. A quick look at what the drive now reports: one data track from LBA 0.
-        string tocNote = CheckTableOfContents(startLba, state.ImageSectors);
+        // 8. A quick look at what the drive now reports: the data track where it was written.
+        string tocNote = append is { } added ? CheckAddedSession(added, state.ImageSectors) : CheckTableOfContents(startLba, state.ImageSectors);
         reporter.Report(trackSectors, "Done");
         return new NativeDataWriteResult
         {
             Success = true,
-            Message = "The data track was written and the " + (request.CloseDisc ? "disc closed. " : "session closed. ") + tocNote,
+            Message = (append != null ? $"Session {append.Value.TrackNumber} was added at sector {startLba:N0} and the " : "The data track was written and the ")
+                + (request.CloseDisc ? "disc closed. " : "session closed. ") + tocNote,
             DataSectorsWritten = state.ImageSectors,
             PaddingSectors = trackSectors - state.ImageSectors,
             Elapsed = clock.Elapsed,
@@ -466,15 +485,134 @@ public sealed partial class NativeTaoDataWriter
             return "The drive did not return the table of contents.";
         }
 
-        var first = buffer.AsSpan(4, 8);
-        var leadOut = buffer.AsSpan(12, 8);
-        bool data = (first[1] & 0x04) != 0;
-        int trackStart = BinaryPrimitives.ReadInt32BigEndian(first[4..]);
-        int leadOutLba = BinaryPrimitives.ReadInt32BigEndian(leadOut[4..]);
-        _note($"TOC: track {first[2]} {(data ? "data" : "audio")} at LBA {trackStart}, lead-out at {leadOutLba}.");
-        return data && trackStart == startLba && leadOutLba >= startLba + imageSectors
+        // Format 0: a 4-byte header (data length in bytes 0-1), then 8-byte descriptors, the lead-out (AAh) last.
+        int length = Math.Min(Math.Min(BinaryPrimitives.ReadUInt16BigEndian(buffer) + 2, (int)r.DataTransferLength), buffer.Length);
+        int entries = (length - 4) / 8;
+        int leadOutLba = -1;
+        int found = -1;
+        for (int i = 0; i < entries; i++)
+        {
+            var entry = buffer.AsSpan(4 + 8 * i, 8);
+            int lba = BinaryPrimitives.ReadInt32BigEndian(entry[4..]);
+            if (entry[2] == 0xAA)
+            {
+                leadOutLba = lba;
+            }
+            else if (found < 0 && (lba == startLba || i == entries - 2))
+            {
+                found = i; // the track written now, or else the last one listed
+            }
+        }
+        if (found < 0)
+        {
+            return "The table of contents lists no tracks.";
+        }
+
+        var track = buffer.AsSpan(4 + 8 * found, 8);
+        bool data = (track[1] & 0x04) != 0;
+        int trackStart = BinaryPrimitives.ReadInt32BigEndian(track[4..]);
+        _note($"TOC: {entries - 1} track(s); track {track[2]} {(data ? "data" : "audio")} at LBA {trackStart}, lead-out at {leadOutLba}.");
+        if (!data || trackStart != startLba || leadOutLba < startLba + imageSectors)
+        {
+            return $"Unexpected table of contents (track {track[2]} {(data ? "data" : "audio")} at {trackStart}, lead-out {leadOutLba}).";
+        }
+        return entries == 2
             ? $"Table of contents: one data track, {leadOutLba - trackStart:N0} sectors."
-            : $"Unexpected table of contents (track {first[2]} {(data ? "data" : "audio")} at {trackStart}, lead-out {leadOutLba}).";
+            : $"Table of contents: {entries - 1} tracks, the last a data track of {leadOutLba - trackStart:N0} sectors.";
+    }
+
+    /// <summary>Where a new session goes on an open disc: the invisible track's number, start and free space.</summary>
+    internal readonly record struct AppendTarget(int TrackNumber, int StartLba, long FreeSectors);
+
+    /// <summary>
+    /// Checks, before anything is written, that a new session can go where the image expects it: the disc is open
+    /// (status 1) with an empty last session, READ TRACK INFORMATION of the invisible track (number FFh) gives a valid
+    /// next writable address, that address is the one the image was laid out for, and the image's own ISO 9660 volume
+    /// says so too.
+    /// </summary>
+    private AppendTarget FindAppendTarget(NativeDataWriteRequest request, DiscInformation disc, int imageSectors)
+    {
+        int expected = request.SessionStartLba ?? 0;
+        if (disc.Status == 0)
+        {
+            throw Stop($"The disc is blank, but the image was built to follow an earlier session from sector {expected:N0}; on a blank disc its files would not be found.");
+        }
+        if (disc.Status != 1)
+        {
+            throw Stop("The disc is closed (not blank): no more sessions can be added to it.");
+        }
+        if (disc.LastSessionState != 0)
+        {
+            throw Stop("The disc's last session was left unfinished (an incomplete track), so no session can be added to it.");
+        }
+
+        var invisible = ReadTrackInformation(0xFF) ?? throw Stop("The drive did not report where the next session starts.");
+        if (!invisible.NextWritableAddressValid || !invisible.Blank)
+        {
+            throw Stop("The drive reports no writable address for a new session on this disc.");
+        }
+        if (invisible.NextWritableAddress != expected)
+        {
+            throw Stop($"The drive's next writable address is sector {invisible.NextWritableAddress:N0}, but the image was built for sector {expected:N0}; written there its files would not be found. Burn again so the image is built for this disc.");
+        }
+        CheckImageStartsAt(request, expected, imageSectors);
+        _note($"Open disc: track {invisible.TrackNumber} (invisible) starts at {invisible.NextWritableAddress}, {invisible.FreeBlocks} sectors free.");
+        return new AppendTarget(invisible.TrackNumber, invisible.NextWritableAddress, invisible.FreeBlocks);
+    }
+
+    /// <summary>
+    /// The image's Primary Volume Descriptor (image sector 16; ECMA-119 8.4) must place the volume at
+    /// <paramref name="startLba"/>: its root directory (record at byte 156, extent at byte 158, little-endian half) lies
+    /// inside the new session, and the volume space size (byte 80) ends inside it. An image built for sector 0 fails.
+    /// </summary>
+    private void CheckImageStartsAt(NativeDataWriteRequest request, int startLba, int imageSectors)
+    {
+        if (imageSectors < 17)
+        {
+            throw Stop("The image is too small to hold a file system for a new session.");
+        }
+        byte[] pvd = new byte[SectorSize];
+        try
+        {
+            request.Image.Position = request.StartPosition + 16L * SectorSize;
+            ReadExactly(request.Image, pvd);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or EndOfStreamException)
+        {
+            throw Stop($"Could not read the image's volume descriptor: {ex.Message}");
+        }
+        finally
+        {
+            request.Image.Position = request.StartPosition;
+        }
+
+        if (pvd[0] != 0x01 || pvd[1] != (byte)'C' || pvd[2] != (byte)'D' || pvd[3] != (byte)'0' || pvd[4] != (byte)'0' || pvd[5] != (byte)'1')
+        {
+            throw Stop("The image has no ISO 9660 volume at sector 16, so it cannot be added as a session.");
+        }
+        long volumeEnd = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(80, 4));
+        long root = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(156 + 2, 4));
+        long sessionEnd = (long)startLba + imageSectors;
+        if (root < startLba || root >= sessionEnd || volumeEnd <= startLba || volumeEnd > sessionEnd)
+        {
+            throw Stop($"The image was not built to start at sector {startLba:N0} (its root directory is at sector {root:N0}); written there its files would not be found.");
+        }
+        _note($"Image volume: root directory at {root}, volume ends at {volumeEnd}: laid out for a session from {startLba}.");
+    }
+
+    /// <summary>
+    /// After adding a session: READ TRACK INFORMATION of the new track by number (the reliable source; READ TOC was seen
+    /// to go stale after an added DVD session until a reload), then the table of contents as a second opinion.
+    /// </summary>
+    private string CheckAddedSession(AppendTarget added, int imageSectors)
+    {
+        string trackNote = ReadTrackInformation(added.TrackNumber) is { } t
+            ? t.TrackStart == added.StartLba
+                ? $"Track {added.TrackNumber} starts at sector {t.TrackStart:N0}."
+                : $"The drive reports track {added.TrackNumber} at sector {t.TrackStart:N0}, not {added.StartLba:N0}."
+            : $"The drive did not report track {added.TrackNumber}.";
+        _note(trackNote);
+        return trackNote + " " + CheckTableOfContents(added.StartLba, imageSectors);
     }
 
     internal readonly record struct TrackAtOnceFeature(ushort Profile, bool Present, bool Current, bool TestWrite, bool BufferUnderrunFree);
@@ -504,7 +642,9 @@ public sealed partial class NativeTaoDataWriter
 
     /// <param name="BackgroundFormat">READ DISC INFORMATION byte 7 bits 0–1 (DVD+RW): 0 not formatted, 1 partly
     /// formatted (stopped), 2 formatting, 3 fully formatted.</param>
-    internal readonly record struct DiscInformation(int Status, Msf LastLeadOutStart, int BackgroundFormat = 0);
+    /// <param name="LastSessionState">Byte 2 bits 3-2: 0 empty, 1 incomplete, 3 complete. An open disc ready for another
+    /// session has an empty last session.</param>
+    internal readonly record struct DiscInformation(int Status, Msf LastLeadOutStart, int BackgroundFormat = 0, int LastSessionState = 0);
 
     private DiscInformation? ReadDiscInformation()
     {
@@ -514,11 +654,11 @@ public sealed partial class NativeTaoDataWriter
         {
             return null;
         }
-        return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[21], buffer[22], buffer[23]), buffer[7] & 0x03);
+        return new DiscInformation(buffer[2] & 0x03, new Msf(buffer[21], buffer[22], buffer[23]), buffer[7] & 0x03, (buffer[2] >> 2) & 0x03);
     }
 
     internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank,
-        byte TrackMode = 0, long TrackSize = 0);
+        byte TrackMode = 0, long TrackSize = 0, int TrackNumber = 0, int TrackStart = 0);
 
     private TrackInformation? ReadTrackInformation(int trackNumber)
     {
@@ -535,7 +675,9 @@ public sealed partial class NativeTaoDataWriter
             FreeBlocks: BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(16, 4)),
             Blank: (buffer[6] & 0x40) != 0,
             TrackMode: (byte)(buffer[5] & 0x0F),
-            TrackSize: r.DataTransferLength >= 28 ? BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(24, 4)) : 0);
+            TrackSize: r.DataTransferLength >= 28 ? BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(24, 4)) : 0,
+            TrackNumber: buffer[2] | (r.DataTransferLength >= 33 ? buffer[32] << 8 : 0),
+            TrackStart: BinaryPrimitives.ReadInt32BigEndian(buffer.AsSpan(8, 4)));
     }
 
     private bool SelectWriteParameters(WriteParametersPage page)
@@ -561,10 +703,27 @@ public sealed partial class NativeTaoDataWriter
     public bool DiscReadsBlank() => ReadDiscInformation() is { Status: 0 };
 
     /// <summary>
+    /// True when the disc is ready for the write <paramref name="request"/> describes: blank, or for a new session open
+    /// with its next writable address where the image starts. Sends no write command.
+    /// </summary>
+    public bool DiscReadyFor(NativeDataWriteRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.AppendsSession)
+        {
+            return DiscReadsBlank();
+        }
+        return ReadDiscInformation() is { Status: 1, LastSessionState: 0 }
+            && ReadTrackInformation(0xFF) is { NextWritableAddressValid: true, Blank: true } t
+            && t.NextWritableAddress == request.SessionStartLba;
+    }
+
+    /// <summary>
     /// After a test write: a blank status settles it. A drive that shows the simulated session (status 1) is checked by
     /// reading sector 0: a recorded disc returns it, an unwritten one cannot.
     /// </summary>
-    private bool CheckUnwrittenAfterTestWrite(out string extra)
+    /// <param name="startLba">Where the test write went: 0 on a blank disc, the next session's start on an open one.</param>
+    private bool CheckUnwrittenAfterTestWrite(int startLba, out string extra)
     {
         extra = string.Empty;
         var after = ReadDiscInformation();
@@ -587,7 +746,7 @@ public sealed partial class NativeTaoDataWriter
         // after a CD test write, a closed disc (status 2) after a DVD-R Disc-At-Once one (measured 2026-11-11). The
         // sectors decide: a recorded disc returns them, an unwritten one cannot.
         ScsiExecutionResult r = default!;
-        foreach (int lba in new[] { 0, 16 })
+        foreach (int lba in new[] { startLba, startLba + 16 })
         {
             byte[] sector = new byte[SectorSize];
             r = _transport.ExecuteCommand(MmcCommandBuilder.BuildRead10Cdb(lba, 1, forceUnitAccess: true), sector, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
@@ -597,8 +756,8 @@ public sealed partial class NativeTaoDataWriter
                 return false;
             }
         }
-        _note($"The drive reports a simulated {(after.Value.Status == 2 ? "closed disc" : "session")} until the disc is reloaded; sectors 0 and 16 are unreadable ({Describe(r)}), so nothing was written.");
-        extra = " The drive still shows the simulated session: eject and reload the disc before writing to it.";
+        _note($"The drive reports {(startLba > 0 ? "an open disc" : $"a simulated {(after.Value.Status == 2 ? "closed disc" : "session")} until the disc is reloaded")}; sectors {startLba} and {startLba + 16} are unreadable ({Describe(r)}), so nothing was written.");
+        extra = startLba > 0 ? string.Empty : " The drive still shows the simulated session: eject and reload the disc before writing to it.";
         return true;
     }
 

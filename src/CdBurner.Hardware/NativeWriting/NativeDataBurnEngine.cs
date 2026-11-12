@@ -8,9 +8,9 @@ namespace CdBurner.Hardware.NativeWriting;
 
 /// <summary>
 /// Burns data images (ISO files, data discs) with IgnisDisc's own drive commands instead of Windows' burning service.
-/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW and single-layer DVD+R, and the overwritable DVD+RW, DVD-RW in
-/// restricted overwrite mode and DVD-RAM (blank, or written over when the user allowed replacing their data), so far
-/// (<see cref="NativeTaoDataWriter"/>); any other disc, and a disc that already holds a session, is handed to the Windows
+/// Opt-in. Covers blank CD-R, CD-RW, DVD-R, DVD-RW and single-layer DVD+R, a new session on one of those left open,
+/// and the overwritable DVD+RW, DVD-RW in restricted overwrite mode and DVD-RAM (blank, or written over when the user
+/// allowed replacing their data), so far (<see cref="NativeTaoDataWriter"/>); any other disc is handed to the Windows
 /// writer (<see cref="LastFallbackReason"/> says so). Reading (the read-back check), erasing and audio go to the Windows
 /// engine. Every direct run saves a full SCSI command log.
 /// </summary>
@@ -62,8 +62,10 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         LastFallbackReason = null;
 
         // A disc that already holds a session is never erased here: DataBurnService built the image to follow that
-        // session (its file system points past it), so it is appended by the Windows writer until sessions are done.
+        // session (its file system points past it), so it is written as a new session at the disc's next writable
+        // address, which the writer checks against the drive's own before anything is written.
         var status = recorder.QueryMediaStatus();
+        bool appending = !status.IsBlank && !status.IsOverwriteOnly && status.IsAppendable && status.NextWritableLba > 0;
         string? reason = !imageStream.CanSeek
             ? "the image is not a seekable file"
             : status.MediaType is DiscMediaType.DvdMinusRDualLayer
@@ -73,8 +75,10 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
                 ? "direct writing covers single-layer Blu-ray discs so far"
                 : !IsCovered(status.MediaType)
                     ? $"direct writing covers CD-R, CD-RW, DVD-R, DVD-RW, DVD+R, DVD+RW, DVD-RAM, BD-R and BD-RE so far, and this disc is {status.MediaType.GetDisplayName()}"
-                    : !status.IsBlank && !(status.IsOverwriteOnly && options.OverwriteExistingData)
-                        ? "the disc already holds data, and direct writing adds no sessions yet"
+                    : appending && !AddsSessionsTo(status.MediaType)
+                        ? $"direct writing adds sessions to CD-R, CD-RW, DVD-R, DVD-RW and DVD+R so far, and this disc is {status.MediaType.GetDisplayName()}"
+                    : !status.IsBlank && !appending && !(status.IsOverwriteOnly && options.OverwriteExistingData)
+                        ? "the disc already holds data that direct writing would not keep"
                         : null;
         if (reason != null)
         {
@@ -89,7 +93,8 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
             ? (int)Math.Round(s.Multiplier * WriteSpeedDescriptor.GetBaseRate(status.MediaType, isAudio: status.MediaType.IsCd()) / 1000.0)
             : null;
         var request = new NativeDataWriteRequest(imageStream, start, bytes, TestWrite: options.Simulate, options.CloseDisc, speed,
-            OverwriteExistingData: options.OverwriteExistingData, LayerBreakSectors: options.LayerBreakSectors);
+            OverwriteExistingData: options.OverwriteExistingData, LayerBreakSectors: options.LayerBreakSectors,
+            SessionStartLba: appending ? status.NextWritableLba : null);
 
         var result = await Task.Run(() => Run(recorder, request, progress, cancellationToken), CancellationToken.None).ConfigureAwait(false);
         if (result is { UnsupportedDisc: true, StoppedBeforeWriting: true })
@@ -143,7 +148,8 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         using var log = new LoggingScsiTransport(device, ownsInner: true);
         string kind = request.TestWrite ? "test write only" : TestWriteFirst ? "test write, then real write" : "real write";
         log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R, DVD+R DL, DVD+RW, DVD-RW overwrite, DVD-RAM, BD-R, BD-RE), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
-        log.Note($"Image: {request.ImageBytes:N0} bytes, close disc {request.CloseDisc}, speed asked {(request.WriteSpeedKiloBytesPerSecond?.ToString() ?? "fastest listed")}.");
+        log.Note($"Image: {request.ImageBytes:N0} bytes, close disc {request.CloseDisc}, speed asked {(request.WriteSpeedKiloBytesPerSecond?.ToString() ?? "fastest listed")}" +
+                 (request.AppendsSession ? $", new session laid out from sector {request.SessionStartLba}." : "."));
 
         IDisposable? exclusive = null;
         if (win32 != null)
@@ -175,9 +181,9 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         }
 
         LastResult = result;
-        if (result.DiscRecorded && recorder is VirtualDiscRecorder { CurrentMedium: { } medium } && virtualDrive?.DataDiscImage is { } image)
+        if (result.DiscRecorded && recorder is VirtualDiscRecorder { CurrentMedium: { } medium } && virtualDrive != null)
         {
-            CommitToVirtualMedium(medium, image, request.CloseDisc);
+            CommitToVirtualMedium(medium, virtualDrive, virtualDrive.DataDiscImage ?? Array.Empty<byte>());
         }
         return result;
     }
@@ -206,7 +212,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         {
             LastTestWritePassed = true;
             // A drive that can close its own tray reloads the disc here; any other stops for a reload by hand.
-            if (!writer.DiscReadsBlank() && !TrayReload.TryReload(log, log.Note, Wait, writer.DiscReadsBlank, ct))
+            if (!writer.DiscReadyFor(request) && !TrayReload.TryReload(log, log.Note, Wait, () => writer.DiscReadyFor(request), ct))
             {
                 log.Note(NativeSaoAudioWriter.ReloadMessage);
                 return test with { Success = false, StoppedBeforeWriting = true, Message = NativeSaoAudioWriter.ReloadMessage };
@@ -217,29 +223,47 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         return writer.Write(request, progress, ct);
     }
 
-    /// <summary>Puts what the simulated drive recorded onto the virtual disc: one data track from LBA 0.</summary>
-    private static void CommitToVirtualMedium(VirtualDiscMedium medium, byte[] image, bool closeDisc)
+    /// <summary>
+    /// Puts what the simulated drive recorded onto the virtual disc: an overwritable disc holds one volume from LBA 0;
+    /// on any other the session just closed is added after the earlier ones, and the disc stays open at the drive's
+    /// next session address or is closed, as the drive reports.
+    /// </summary>
+    private static void CommitToVirtualMedium(VirtualDiscMedium medium, VirtualMmcDrive drive, byte[] firstSessionImage)
     {
         medium.Raw2352Mode = false;
         bool overwriteOnly = medium.MediaType is DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam or DiscMediaType.BdRe;
+        int start = 0;
+        byte[] data = firstSessionImage;
         if (overwriteOnly)
         {
             medium.Sessions.Clear(); // written over from sector 0: one volume, no session history
         }
-        int sectors = image.Length / NativeTaoDataWriter.SectorSize;
-        for (int lba = 0; lba < sectors; lba++)
+        else if (drive.DataSessions.Count > 0)
         {
-            medium.WriteSector(lba, image.AsSpan(lba * NativeTaoDataWriter.SectorSize, NativeTaoDataWriter.SectorSize), NativeTaoDataWriter.SectorSize);
+            var added = drive.DataSessions[^1];
+            start = added.TrackStartLba;
+            data = drive.ReadSessionData(added);
         }
 
-        var session = new VirtualSession { SessionNumber = medium.Sessions.Count + 1, StartLba = 0, SectorCount = sectors };
-        session.Tracks.Add(new VirtualTrack { TrackNumber = 1, StartLba = 0, SectorCount = sectors, IsAudio = false });
+        int sectors = data.Length / NativeTaoDataWriter.SectorSize;
+        for (int i = 0; i < sectors; i++)
+        {
+            medium.WriteSector(start + i, data.AsSpan(i * NativeTaoDataWriter.SectorSize, NativeTaoDataWriter.SectorSize), NativeTaoDataWriter.SectorSize);
+        }
+
+        int trackNumber = medium.Sessions.Sum(s => s.Tracks.Count) + 1;
+        var session = new VirtualSession { SessionNumber = medium.Sessions.Count + 1, StartLba = start, SectorCount = sectors };
+        session.Tracks.Add(new VirtualTrack { TrackNumber = trackNumber, StartLba = start, SectorCount = sectors, IsAudio = false });
         medium.Sessions.Add(session);
         medium.IsBlank = false;
-        medium.IsFinalized = closeDisc && !overwriteOnly;
-        medium.NextWritableLba = sectors;
-        medium.UsedSectors = Math.Max(medium.UsedSectors, sectors);
+        medium.IsFinalized = !overwriteOnly && drive.DiscStatus == 2;
+        medium.NextWritableLba = !overwriteOnly && drive.NextSessionAddress is int next ? next : start + sectors;
+        medium.UsedSectors = Math.Max(medium.UsedSectors, start + sectors);
     }
+
+    /// <summary>Discs the direct writer adds a session to (left open by an earlier burn).</summary>
+    private static bool AddsSessionsTo(DiscMediaType type) =>
+        type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR;
 
     /// <summary>Discs the direct writer handles (blank, single layer).</summary>
     private static bool IsCovered(DiscMediaType type) =>

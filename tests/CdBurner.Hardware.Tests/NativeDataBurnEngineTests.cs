@@ -374,31 +374,6 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task DiscWithASession_IsAppendedByTheWindowsWriter_NeverErased()
-    {
-        // The image for a second session is built to sit after the first one; erasing and writing it at sector 0
-        // would ruin it. So even with leave to replace data, an open disc goes to the Windows writer, untouched.
-        var (engine, _) = Engine();
-        using var medium = VirtualDiscMedium.CreateBlankCdRw700();
-        var recorder = Recorder(medium);
-        var service = new DataBurnService(engine);
-        byte[] first = Image(400, seed: 1);
-        Assert.True((await service.BurnStreamAsync(recorder, new MemoryStream(first), new DataBurnOptions { CloseDisc = false })).Success);
-        Assert.Null(engine.LastFallbackReason); // the first session was written directly
-        Assert.False(medium.IsFinalized);
-
-        foreach (bool overwrite in new[] { false, true })
-        {
-            var appended = await service.BurnStreamAsync(recorder, new MemoryStream(Image(300, seed: 3)),
-                new DataBurnOptions { CloseDisc = false, OverwriteExistingData = overwrite, VerifyAfterBurn = true });
-            Assert.True(appended.Success, appended.ErrorMessage);
-            Assert.True(appended.Verified);
-            Assert.Contains("adds no sessions yet", engine.LastFallbackReason);
-            Assert.True(OnDisc(medium, 400).SequenceEqual(first)); // the first session is still there
-        }
-    }
-
-    [Fact]
     public async Task TestWriteFirst_OnADriveThatNeedsAReload_StopsWithTheReloadMessage()
     {
         var (engine, drive) = Engine(testFirst: true);

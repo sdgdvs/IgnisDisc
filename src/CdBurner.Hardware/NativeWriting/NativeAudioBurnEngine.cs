@@ -104,6 +104,21 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
                 _ => 0x0000
             };
             drive.DiscStatus = medium.IsBlank ? 0 : medium.IsFinalized ? 2 : 1;
+            bool sequential = medium.MediaType is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR
+                or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR;
+            if (sequential && !medium.IsBlank && !medium.Raw2352Mode && medium.Sessions.Count > 0
+                && medium.Sessions.All(s => s.SectorCount > 0 && s.Tracks.All(t => !t.IsAudio)))
+            {
+                // A data disc: the drive reports its sessions and, while it is open, where the next one starts, and
+                // reads them back, as a real drive would.
+                var sessions = medium.Sessions.Select(s =>
+                {
+                    byte[] data = new byte[s.SectorCount * OpticalConstants.DataSectorSize];
+                    medium.ReadSectors(s.StartLba, s.SectorCount, data, OpticalConstants.DataSectorSize);
+                    return (s.StartLba, data);
+                }).ToList();
+                drive.LoadDataSessions(sessions, medium.IsFinalized ? null : medium.NextWritableLba);
+            }
             if (medium.MediaType.IsCd())
             {
                 drive.LastLeadOutStart = Msf.FromLba(Math.Max(0, medium.TotalCapacitySectors - 1));

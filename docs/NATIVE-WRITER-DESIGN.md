@@ -84,8 +84,22 @@ writable address → `SYNCHRONIZE CACHE` (the track closes) → `CLOSE TRACK/SES
 then `TEST UNIT READY` until the drive is ready → `READ TOC` format 0 (one data track from LBA 0). No `CLOSE TRACK`
 is sent: on CD the flush closes a Track-at-Once track. The read-back check is `DataBurnService`'s: `READ (10)` with
 FUA over every sector, compared with the image. A test write skips the close and must leave sector 0 unreadable. A
-disc that is not blank is never erased by the writer: an image for a second session is built to follow the first
-one, so those discs go to the Windows writer until multi-session is built.
+disc that is not blank is never erased by the writer.
+
+**Adding a session (CD-R, CD-RW, DVD-R, DVD-RW, DVD+R left open; built 2026-11-12, simulator only so far):**
+the image is built by `IsoUdfImageBuilder` from the disc's next writable address, with the last session's tree
+imported (`MultiSessionManager`), as for the Windows writer. Before anything is written the writer checks:
+`READ DISC INFORMATION` status 1 (appendable) with an empty last session (byte 2 bits 3–2 = 00b); `READ TRACK
+INFORMATION` of the invisible track (number FFh) with a valid next writable address equal to the address the image
+was built for; and the image's own Primary Volume Descriptor (image sector 16) places its root directory and volume
+end inside the new session, so an `.iso` built for sector 0 is refused. Then the blank-disc sequence runs from that
+address: Track-at-Once on CD; on DVD-R/-RW always incremental (Disc-At-Once needs a blank disc), multi-session 00 in
+page 0x05 when the session closes the disc; DVD+R as above. Afterwards `READ TRACK INFORMATION` of the new track by
+number must give its start (`READ TOC` went stale after an added DVD session on the GP60NB50), then `READ TOC`
+format 0 as a second opinion, then `DataBurnService`'s FUA read-back from the session's first sector. Dual-layer
+DVD+R, BD-R and overwritable discs are not appended to (the Windows writer adds the session, and says so). The
+simulator places the next session as the Orange Book does on CD (11,400 sectors after the first session's lead-out,
+6,900 after later ones) and as measured on DVD-R (first session at least to LBA 65,264, then 28,688 sectors).
 
 **Audio CD, Session-at-Once with CD-Text:**
 
