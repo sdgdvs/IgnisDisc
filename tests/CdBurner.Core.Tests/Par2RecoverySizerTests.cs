@@ -127,4 +127,49 @@ public class Par2RecoverySizerTests
         var args = Par2Runner.BuildCreateArguments("C:\\s\\recovery.par2", "C:\\disc", layout);
         Assert.Equal(new[] { "create", "-q", "-s65536", "-c1234", "-n1", "-R", "-BC:\\disc", "C:\\s\\recovery.par2", "*" }, args);
     }
+
+    [Fact]
+    public void Plan_WithMoreThan30000SmallFiles_GivesAPositiveBlockSize()
+    {
+        // 31,000 non-empty files: each needs its own block, so the block count can never get under 30,000 by
+        // growing the block size. The sizer must still return a positive, sector-aligned size.
+        var files = Enumerable.Range(0, 31_000).Select(i => new Par2SourceFile($"f/{i:D5}.txt", 100)).ToArray();
+
+        var plan = Par2RecoverySizer.Plan(files, 200_000);
+
+        Assert.NotNull(plan);
+        Assert.True(plan!.BlockSize > 0, $"block size {plan.BlockSize}");
+        Assert.Equal(0, plan.BlockSize % 2048);
+        Assert.Equal(31_000, plan.SourceBlocks);
+        Assert.True(plan.RecoveryBlocks > 0);
+        Assert.True(plan.RecoverySectors <= 200_000);
+    }
+
+    [Fact]
+    public void Plan_WithMoreThan32768NonEmptyFiles_RefusesPlainly()
+    {
+        var files = Enumerable.Range(0, 32_769).Select(i => new Par2SourceFile($"f/{i:D5}.txt", 10)).ToArray();
+        var ex = Assert.Throws<InvalidOperationException>(() => Par2RecoverySizer.Plan(files, 1_000_000));
+        Assert.Contains("32,768", ex.Message);
+    }
+
+    [Fact]
+    public void Plan_EmptyFilesDoNotCountTowardsTheFileLimit()
+    {
+        var files = Enumerable.Range(0, 40_000).Select(i => new Par2SourceFile($"e/{i:D5}.txt", i < 10 ? 5000 : 0)).ToArray();
+        var plan = Par2RecoverySizer.Plan(files, 1_000_000);
+        Assert.NotNull(plan);
+        Assert.True(plan!.BlockSize > 0);
+    }
+
+    [Fact]
+    public void SpanPlanner_KeepsFileCountPerDiscWithinTheParLimit()
+    {
+        var files = Enumerable.Range(0, 70_000).Select(i => new ArchiveSourceFile($"C:/x/{i}.txt", $"d/{i:D5}.txt", 10)).ToArray();
+        var plan = ArchiveSpanPlanner.Plan(files, DiscMediaType.DvdMinusR, 10, "set");
+
+        Assert.True(plan.Discs.Count >= 3);
+        Assert.All(plan.Discs, d => Assert.True(d.Files.Count(f => f.SizeBytes > 0) <= ArchiveSpanPlanner.MaxNonEmptyFilesPerDisc));
+        Assert.Equal(70_000, plan.Discs.Sum(d => d.Files.Count));
+    }
 }

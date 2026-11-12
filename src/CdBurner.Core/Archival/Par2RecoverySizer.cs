@@ -65,6 +65,14 @@ public static class Par2RecoverySizer
             return null;
         }
 
+        long nonEmpty = NonEmptyCount(files);
+        if (nonEmpty > MaxRecoveryBlocks)
+        {
+            throw new InvalidOperationException(
+                $"This disc holds {nonEmpty:N0} non-empty files; par2 recovery data can protect at most {MaxRecoveryBlocks:N0} " +
+                "files on one disc. Put fewer files on the disc or turn recovery data off.");
+        }
+
         int minBlock = SmallestBlockSize(files);
         int workCap = (int)Math.Clamp(maxWork / dataBytes, 1, MaxRecoveryBlocks);
 
@@ -121,13 +129,22 @@ public static class Par2RecoverySizer
     private static int SmallestBlockSize(IReadOnlyList<Par2SourceFile> files)
     {
         long dataBytes = files.Sum(f => Math.Max(0, f.SizeBytes));
-        int block = RoundUpToSector(Math.Max(OpticalConstants.DataSectorSize, dataBytes / TargetSourceBlocks));
-        while (SourceBlockCount(files, block) > TargetSourceBlocks)
+        // Every non-empty file starts its own block, so with more than TargetSourceBlocks files no block size can get
+        // the count under the target: aim for one block per file instead (par2's own limit is checked by Plan).
+        long target = Math.Clamp(NonEmptyCount(files), TargetSourceBlocks, MaxRecoveryBlocks);
+        long block = RoundUpToSector(Math.Max(OpticalConstants.DataSectorSize, dataBytes / target));
+        while (SourceBlockCount(files, (int)block) > target)
         {
-            block += OpticalConstants.DataSectorSize * Math.Max(1, block / (16 * OpticalConstants.DataSectorSize));
+            block += (long)OpticalConstants.DataSectorSize * Math.Max(1, block / (16 * OpticalConstants.DataSectorSize));
+            if (block > int.MaxValue / 2)
+            {
+                throw new InvalidOperationException("The files cannot be cut into par2 blocks of a usable size.");
+            }
         }
-        return block;
+        return (int)block;
     }
+
+    private static long NonEmptyCount(IReadOnlyList<Par2SourceFile> files) => files.Count(f => f.SizeBytes > 0);
 
     private static int MostBlocksThatFit(IReadOnlyList<Par2SourceFile> files, int blockSize, long budgetSectors)
     {

@@ -9,6 +9,12 @@ namespace CdBurner.Core.Archival;
 public static class ArchiveSpanPlanner
 {
     /// <summary>
+    /// Most non-empty files on one disc when recovery data is made: par2 protects at most 32,768 files per set, and
+    /// the staged disc adds a few files of its own (manifest, index, verify scripts, readme), so a few places stay free.
+    /// </summary>
+    public const int MaxNonEmptyFilesPerDisc = Par2RecoverySizer.MaxRecoveryBlocks - 8;
+
+    /// <summary>
     /// Computes usable 2048-byte sectors per disc for the specified media type and redundancy percentage.
     /// </summary>
     /// <param name="mediaType">Target optical media type.</param>
@@ -131,6 +137,8 @@ public static class ArchiveSpanPlanner
         var currentDiscFiles = new List<ArchiveSourceFile>();
         long currentDiscBytes = 0;
         int currentDiscSectors = 0;
+        int currentNonEmpty = 0;
+        int fileLimit = redundancyPercent > 0 ? MaxNonEmptyFilesPerDisc : int.MaxValue;
 
         foreach (var file in orderedFiles)
         {
@@ -144,7 +152,9 @@ public static class ArchiveSpanPlanner
                     $"File '{file.RelativePath}' requires {requiredSectors} sectors, which is larger than one disc usable capacity ({usableSectors} sectors).");
             }
 
-            if (currentDiscFiles.Count > 0 && (currentDiscSectors + fileSectors > usableSectors))
+            bool countsTowardsLimit = file.SizeBytes > 0;
+            if (currentDiscFiles.Count > 0 &&
+                (currentDiscSectors + fileSectors > usableSectors || (countsTowardsLimit && currentNonEmpty >= fileLimit)))
             {
                 discs.Add(new ArchiveDiscPlan(
                     DiscNumber: discs.Count + 1,
@@ -155,9 +165,11 @@ public static class ArchiveSpanPlanner
                 currentDiscFiles = new List<ArchiveSourceFile>();
                 currentDiscBytes = 0;
                 currentDiscSectors = 0;
+                currentNonEmpty = 0;
             }
 
             currentDiscFiles.Add(file);
+            if (countsTowardsLimit) currentNonEmpty++;
             currentDiscBytes += file.SizeBytes;
             currentDiscSectors += fileSectors;
         }
