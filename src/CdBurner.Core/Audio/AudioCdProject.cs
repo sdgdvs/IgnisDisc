@@ -664,6 +664,7 @@ public class AudioCdCompilation
         }
 
         int added = 0;
+        int audioAfterData = 0; // audio pre-gap sectors found at the end of track 1's range (a cue without INDEX 00)
         bool cueHasAudio = cueSheet.Tracks.Any(t => t.IsAudio);
         foreach (var file in cueSheet.Files)
         {
@@ -680,7 +681,7 @@ public class AudioCdCompilation
                 (file.Tracks.Count == 1 || file.Tracks[0].DataType == CueTrackDataType.Mode1_2352) &&
                 File.Exists(audioFilePath))
             {
-                AddTrack(ImportDataTrack(file, audioFilePath));
+                AddTrack(ImportDataTrack(file, audioFilePath, out audioAfterData));
                 added++;
             }
 
@@ -757,7 +758,7 @@ public class AudioCdCompilation
                 int preGap = trk.PreGap?.ToFrameCount() ?? (trackNum == 1 ? DefaultPreGapFrames : 0);
                 if (afterData)
                 {
-                    preGap = Math.Max(preGap, Math.Max(MixedModeAudioPreGapFrames, rawGap));
+                    preGap = Math.Max(preGap, Math.Max(MixedModeAudioPreGapFrames, Math.Max(rawGap, audioAfterData)));
                 }
 
                 AddTrack(new AudioCdTrackItem(
@@ -815,7 +816,7 @@ public class AudioCdCompilation
                     {
                         // After a data track: a generated pre-gap of at least two seconds, covering the cue's INDEX 00.
                         int gap = GetIndex00Frames(trk) is int i00 && i00 < startFrame ? startFrame - i00 : 0;
-                        preGap = Math.Max(preGap, Math.Max(MixedModeAudioPreGapFrames, gap));
+                        preGap = Math.Max(preGap, Math.Max(MixedModeAudioPreGapFrames, Math.Max(gap, audioAfterData)));
                     }
 
                     // INDEX 00 marks: for a later track the gap audio is the tail of the previous slice; for the
@@ -878,8 +879,9 @@ public class AudioCdCompilation
     /// begins (its INDEX 00, else INDEX 01), or to the end of the file. A rip keeps the two-second post-gap at the end
     /// of the data track; when those sectors are zeros they are left to the writer, which writes the same zeros there.
     /// </summary>
-    private AudioCdTrackItem ImportDataTrack(CueFileEntry file, string filePath)
+    private AudioCdTrackItem ImportDataTrack(CueFileEntry file, string filePath, out int audioAfterData)
     {
+        audioAfterData = 0;
         var trk = file.Tracks[0];
         int sectorSize = trk.DataType == CueTrackDataType.Mode1_2048 ? DataTrackImage.UserDataSize : OpticalConstants.RawSectorSize;
         long start = (long)(GetIndex01Frames(trk) ?? 0) * sectorSize;
@@ -891,6 +893,16 @@ public class AudioCdCompilation
         }
         int sectors = (int)Math.Max(0, (end - start) / sectorSize);
         var image = DataTrackImage.Open(filePath, start, sectors, sectorSize);
+        if (file.Tracks.Count > 1 && GetIndex00Frames(file.Tracks[1]) is null)
+        {
+            // No INDEX 00 for track 2: the range ends with track 2's audio pre-gap, which is not data. It goes back to the
+            // audio track (written as its pre-gap) so the data track keeps its own length and track 2 its position.
+            audioAfterData = image.CountTrailingNonDataSectors(Math.Max(0, sectors - 4 * OpticalConstants.AudioFramesPerSecond));
+            if (audioAfterData > 0)
+            {
+                image = image with { SectorCount = sectors - audioAfterData };
+            }
+        }
         return CreateDataTrack(image, trk.Title, !string.IsNullOrWhiteSpace(trk.Performer) ? trk.Performer : AlbumPerformer);
     }
 

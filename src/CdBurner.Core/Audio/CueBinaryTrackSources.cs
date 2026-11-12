@@ -64,6 +64,34 @@ public sealed record DataTrackImage(string FilePath, long OffsetBytes, int Secto
         return new DataTrackImage(filePath, offsetBytes, sectorCount, sectorSize);
     }
 
+    /// <summary>
+    /// How many sectors at the end of the range are not Mode 1 sectors (no sync pattern and Mode 1 header), up to
+    /// <paramref name="max"/>. In a cue sheet without INDEX 00 the range of track 1 runs to track 2's INDEX 01, so it ends
+    /// with track 2's audio pre-gap. Only for raw 2,352-byte sectors; 0 otherwise.
+    /// </summary>
+    public int CountTrailingNonDataSectors(int max)
+    {
+        if (SectorSize != OpticalConstants.RawSectorSize)
+        {
+            return 0;
+        }
+        byte[] header = new byte[16];
+        using var fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        int count = 0;
+        while (count < max && count < SectorCount - 1)
+        {
+            fs.Position = OffsetBytes + (long)(SectorCount - 1 - count) * SectorSize;
+            fs.ReadExactly(header);
+            bool mode1 = header[0] == 0 && header[11] == 0 && header.AsSpan(1, 10).IndexOfAnyExcept((byte)0xFF) < 0 && header[15] == 1;
+            if (mode1)
+            {
+                break;
+            }
+            count++;
+        }
+        return count;
+    }
+
     /// <summary>Opens the track's user data: <see cref="UserDataSize"/> bytes per sector, in order.</summary>
     public Stream OpenUserData() => new UserDataStream(this);
 

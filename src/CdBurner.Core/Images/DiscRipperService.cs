@@ -230,6 +230,26 @@ public class DiscRipperService
             }
         }
 
+        // A raw rip of a disc with audio runs to the lead-out in the table of contents. The used size Windows reports
+        // can stop short of it (2 sectors on a Session-at-Once CD, measured 2026-11-11), which would cut the end of the
+        // last track.
+        if (options.Raw2352Mode && !options.SectorCount.HasValue && recorder is IDiscTocProvider tocProvider)
+        {
+            try
+            {
+                var toc = tocProvider.ReadTableOfContents();
+                if (toc.Count > 0 && toc.Any(t => t.IsAudio))
+                {
+                    int tocEnd = toc.Max(t => t.StartLba + t.SectorCount);
+                    sectorCount = Math.Max(sectorCount, tocEnd - startLba);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+            {
+                // Without a table of contents the used size stands.
+            }
+        }
+
         if (sectorCount <= 0)
         {
             return RipOperationResult.Failed($"Invalid sector count ({sectorCount}) for rip operation.");
@@ -332,6 +352,8 @@ public class DiscRipperService
     {
         string binFileName = Path.GetFileName(outputBinPath);
         var cueTracks = new List<CueTrack>();
+        string? albumTitle = null;
+        string? albumPerformer = null;
 
         if (customTracks != null && customTracks.Count > 0)
         {
@@ -346,6 +368,8 @@ public class DiscRipperService
                 try { cdText = CdTextPackParser.ParsePacks(packs); }
                 catch (Exception ex) when (ex is ArgumentException or InvalidDataException) { }
             }
+            albumTitle = string.IsNullOrEmpty(cdText?.AlbumTitle) ? null : cdText.AlbumTitle;
+            albumPerformer = string.IsNullOrEmpty(cdText?.AlbumPerformer) ? null : cdText.AlbumPerformer;
 
             foreach (var t in toc.Where(t => t.StartLba >= startLba).OrderBy(t => t.TrackNumber))
             {
@@ -423,7 +447,7 @@ public class DiscRipperService
         }
 
         var fileEntry = new CueFileEntry(binFileName, "BINARY", cueTracks);
-        return new CueSheet(Files: new[] { fileEntry });
+        return new CueSheet(Title: albumTitle, Performer: albumPerformer, Files: new[] { fileEntry });
     }
 
     private static int InspectVirtualMediumUsedSectors(IDiscRecorderBackend recorder)

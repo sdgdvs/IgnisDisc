@@ -200,6 +200,58 @@ public sealed class MixedModeCueBurnTests : IDisposable
     }
 
     [Fact]
+    public async Task ACueWithoutIndex00_AsARipWritesIt_GivesTheSameDisc()
+    {
+        // Track 1's range then runs to track 2's INDEX 01 and ends with track 2's silent pre-gap (audio, not data).
+        File.WriteAllBytes(Path.Combine(_dir, "rip.bin"), WholeDisc());
+        string cue = Path.Combine(_dir, "rip.cue");
+        File.WriteAllLines(cue, new[]
+        {
+            "FILE \"rip.bin\" BINARY", "  TRACK 01 MODE1/2352", "    INDEX 01 00:00:00",
+            "  TRACK 02 AUDIO", "    INDEX 01 00:09:25", "  TRACK 03 AUDIO", "    INDEX 01 00:13:25"
+        });
+        var compilation = new AudioCdCompilation();
+        compilation.ImportCueSheet(cue);
+        Assert.Equal(DataSectors, compilation.Tracks[0].DataTrack!.SectorCount);
+        Assert.Equal(GapFrames, compilation.Tracks[1].PreGapFrames);
+
+        var (result, _, drive, _) = await BurnNative(cue);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Equal(new[] { 0, Track2Lba, Track3Lba }, drive.RecordedTracks.Select(t => t.Index01Lba));
+        Assert.Equal(WholeDisc(), drive.ProgramAreaWritten.ToArray().AsSpan(150 * Raw).ToArray());
+    }
+
+    /// <summary>A simulated drive that answers the table of contents, with the lead-out 2 sectors after the used size.</summary>
+    private sealed class TocDrive : VirtualDiscRecorder, IDiscTocProvider
+    {
+        public IReadOnlyList<DiscTocTrack> Toc { get; set; } = Array.Empty<DiscTocTrack>();
+        public IReadOnlyList<DiscTocTrack> ReadTableOfContents() => Toc;
+    }
+
+    [Fact]
+    public async Task ARawRip_RunsToTheLeadOutInTheTableOfContents_NotTheUsedSize()
+    {
+        var medium = VirtualDiscMedium.CreateBlankCdR700();
+        medium.Raw2352Mode = true;
+        byte[] audio = Noise(4, 400);
+        for (int lba = 0; lba < 400; lba++)
+        {
+            medium.WriteSector(lba, audio.AsSpan(lba * Raw, Raw), Raw);
+        }
+        var drive = new TocDrive();
+        drive.InsertMedia(medium);
+        int used = drive.QueryMediaStatus().UsedSectors;
+        drive.Toc = new[] { new DiscTocTrack(1, 0, used + 2, IsAudio: true) };
+        string bin = Path.Combine(_dir, "len.bin");
+
+        var rip = await new DiscRipperService().RipToBinCueAsync(drive, new VirtualBurnEngine(drive), bin, Path.ChangeExtension(bin, ".cue"));
+
+        Assert.True(rip.Success, rip.ErrorMessage);
+        Assert.Equal((long)(used + 2) * Raw, new FileInfo(bin).Length);
+    }
+
+    [Fact]
     public async Task FilePerTrackCue_GivesTheSameDisc()
     {
         var (result, _, drive, _) = await BurnNative(FilePerTrackCue());
