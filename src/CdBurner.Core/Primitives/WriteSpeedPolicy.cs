@@ -66,6 +66,29 @@ public static class WriteSpeedPolicy
         return speeds.OrderBy(s => Math.Abs(s.Multiplier - preference)).First();
     }
 
+    /// <summary>
+    /// Like <see cref="Choose"/>, but holds the result to the ceiling <see cref="MediaSpeedCaps"/> lists for this disc's
+    /// media ID, if any. Over the cap, the fastest offered speed at or below it is used, else the slowest offered.
+    /// <see cref="Slowest"/> is never raised. <c>Reason</c> is set whenever the disc has a cap, to show next to the speed.
+    /// </summary>
+    public static (WriteSpeedDescriptor? Speed, string? Reason) ChooseForMedia(
+        IEnumerable<WriteSpeedDescriptor>? offered, int preference, string? mediaId, DiscMediaType mediaType)
+    {
+        var speeds = (offered ?? []).Where(s => s.BytesPerSecond > 0 && s.Multiplier > 0).ToList();
+        var chosen = Choose(speeds, preference);
+        var cap = MediaSpeedCaps.Find(mediaId, mediaType);
+        if (chosen is null || cap is null) return (chosen, null);
+
+        if (chosen.Value.Multiplier > cap.MaxMultiplier + 0.25)
+        {
+            var under = speeds.Where(s => s.Multiplier <= cap.MaxMultiplier + 0.25).ToList();
+            chosen = under.Count > 0
+                ? under.OrderBy(s => s.BytesPerSecond).ThenBy(s => s.Rotation == WriteRotation.Clv).Last()
+                : speeds.MinBy(s => s.BytesPerSecond);
+        }
+        return (chosen, cap.Reason);
+    }
+
     /// <summary>Why <see cref="Recommended"/> picked what it did, in one plain sentence (for logs and help).</summary>
     public static string ExplainRecommended(IEnumerable<WriteSpeedDescriptor>? offered)
     {

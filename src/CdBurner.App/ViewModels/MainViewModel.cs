@@ -765,8 +765,52 @@ public class MainViewModel : ObservableObject, IDisposable
         IEnumerable<WriteSpeedDescriptor> offered = CurrentMediaStatus is { } media
             ? WriteSpeedPolicy.ForDisc(AvailableWriteSpeeds, media.MediaType)
             : AvailableWriteSpeeds;
-        SelectedWriteSpeed = WriteSpeedPolicy.Choose(offered, _settings.DefaultWriteSpeedMultiplier);
+        var (speed, reason) = CurrentMediaStatus is { MediaPresent: true } present
+            ? WriteSpeedPolicy.ChooseForMedia(offered, _settings.DefaultWriteSpeedMultiplier, present.MediaManufacturerId, present.MediaType)
+            : (WriteSpeedPolicy.Choose(offered, _settings.DefaultWriteSpeedMultiplier), null);
+        SelectedWriteSpeed = speed;
+        SpeedCapReason = reason;
     }
+
+    private string? _speedCapReason;
+    private string? _speedCapMediaKey;
+
+    /// <summary>
+    /// Re-applies the default speed once when a disc with a known speed cap is inserted (the speed list itself does not
+    /// change between discs, so the normal "selection no longer offered" path would not run), and keeps the reason in
+    /// step with the disc. A speed the user then picks by hand is left alone until the disc changes.
+    /// </summary>
+    private void RefreshSpeedCap()
+    {
+        var media = CurrentMediaStatus;
+        var cap = media is { MediaPresent: true } ? MediaSpeedCaps.Find(media.MediaManufacturerId, media.MediaType) : null;
+        string? key = cap is null ? null : media.MediaManufacturerId;
+        if (key != _speedCapMediaKey)
+        {
+            _speedCapMediaKey = key;
+            if (AvailableWriteSpeeds.Count > 0) SelectDefaultWriteSpeed();
+        }
+        SpeedCapReason = cap?.Reason;
+    }
+
+    /// <summary>
+    /// Why the default speed is lower than usual for the inserted disc (from <see cref="MediaSpeedCaps"/>), or null.
+    /// Shown next to the speed picker.
+    /// </summary>
+    public string? SpeedCapReason
+    {
+        get => _speedCapReason;
+        private set
+        {
+            if (SetProperty(ref _speedCapReason, value))
+            {
+                OnPropertyChanged(nameof(HasSpeedCapReason));
+            }
+        }
+    }
+
+    /// <summary>True when <see cref="SpeedCapReason"/> has text to show.</summary>
+    public bool HasSpeedCapReason => !string.IsNullOrEmpty(_speedCapReason);
 
     /// <summary>
     /// Updates media status, supported write speeds, and capacity assessment for current recorder.
@@ -775,7 +819,7 @@ public class MainViewModel : ObservableObject, IDisposable
     {
         if (_selectedRecorder != null)
         {
-            CurrentMediaStatus = _selectedRecorder.QueryMediaStatus();
+            CurrentMediaStatus = _selectedRecorder.WithManufacturerId(_selectedRecorder.QueryMediaStatus());
 
             // Populate write speeds
             AvailableWriteSpeeds.Clear();
@@ -800,6 +844,7 @@ public class MainViewModel : ObservableObject, IDisposable
                 SelectedWriteSpeed = null;
             }
 
+            RefreshSpeedCap();
             UpdateCapacityForActiveWorkspace();
         }
         else
@@ -811,6 +856,7 @@ public class MainViewModel : ObservableObject, IDisposable
             };
             AvailableWriteSpeeds.Clear();
             SelectedWriteSpeed = null;
+            RefreshSpeedCap();
             CurrentCapacity = CompilationCapacityCalculator.AssessCapacity(0, DiscMediaType.CdR);
         }
 
@@ -929,6 +975,9 @@ public class MainViewModel : ObservableObject, IDisposable
                         st.TotalSectors != prevStatus.TotalSectors ||
                         st.FreeSectors != prevStatus.FreeSectors;
 
+                    // The media ID costs extra drive commands, so it is read only when the disc changed.
+                    if (hasChanged) st = recorder.WithManufacturerId(st);
+
                     DriveCapabilitiesDto? caps = hasChanged ? recorder.GetCapabilities() : null;
                     return (Status: (MediaStatusDto?)st, Caps: caps, Changed: hasChanged);
                 }
@@ -979,6 +1028,7 @@ public class MainViewModel : ObservableObject, IDisposable
             }
         }
 
+        RefreshSpeedCap();
         UpdateCapacityForActiveWorkspace();
         RefreshCommandStates();
     }

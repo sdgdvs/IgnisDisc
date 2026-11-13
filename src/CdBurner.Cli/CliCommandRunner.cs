@@ -321,9 +321,16 @@ public static class CliCommandRunner
 
         var status = recorder.WithManufacturerId(recorder.QueryMediaStatus());
         var caps = recorder.GetCapabilities();
-        string? recommendedSpeed = status.MediaPresent
-            ? WriteSpeedPolicy.ExplainRecommended(WriteSpeedPolicy.ForDisc(caps.SupportedWriteSpeeds, status.MediaType))
-            : null;
+        var speedCap = status.MediaPresent ? MediaSpeedCaps.Find(status.MediaManufacturerId, status.MediaType) : null;
+        string? recommendedSpeed = null;
+        if (status.MediaPresent)
+        {
+            var forDisc = WriteSpeedPolicy.ForDisc(caps.SupportedWriteSpeeds, status.MediaType);
+            var capped = WriteSpeedPolicy.ChooseForMedia(forDisc, WriteSpeedPolicy.Recommended, status.MediaManufacturerId, status.MediaType);
+            recommendedSpeed = speedCap is not null && capped.Speed is { } s
+                ? $"{s.Multiplier:0.#}x: held to the disc's speed limit ({speedCap.MaxMultiplier:0.#}x). {speedCap.Reason}"
+                : WriteSpeedPolicy.ExplainRecommended(forDisc);
+        }
         // Straight from the drive (read-only): formatted size and the write speeds it offers for this disc.
         var driveReport = status.MediaPresent && recorder is IDriveMediaReportProvider reportProvider
             ? reportProvider.ReadDriveMediaReport()
@@ -386,6 +393,7 @@ public static class CliCommandRunner
                     }).ToList()
                 },
                 recommendedWriteSpeed = recommendedSpeed,
+                speedLimit = speedCap == null ? null : new { maxMultiplier = speedCap.MaxMultiplier, reason = speedCap.Reason },
                 writeSpeedsFromDrive = driveReport.WriteSpeeds.Select(s => new
                 {
                     multiplier = s.Multiplier(status.MediaType),
@@ -440,6 +448,10 @@ public static class CliCommandRunner
             if (recommendedSpeed != null)
             {
                 stdout.WriteLine($"  Default Write Speed:   {recommendedSpeed}");
+            }
+            if (speedCap != null)
+            {
+                stdout.WriteLine($"  Speed Limit:           {speedCap.MaxMultiplier:0.#}x - {speedCap.Reason}");
             }
         }
 

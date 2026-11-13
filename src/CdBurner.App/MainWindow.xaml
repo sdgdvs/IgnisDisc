@@ -212,6 +212,17 @@
                         </ComboBox.ItemTemplate>
                     </ComboBox>
 
+                    <TextBlock Text="{Binding SpeedCapReason}"
+                               Visibility="{Binding HasSpeedCapReason, Converter={StaticResource BooleanToVisibilityConverter}}"
+                               ToolTip="{Binding SpeedCapReason}"
+                               AutomationProperties.Name="Why the default write speed is low"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               MaxWidth="260"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Margin="8,0,0,0" />
+
                     <!-- Virtual Media Quick-Mount (only when the virtual drive is enabled in Settings) -->
                     <StackPanel Orientation="Horizontal"
                                 VerticalAlignment="Center"

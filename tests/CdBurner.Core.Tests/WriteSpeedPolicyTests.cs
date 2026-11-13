@@ -17,6 +17,57 @@ public class WriteSpeedPolicyTests
 
     private static readonly WriteSpeedDescriptor[] RealCdRList = [Cd(10), Cd(15.99), Cd(23.99), Cd(24), Cd(16), Cd(10)];
 
+    // ATIP lead-in start times: 97m26s0x is FORNET (measured weak at the rim), 97m24s01f is Sony.
+    private const string FornetId = "97m26s03f (FORNET INTERNATIONAL PTE LTD. - Long Strategy (Cyanine / AZO))";
+    private const string SonyId = "97m24s11f (SONY Corporation - Long Strategy (Cyanine / AZO))";
+
+    [Fact]
+    public void CappedMedia_HoldsTheDefaultSpeedDownAndGivesAReason()
+    {
+        var (speed, reason) = WriteSpeedPolicy.ChooseForMedia(RealCdRList, WriteSpeedPolicy.Recommended, FornetId, DiscMediaType.CdR);
+        Assert.Equal(10, speed!.Value.Multiplier, 1);
+        Assert.False(string.IsNullOrWhiteSpace(reason));
+        Assert.Contains("FORNET", reason);
+    }
+
+    [Fact]
+    public void CappedMedia_AlsoHoldsDownMaximumButNeverRaisesSlowest()
+    {
+        Assert.Equal(10, WriteSpeedPolicy.ChooseForMedia(RealCdRList, WriteSpeedPolicy.Maximum, FornetId, DiscMediaType.CdR).Speed!.Value.Multiplier, 1);
+        Assert.Equal(10, WriteSpeedPolicy.ChooseForMedia(RealCdRList, WriteSpeedPolicy.Slowest, FornetId, DiscMediaType.CdR).Speed!.Value.Multiplier, 1);
+    }
+
+    [Fact]
+    public void CapWithNothingUnderIt_FallsBackToTheSlowestOffered()
+    {
+        var offered = new[] { Cd(16), Cd(24) };
+        Assert.Equal(16, WriteSpeedPolicy.ChooseForMedia(offered, WriteSpeedPolicy.Recommended, FornetId, DiscMediaType.CdR).Speed!.Value.Multiplier, 1);
+    }
+
+    [Fact]
+    public void UncappedMedia_KeepsThePolicyChoiceAndHasNoReason()
+    {
+        var (speed, reason) = WriteSpeedPolicy.ChooseForMedia(RealCdRList, WriteSpeedPolicy.Recommended, SonyId, DiscMediaType.CdR);
+        Assert.Equal(WriteSpeedPolicy.Choose(RealCdRList, WriteSpeedPolicy.Recommended)!.Value.Multiplier, speed!.Value.Multiplier, 1);
+        Assert.Equal(16, speed.Value.Multiplier, 1);
+        Assert.Null(reason);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("VIRTUAL-OPTICAL-01")]
+    public void NoKnownId_MeansNoCap(string? id)
+    {
+        Assert.Null(MediaSpeedCaps.Find(id, DiscMediaType.CdR));
+    }
+
+    [Fact]
+    public void AnAtipCodeOnADvd_IsNotACdCap()
+    {
+        Assert.Null(MediaSpeedCaps.Find(FornetId, DiscMediaType.DvdPlusR));
+    }
+
     [Fact]
     public void Slowest_IsTheSlowestSpeedOffered()
     {
