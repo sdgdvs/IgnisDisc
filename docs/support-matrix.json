@@ -52,8 +52,8 @@
     "featureHtml": "Burn an audio CD (Disc-at-Once / Track-at-Once)",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling, crossfade, preview, printable jewel-case insert",
-    "notesHtml": "From WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; <code>.cue</code> sheets (per-track or single-file albums) and <code>.m3u</code>/<code>.m3u8</code>/<code>.pls</code> playlists; loudness leveling, crossfade, preview, printable jewel-case insert"
+    "notesMarkdown": "WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling or an optional -18 LUFS normalisation with a -1 dBTP limiter, crossfade, preview, printable jewel-case insert. Opus, Ogg and MP3 can also be decoded through the optional ffmpeg download, trimmed to the exact length for gapless albums; the lossy decoding and the normalisation have only been tested on files and the virtual drive, with one 2021 ffmpeg build, not on a burned disc",
+    "notesHtml": "From WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; <code>.cue</code> sheets (per-track or single-file albums) and <code>.m3u</code>/<code>.m3u8</code>/<code>.pls</code> playlists; loudness leveling or an optional -18 LUFS normalisation with a -1 dBTP limiter, crossfade, preview, printable jewel-case insert. Opus, Ogg and MP3 can also be decoded through the optional ffmpeg download, trimmed to the exact length for gapless albums; the lossy decoding and the normalisation have only been tested on files and the virtual drive, with one 2021 ffmpeg build, not on a burned disc"
   },
   {
     "featureMarkdown": "Burn / verify / convert legacy images",
@@ -76,8 +76,8 @@
     "featureHtml": "Rip an audio CD to WAV, FLAC, MP3, Opus or AAC + <code>.cue</code>",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Output formats are tested on the virtual drive only",
-    "notesHtml": "Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Output formats are tested on the virtual drive only"
+    "notesMarkdown": "Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Ripping has run on a real drive (LG GP60NB50): tracks from CD-Rs and a CD-RW burned by IgnisDisc came back identical to the source audio. The encoders and output formats are otherwise tested on the virtual drive only; the built-in FLAC decoder (used for burning) is also checked against files made by the official flac 1.5.0 encoder",
+    "notesHtml": "Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Ripping has run on a real drive (LG GP60NB50): tracks from CD-Rs and a CD-RW burned by IgnisDisc came back identical to the source audio. The encoders and output formats are otherwise tested on the virtual drive only; the built-in FLAC decoder (used for burning) is also checked against files made by the official flac 1.5.0 encoder"
   },
   {
     "featureMarkdown": "AccurateRip verification + read-offset correction",
@@ -100,8 +100,8 @@
     "featureHtml": "Archive Studio: span folders across discs",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) fills the space left on each disc; `recover` copies the files off a damaged archive disc and rebuilds them",
-    "notesHtml": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs <code>par2.exe</code>) fills the space left on each disc; <code>recover</code> copies the files off a damaged archive disc and rebuilds them"
+    "notesMarkdown": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) fills the space left on each disc; `recover` copies the files off a damaged archive disc and rebuilds them. An archive burn can also write a HEALTH.json and HEALTH.svg report, and `check-disc --compare` sets a later read against it; this has only been tested on the virtual drive, not run on a real drive",
+    "notesHtml": "SHA-256 manifest on every disc; optional PAR2 recovery data (needs <code>par2.exe</code>) fills the space left on each disc; <code>recover</code> copies the files off a damaged archive disc and rebuilds them. An archive burn can also write a HEALTH.json and HEALTH.svg report, and <code>check-disc --compare</code> sets a later read against it; this has only been tested on the virtual drive, not run on a real drive"
   },
   {
     "featureMarkdown": "Quick / full erase of rewritable media",
