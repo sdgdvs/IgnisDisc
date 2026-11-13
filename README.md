@@ -27,7 +27,7 @@ pipeline can be tested without hardware or blank media.
 | Burn audio CD (Disc-at-Once / Track-at-Once) | ✅ | ✅ | WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling, crossfade, preview, printable jewel-case insert |
 | Burn / verify / convert legacy images | ✅ | ✅ | Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit |
 | Disc copy (one or two drives, multi-copy) | ⚠️ | ✅ | Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; done once on a real drive (one drive, a CD-RW copied to a CD-R). The source audio is read with error checks and re-reads, and a copy stops before writing when sectors still read wrong |
-| Rip audio CD to `.wav` / `.flac` + `.cue` | ✅ | ✅ | Reads the real TOC and CD-Text; optional MusicBrainz track names |
+| Rip audio CD to `.wav` / `.flac` / `.mp3` / `.opus` / `.m4a` + `.cue` | ✅ | ✅ | Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Output formats are tested on the virtual drive only |
 | AccurateRip verification + read-offset correction | ✅ | ✅ | Detects your drive's offset from a disc in the AccurateRip database |
 | Secure audio ripping (C2 error pointers + re-reads) | ✅ | ✅ | Flags suspect sectors; can be slow on badly scratched discs |
 | Archive Studio: span folders across discs | ✅ | ✅ | SHA-256 manifest on every disc; optional PAR2 recovery data (needs `par2.exe`) fills the space left on each disc; `recover` copies the files off a damaged archive disc and rebuilds them |
@@ -87,7 +87,7 @@ ignisdisc-cli <command> [options]
   burn-dvd   --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite]
              [--native [--test-write | --test-first] [--log-dir <folder>]]
   rip        --drive <id> --output <file.iso|file.bin> [--raw]
-  rip-audio  --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup]
+  rip-audio  --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup]
              [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--continue-on-error] [--cover <image>]
                                                Exit code 2 when sectors may be wrong (still suspect or unreadable)
   detect-offset --drive <id>                   Find the drive's audio read offset (AccurateRip)

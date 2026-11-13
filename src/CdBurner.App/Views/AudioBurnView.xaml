@@ -563,6 +563,35 @@
                                         ToolTip="Detect drive read offset using an inserted commercial Audio CD against AccurateRip" />
                             </Grid>
 
+                            <!-- Output format row -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <TextBlock Text="Format:"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,10,0" />
+                                <ComboBox Width="140"
+                                          AutomationProperties.Name="Rip output format"
+                                          ItemsSource="{Binding RipFormats}"
+                                          SelectedItem="{Binding SelectedRipFormat}"
+                                          Margin="0,0,16,0"
+                                          ToolTip="WAV and AAC need nothing extra. FLAC, MP3 and Opus use the optional ffmpeg download." />
+                                <TextBlock Text="Bitrate (kbit/s):"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,10,0" />
+                                <TextBox Width="70"
+                                         AutomationProperties.Name="Rip bitrate in kilobits per second"
+                                         Text="{Binding RipBitrateKbps, UpdateSourceTrigger=PropertyChanged}"
+                                         IsEnabled="{Binding RipFormatUsesBitrate}"
+                                         Padding="8,6"
+                                         Background="{DynamicResource ControlBackgroundBrush}"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         BorderBrush="{DynamicResource ControlBorderBrush}"
+                                         ToolTip="MP3 32-320, Opus 6-510, AAC 96, 128, 160 or 192. Empty uses the default for the format." />
+                            </StackPanel>
+
                             <!-- CheckBoxes -->
                             <WrapPanel Orientation="Horizontal">
                                 <CheckBox Content="Secure rip (C2 re-reads)"

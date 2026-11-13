@@ -6,6 +6,7 @@ using System.Windows.Input;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
 using CdBurner.Core.Audio;
+using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Images;
 using CdBurner.Core.Persistence;
 using CdBurner.Core.Primitives;
@@ -78,6 +79,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     private bool _verifyAccurateRip = true;
     private bool _continueOnUnreadable;
     private string _ripReport = string.Empty;
+    private AudioRipFormat _selectedRipFormat = AudioRipFormat.Wav;
+    private string _ripBitrateKbps = string.Empty;
 
     private AudioTrackRowViewModel? _selectedTrack;
     private IDiscRecorderBackend? _selectedRecorder;
@@ -548,6 +551,33 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 SaveSettingsIfAvailable();
             }
         }
+    }
+
+    /// <summary>Output formats offered by the rip screen.</summary>
+    public IReadOnlyList<AudioRipFormat> RipFormats { get; } =
+        [AudioRipFormat.Wav, AudioRipFormat.Flac, AudioRipFormat.Mp3, AudioRipFormat.Opus, AudioRipFormat.Aac];
+
+    /// <summary>Format the ripped tracks are saved in. WAV needs nothing extra; AAC uses the Windows encoder; FLAC, MP3 and Opus need ffmpeg.</summary>
+    public AudioRipFormat SelectedRipFormat
+    {
+        get => _selectedRipFormat;
+        set
+        {
+            if (SetProperty(ref _selectedRipFormat, value))
+            {
+                OnPropertyChanged(nameof(RipFormatUsesBitrate));
+            }
+        }
+    }
+
+    /// <summary>Whether the chosen format takes a bitrate (MP3, Opus, AAC).</summary>
+    public bool RipFormatUsesBitrate => AudioRipFormats.UsesBitrate(_selectedRipFormat);
+
+    /// <summary>Bitrate in kbit/s for MP3, Opus and AAC; empty uses the default for the format.</summary>
+    public string RipBitrateKbps
+    {
+        get => _ripBitrateKbps;
+        set => SetProperty(ref _ripBitrateKbps, value ?? string.Empty);
     }
 
     /// <summary>
@@ -2148,6 +2178,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         }
     }
 
+    private static AudioCdRipResult AudioRipResultWithFiles(AudioCdRipResult rip, IReadOnlyList<string> files) =>
+        AudioCdRipResult.Succeeded(
+            files, rip.TotalSectorsRead, rip.TotalTime, rip.CueSheetPath, rip.CdText, rip.TrackInfos,
+            rip.BadSectorLbas, rip.SecureModeUsed, rip.ReplayGainAlbumGain, rip.ReplayGainAlbumPeak);
+
     /// <summary>
     /// Extracts Red Book audio tracks from the inserted CD into uncompressed WAV files and companion CUE sheet.
     /// </summary>
@@ -2168,6 +2203,33 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         string targetFolder = !string.IsNullOrWhiteSpace(outputFolder)
             ? outputFolder
             : (!string.IsNullOrWhiteSpace(RipOutputFolder) ? RipOutputFolder : Path.Combine(Path.GetTempPath(), "CdBurner_RippedAudio"));
+
+        // Check the output format before reading the disc, so a missing ffmpeg or a bad bitrate costs no rip time.
+        var transcoder = new AudioRipTranscoder(new MediaFoundationAacEncoder());
+        int bitrate = 0;
+        string? formatProblem = null;
+        if (!string.IsNullOrWhiteSpace(RipBitrateKbps))
+        {
+            if (!int.TryParse(RipBitrateKbps.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out bitrate) || bitrate <= 0)
+            {
+                formatProblem = $"Invalid bitrate '{RipBitrateKbps}'. Enter kbit/s as a whole number or leave it empty.";
+            }
+        }
+        string? customFfmpeg = _settingsService?.CurrentSettings.FfmpegExecutablePath;
+        string? ffmpegPath = AudioRipFormats.RequiresFfmpeg(SelectedRipFormat)
+            ? FfmpegLocator.FindFfmpegExecutable(string.IsNullOrWhiteSpace(customFfmpeg) ? null : customFfmpeg)
+            : null;
+        var transcodeSettings = new AudioRipTranscodeSettings(
+            SelectedRipFormat, AudioRipFormats.UsesBitrate(SelectedRipFormat) ? bitrate : 0, ffmpegPath);
+        formatProblem ??= transcoder.CheckPrerequisites(transcodeSettings);
+        if (formatProblem != null)
+        {
+            StatusMessage = formatProblem;
+            var fail = AudioCdRipResult.Failed(formatProblem);
+            LastRipResult = fail;
+            RipReport = $"Rip not started: {formatProblem}";
+            return fail;
+        }
 
         _activeBurnCts?.Dispose();
         _activeBurnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -2240,6 +2302,26 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
             var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, activeToken);
             LastRipResult = ripResult;
+
+            string? conversionNote = null;
+            if (ripResult.Success && SelectedRipFormat != AudioRipFormat.Wav)
+            {
+                StatusMessage = $"Converting tracks to {AudioRipFormats.DisplayName(SelectedRipFormat)}...";
+                try
+                {
+                    var converted = await transcoder.TranscodeAsync(ripResult, transcodeSettings, cancellationToken: activeToken);
+                    ripResult = AudioRipResultWithFiles(ripResult, converted.Files);
+                    if (converted.Warnings.Count > 0)
+                    {
+                        conversionNote = string.Join(" ", converted.Warnings);
+                    }
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or IOException or System.Runtime.InteropServices.COMException)
+                {
+                    conversionNote = $"Converting to {AudioRipFormats.DisplayName(SelectedRipFormat)} failed: {ex.Message} The WAV files were kept.";
+                }
+                LastRipResult = ripResult;
+            }
 
             string metadataSource = metadataOverride != null
                 ? "musicbrainz"
@@ -2334,6 +2416,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 if (!string.IsNullOrEmpty(warning))
                 {
                     sb.AppendLine($"  Warning:          {warning}");
+                }
+                sb.AppendLine($"  Format:           {AudioRipFormats.DisplayName(SelectedRipFormat)}");
+                if (!string.IsNullOrEmpty(conversionNote))
+                {
+                    sb.AppendLine($"  Conversion:       {conversionNote}");
                 }
                 sb.AppendLine("  Files:");
                 foreach (var file in ripResult.RippedFilePaths)

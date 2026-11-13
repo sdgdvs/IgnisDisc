@@ -41,6 +41,12 @@ public static class MediaFoundationGuids
     public static readonly Guid MF_MT_AUDIO_AVG_BYTES_PER_SECOND = new("1aab75c8-cfef-451c-ab95-ac034b8e1731");
     public static readonly Guid MF_MT_AUDIO_BITS_PER_SAMPLE = new("f2deb57f-40fa-4764-aa33-ed4f2d1ff669");
 
+    // AAC encoder attributes (mfapi.h) and the MPEG-4 container selector for the sink writer
+    public static readonly Guid MF_MT_AAC_PAYLOAD_TYPE = new("bfbabe79-7434-4d1c-94f0-72a3b9e17188");
+    public static readonly Guid MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION = new("7632f0e6-9538-4d61-acda-ea29c8c14456");
+    public static readonly Guid MF_TRANSCODE_CONTAINERTYPE = new("150ff23f-4abc-478b-ac4f-e1916fba1ca5");
+    public static readonly Guid MFTranscodeContainerType_MPEG4 = new("dc6cd05d-b9d0-40ef-bd35-fa622c1ab28a");
+
     // Presentation Attributes
     public static readonly Guid MF_PD_DURATION = new("6c990d33-bb8e-477a-8598-0d5d96fcd88a");
 }
@@ -227,8 +233,43 @@ public interface IMFSourceReader
     [PreserveSig] int GetPresentationAttribute([In] uint dwStreamIndex, [In, MarshalAs(UnmanagedType.LPStruct)] Guid guidKey, [Out] out PropVariant pValue);
 }
 
+/// <summary>Writes samples to a file through an encoder chosen from the output media type (vtable order from mfreadwrite.h).</summary>
+[ComImport]
+[Guid("3137f1cd-fe5e-4805-a5d8-fb477448cb3d")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMFSinkWriter
+{
+    [PreserveSig] int AddStream([In, MarshalAs(UnmanagedType.Interface)] IMFMediaType pTargetMediaType, [Out] out uint pdwStreamIndex);
+    [PreserveSig] int SetInputMediaType([In] uint dwStreamIndex, [In, MarshalAs(UnmanagedType.Interface)] IMFMediaType pInputMediaType, [In, MarshalAs(UnmanagedType.Interface)] IMFAttributes? pEncodingParameters);
+    [PreserveSig] int BeginWriting();
+    [PreserveSig] int WriteSample([In] uint dwStreamIndex, [In, MarshalAs(UnmanagedType.Interface)] IMFSample pSample);
+    [PreserveSig] int SendStreamTick([In] uint dwStreamIndex, [In] long llTimestamp);
+    [PreserveSig] int PlaceMarker([In] uint dwStreamIndex, [In] IntPtr pvContext);
+    [PreserveSig] int NotifyEndOfSegment([In] uint dwStreamIndex);
+    [PreserveSig] int Flush([In] uint dwStreamIndex);
+    [PreserveSig] int DoFinalize();
+    [PreserveSig] int GetServiceForStream([In] uint dwStreamIndex, [In, MarshalAs(UnmanagedType.LPStruct)] Guid guidService, [In, MarshalAs(UnmanagedType.LPStruct)] Guid riid, [Out] out IntPtr ppvObject);
+    [PreserveSig] int GetStatistics([In] uint dwStreamIndex, [In] IntPtr pStats);
+}
+
 public static class MediaFoundationNative
 {
+    [DllImport("mfplat.dll", ExactSpelling = true)]
+    public static extern int MFCreateAttributes([MarshalAs(UnmanagedType.Interface)] out IMFAttributes ppMFAttributes, uint cInitialSize);
+
+    [DllImport("mfplat.dll", ExactSpelling = true)]
+    public static extern int MFCreateMemoryBuffer(uint cbMaxLength, [MarshalAs(UnmanagedType.Interface)] out IMFMediaBuffer ppBuffer);
+
+    [DllImport("mfplat.dll", ExactSpelling = true)]
+    public static extern int MFCreateSample([MarshalAs(UnmanagedType.Interface)] out IMFSample ppIMFSample);
+
+    [DllImport("mfreadwrite.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    public static extern int MFCreateSinkWriterFromURL(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwszOutputURL,
+        IntPtr pByteStream,
+        [MarshalAs(UnmanagedType.Interface)] IMFAttributes? pAttributes,
+        [MarshalAs(UnmanagedType.Interface)] out IMFSinkWriter ppSinkWriter);
+
     [DllImport("mfplat.dll", ExactSpelling = true)]
     public static extern int MFStartup(uint version, uint dwFlags = MediaFoundationConstants.MFSTARTUP_FULL);
 

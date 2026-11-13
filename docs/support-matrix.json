@@ -72,12 +72,12 @@
     "notesHtml": "Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; done once on a real drive (one drive, a CD-RW copied to a CD-R). The source audio is read with error checks and re-reads, and a copy stops before writing when sectors still read wrong; real-drive reports welcome"
   },
   {
-    "featureMarkdown": "Rip audio CD to `.wav` / `.flac` + `.cue`",
-    "featureHtml": "Rip an audio CD to WAV or FLAC + <code>.cue</code>",
+    "featureMarkdown": "Rip audio CD to `.wav` / `.flac` / `.mp3` / `.opus` / `.m4a` + `.cue`",
+    "featureHtml": "Rip an audio CD to WAV, FLAC, MP3, Opus or AAC + <code>.cue</code>",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "Reads the real TOC and CD-Text; optional MusicBrainz track names",
-    "notesHtml": "Reads the real TOC and CD-Text; optional MusicBrainz track names"
+    "notesMarkdown": "Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Output formats are tested on the virtual drive only",
+    "notesHtml": "Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Output formats are tested on the virtual drive only"
   },
   {
     "featureMarkdown": "AccurateRip verification + read-offset correction",

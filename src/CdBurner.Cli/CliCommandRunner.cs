@@ -1664,22 +1664,45 @@ public static class CliCommandRunner
         string outputFolder = cmd.GetRequiredOption("output", "--output <folder>");
 
         string formatStr = cmd.GetOption("format") ?? "wav";
-        if (!string.Equals(formatStr, "wav", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(formatStr, "flac", StringComparison.OrdinalIgnoreCase))
+        if (!AudioRipFormats.TryParse(formatStr, out AudioRipFormat ripFormat))
         {
-            throw new CommandLineException($"Invalid audio format '{formatStr}'. Supported formats are wav, flac.");
+            throw new CommandLineException($"Invalid audio format '{formatStr}'. Supported formats are wav, flac, mp3, opus, aac.");
         }
-        bool isFlac = string.Equals(formatStr, "flac", StringComparison.OrdinalIgnoreCase);
 
-        string? ffmpegPath = null;
-        if (isFlac)
+        int bitrateKbps = 0;
+        string? bitrateOpt = cmd.GetOption("bitrate");
+        if (bitrateOpt != null)
         {
-            ffmpegPath = FfmpegLocator.FindFfmpegExecutable();
-            if (ffmpegPath == null)
+            if (!int.TryParse(bitrateOpt.TrimEnd('k', 'K'), NumberStyles.None, CultureInfo.InvariantCulture, out bitrateKbps) || bitrateKbps <= 0)
             {
-                throw new CommandLineException("FLAC output requires ffmpeg. Install ffmpeg or use --format wav.");
+                throw new CommandLineException($"Invalid bitrate '{bitrateOpt}'. Expected kbit/s as a whole number (e.g. --bitrate 192).");
+            }
+            string? bitrateError = AudioRipFormats.ValidateBitrate(ripFormat, bitrateKbps);
+            if (bitrateError != null)
+            {
+                throw new CommandLineException(bitrateError);
             }
         }
+
+        string? ffmpegPath = AudioRipFormats.RequiresFfmpeg(ripFormat) ? FfmpegLocator.FindFfmpegExecutable() : null;
+        var transcodeSettings = new AudioRipTranscodeSettings(ripFormat, bitrateKbps, ffmpegPath, cmd.HasFlag("keep-wav"));
+        var transcoder = new AudioRipTranscoder(new MediaFoundationAacEncoder());
+        string? prerequisiteError = transcoder.CheckPrerequisites(transcodeSettings);
+        if (prerequisiteError != null)
+        {
+            throw new CommandLineException(prerequisiteError);
+        }
+        string formatLabel = ripFormat switch
+        {
+            AudioRipFormat.Wav => "WAV",
+            AudioRipFormat.Flac => "FLAC",
+            AudioRipFormat.Mp3 => "MP3",
+            AudioRipFormat.Opus => "OPUS",
+            _ => "AAC"
+        };
+        int effectiveBitrate = AudioRipFormats.UsesBitrate(ripFormat)
+            ? (bitrateKbps > 0 ? bitrateKbps : AudioRipFormats.DefaultBitrateKbps(ripFormat))
+            : 0;
 
         List<int>? requestedTracks = null;
         string? tracksOpt = cmd.GetOption("tracks");
@@ -1787,7 +1810,8 @@ public static class CliCommandRunner
                     success = false,
                     driveId = recorder.UniqueId,
                     outputFolder = Path.GetFullPath(outputFolder),
-                    format = isFlac ? "FLAC" : "WAV",
+                    format = formatLabel,
+                    bitrateKbps = effectiveBitrate,
                     tracksRipped = 0,
                     sectorsRead = 0,
                     totalTimeSeconds = 0.0,
@@ -1846,95 +1870,27 @@ public static class CliCommandRunner
         }
 
         var finalOutputFiles = new List<string>();
-        if (isFlac)
+        try
         {
-            int trackTotal = result.RippedFilePaths.Count;
-            string albumTitle = !string.IsNullOrWhiteSpace(result.CdText?.AlbumTitle) ? result.CdText.AlbumTitle : "Unknown Album";
-            string albumPerformer = !string.IsNullOrWhiteSpace(result.CdText?.AlbumPerformer) ? result.CdText.AlbumPerformer : "Unknown Artist";
-
-            foreach (var info in result.TrackInfos)
+            var converted = await transcoder.TranscodeAsync(
+                result, transcodeSettings, options.CoverArtBytes, options.CoverArtMimeType).ConfigureAwait(false);
+            finalOutputFiles.AddRange(converted.Files);
+            if (converted.Warnings.Count > 0)
             {
-                string wavPath = info.FilePath;
-                int trackNumber = info.TrackNumber;
-
-                // The ripper already merged CD-Text, the MusicBrainz override and generic fallbacks per track.
-                string trackTitle = !string.IsNullOrWhiteSpace(info.Title) ? info.Title : $"Track {trackNumber:D2}";
-                string trackArtist = !string.IsNullOrWhiteSpace(info.Performer) && info.Performer != "Unknown Artist"
-                    ? info.Performer
-                    : albumPerformer;
-                string? isrc = info.Isrc;
-
-                string? trackGain = info.ReplayGainTrackGain.HasValue ? ReplayGainCalculator.FormatGainDb(info.ReplayGainTrackGain.Value) : null;
-                string? trackPeak = info.ReplayGainTrackPeak.HasValue ? ReplayGainCalculator.FormatPeak(info.ReplayGainTrackPeak.Value) : null;
-                string? albumGain = result.ReplayGainAlbumGain.HasValue ? ReplayGainCalculator.FormatGainDb(result.ReplayGainAlbumGain.Value) : null;
-                string? albumPeak = result.ReplayGainAlbumPeak.HasValue ? ReplayGainCalculator.FormatPeak(result.ReplayGainAlbumPeak.Value) : null;
-
-                var tags = new AudioTrackTags(
-                    Title: trackTitle,
-                    Artist: trackArtist,
-                    Album: albumTitle,
-                    TrackNumber: trackNumber,
-                    TrackTotal: trackTotal,
-                    Isrc: isrc,
-                    Date: null,
-                    ReplayGainTrackGain: trackGain,
-                    ReplayGainTrackPeak: trackPeak,
-                    ReplayGainAlbumGain: albumGain,
-                    ReplayGainAlbumPeak: albumPeak,
-                    CoverArtBytes: options.CoverArtBytes,
-                    CoverArtMimeType: options.CoverArtMimeType);
-
-                string flacPath = Path.ChangeExtension(wavPath, ".flac");
-                await FlacEncoder.EncodeAsync(ffmpegPath!, wavPath, flacPath, tags).ConfigureAwait(false);
-
-                if (options.CoverArtBytes is { Length: > 0 })
-                {
-                    FlacEncoder.EmbedCoverArtAndReplayGain(flacPath, tags);
-                }
-
-                if (!cmd.HasFlag("keep-wav"))
-                {
-                    try
-                    {
-                        File.Delete(wavPath);
-                    }
-                    catch
-                    {
-                    }
-                }
-
-                finalOutputFiles.Add(flacPath);
-            }
-
-            if (result.CueSheetPath != null && File.Exists(result.CueSheetPath))
-            {
-                string cueContent = await File.ReadAllTextAsync(result.CueSheetPath).ConfigureAwait(false);
-                var cueLines = cueContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                var updatedLines = new List<string>(cueLines.Length);
-                var cueFileRegex = new Regex(@"^FILE\s+""(?<name>.+?)\.wav""\s+WAVE$", RegexOptions.IgnoreCase);
-
-                foreach (var line in cueLines)
-                {
-                    var match = cueFileRegex.Match(line.TrimStart());
-                    if (match.Success)
-                    {
-                        int leadingSpaces = line.Length - line.TrimStart().Length;
-                        string prefix = line.Substring(0, leadingSpaces);
-                        updatedLines.Add($"{prefix}FILE \"{match.Groups["name"].Value}.flac\" WAVE");
-                    }
-                    else
-                    {
-                        updatedLines.Add(line);
-                    }
-                }
-
-                string separator = cueContent.Contains("\r\n") ? "\r\n" : "\n";
-                await File.WriteAllTextAsync(result.CueSheetPath, string.Join(separator, updatedLines)).ConfigureAwait(false);
+                warning = (warning == null ? "" : warning + " ") + string.Join(" ", converted.Warnings);
             }
         }
-        else
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.Runtime.InteropServices.COMException)
         {
-            finalOutputFiles.AddRange(result.RippedFilePaths);
+            // The WAV files stay in place, so the rip is not lost when only the conversion fails.
+            string message = $"The disc was read, but converting to {formatLabel} failed: {ex.Message} The WAV files are kept in '{Path.GetFullPath(outputFolder)}'.";
+            if (cmd.IsJson)
+            {
+                WriteJsonResult(stdout, new { success = false, format = formatLabel, files = result.RippedFilePaths.Select(Path.GetFullPath).ToList(), error = message });
+                return 1;
+            }
+            stderr.WriteLine(message);
+            return 1;
         }
 
         // A rip with sectors that may be wrong is finished but not clean: exit code 2 (as `recover` uses for lost files),
@@ -1954,7 +1910,8 @@ public static class CliCommandRunner
                 unreadableSectors = unreadableTotal,
                 driveId = recorder.UniqueId,
                 outputFolder = Path.GetFullPath(outputFolder),
-                format = isFlac ? "FLAC" : "WAV",
+                format = formatLabel,
+                bitrateKbps = effectiveBitrate,
                 tracksRipped = result.TracksRipped,
                 sectorsRead = result.TotalSectorsRead,
                 totalTimeSeconds = result.TotalTime.TotalSeconds,
@@ -2002,7 +1959,7 @@ public static class CliCommandRunner
             : $"Audio rip finished, but {suspectTotal + unreadableTotal:N0} sector(s) may be wrong ({suspectTotal:N0} still suspect after re-reads, {unreadableTotal:N0} unreadable):");
         stdout.WriteLine($"  Drive:            {recorder.UniqueId}");
         stdout.WriteLine($"  Output Folder:    {Path.GetFullPath(outputFolder)}");
-        stdout.WriteLine($"  Format:           {(isFlac ? "FLAC" : "WAV")}");
+        stdout.WriteLine($"  Format:           {formatLabel}{(effectiveBitrate > 0 ? $" ({effectiveBitrate} kbit/s)" : "")}");
         stdout.WriteLine($"  Tracks Ripped:    {result.TracksRipped}");
         stdout.WriteLine($"  Sectors Read:     {result.TotalSectorsRead:N0}");
         stdout.WriteLine($"  Duration:         {result.TotalTime}");
@@ -2960,8 +2917,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
-        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--json]");
-        stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
+        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--json]");
+        stdout.WriteLine("      Rips Red Book Audio CD to WAV, FLAC, MP3, Opus or AAC (FLAC, MP3, Opus need the optional ffmpeg; AAC uses the Windows encoder) with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
         stdout.WriteLine("  copy-disc --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]] [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>] [--json]");
         stdout.WriteLine("      Copies a disc, with one drive or two. With one drive (or for each further copy) the tray opens and the copy waits for a blank disc.");
         stdout.WriteLine("      Audio is read with error checks; a copy stops before writing if sectors still read wrong, unless --allow-suspect. --native copies a mixed-mode CD's data track too.");
@@ -3016,8 +2973,8 @@ public static class CliCommandRunner
         {
             stdout.WriteLine(LegalBanner.VersionNotice);
             stdout.WriteLine();
-            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--cover <image>] [--no-replaygain] [--json]");
-            stdout.WriteLine("      Rips Red Book Audio CD to WAV or FLAC with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
+            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--cover <image>] [--no-replaygain] [--json]");
+            stdout.WriteLine("      Rips Red Book Audio CD to WAV, FLAC, MP3, Opus or AAC (FLAC, MP3, Opus need the optional ffmpeg; AAC uses the Windows encoder) with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
             stdout.WriteLine("      FLAC files get ReplayGain 2.0 tags (unless --no-replaygain) and, with --cover, embedded front cover art.");
             return;
         }
