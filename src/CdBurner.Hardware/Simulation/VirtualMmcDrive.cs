@@ -225,6 +225,13 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>READ TRACK INFORMATION fails with 5/20/00, as on drives that do not offer it.</summary>
     public bool RejectsReadTrackInformation { get; set; }
 
+    /// <summary>
+    /// READ TRACK INFORMATION of track number FFh (the invisible track) fails with 5/24/00 on DVD and Blu-ray media;
+    /// the track has to be asked for by its number. On by default: the GP60NB50 answered so on an open DVD-R
+    /// (2026-11-13) while it accepts FFh on CD-R and CD-RW.
+    /// </summary>
+    public bool RejectsInvisibleTrackShorthandOnDvd { get; set; } = true;
+
     /// <summary>READ TRACK INFORMATION of a blank disc reports this next writable address instead of 0.</summary>
     public int? NextWritableAddressOverride { get; set; }
 
@@ -275,14 +282,19 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     /// <summary>
     /// DVD-R on the GP60NB50: a first session is never shorter than this in the table of contents (a 36,032-sector
-    /// track was reported with its lead-out at 65,264), and the next session starts <see cref="DvdSessionGapSectors"/>
-    /// later (93,952 there; and 131,152 after a 102,464-sector first track written by the Windows writer). Both
-    /// measured 2026-11-11 and 2026-11-10. Used for DVD-RW and DVD+R as well until they are measured.
+    /// track was reported with its lead-out at 65,264), and the second session starts
+    /// <see cref="DvdFirstSessionGapSectors"/> later (93,952 there; and 131,152 after a 102,464-sector first track
+    /// written by the Windows writer; measured 2026-11-11 and 2026-11-10). Every later session starts
+    /// <see cref="DvdLaterSessionGapSectors"/> after the one before ends (four direct sessions at 0, 93,952, 115,520 and
+    /// 137,040, 2026-11-13). Used for DVD-RW and DVD+R as well until they are measured.
     /// </summary>
     public const int DvdFirstSessionMinimumEndLba = 65_264;
 
     /// <inheritdoc cref="DvdFirstSessionMinimumEndLba"/>
-    public const int DvdSessionGapSectors = 28_688;
+    public const int DvdFirstSessionGapSectors = 28_688;
+
+    /// <inheritdoc cref="DvdFirstSessionMinimumEndLba"/>
+    public const int DvdLaterSessionGapSectors = 6_160;
 
     /// <summary>
     /// Loads a disc that already holds data sessions (from a virtual disc): each one track of 2,048-byte sectors.
@@ -358,7 +370,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>Where the session after one ending (lead-out included) at <paramref name="endLba"/> starts.</summary>
     private int NextSessionStart(int sessionNumber, int endLba) =>
         WritesLikeDvd
-            ? endLba + DvdSessionGapSectors
+            ? endLba + (sessionNumber == 1 ? DvdFirstSessionGapSectors : DvdLaterSessionGapSectors)
             : endLba + (sessionNumber == 1 ? CdFirstSessionGapSectors : CdLaterSessionGapSectors);
 
     // ---- DVD writing ----
@@ -1436,6 +1448,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
         int number = BinaryPrimitives.ReadInt32BigEndian(cdb.Slice(2, 4));
         int sessions = _dataSessions.Count;
+        if (number == 0xFF && WritesLikeDvd && RejectsInvisibleTrackShorthandOnDvd)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
         if ((cdb[1] & 0x03) != 0x01 || !(number is 1 or 0xFF || (number >= 1 && number <= sessions + 1)))
         {
             return Sense(0x05, 0x24, 0x00);
@@ -1536,7 +1552,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>
     /// The data track written from <see cref="_taoStartLba"/> is now a closed session: READ (10) reads it and READ TOC
     /// lists it after the earlier ones. Left open (status 1), the next session's address is worked out the way the
-    /// drive lays the disc out (<see cref="CdFirstSessionGapSectors"/>, <see cref="DvdSessionGapSectors"/>).
+    /// drive lays the disc out (<see cref="CdFirstSessionGapSectors"/>, <see cref="DvdFirstSessionGapSectors"/>).
     /// </summary>
     private void RecordDataDisc(int sectors, int runOutSectors, int discStatus)
     {

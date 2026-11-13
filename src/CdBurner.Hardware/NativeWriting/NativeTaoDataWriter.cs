@@ -548,7 +548,7 @@ public sealed partial class NativeTaoDataWriter
             throw Stop("The disc's last session was left unfinished (an incomplete track), so no session can be added to it.");
         }
 
-        var invisible = ReadTrackInformation(0xFF) ?? throw Stop("The drive did not report where the next session starts.");
+        var invisible = ReadInvisibleTrackInformation() ?? throw Stop("The drive did not report where the next session starts.");
         if (!invisible.NextWritableAddressValid || !invisible.Blank)
         {
             throw Stop("The drive reports no writable address for a new session on this disc.");
@@ -716,8 +716,22 @@ public sealed partial class NativeTaoDataWriter
             return DiscReadsBlank();
         }
         return ReadDiscInformation() is { Status: 1, LastSessionState: 0 }
-            && ReadTrackInformation(0xFF) is { NextWritableAddressValid: true, Blank: true } t
+            && ReadInvisibleTrackInformation() is { NextWritableAddressValid: true, Blank: true } t
             && t.NextWritableAddress == request.SessionStartLba;
+    }
+
+    /// <summary>
+    /// The empty track a new session goes into on an open disc. Asked for by number first: on an open disc, READ DISC
+    /// INFORMATION's last track in the last session (bytes 6 and 11) is that track. The shorthand FFh is only the
+    /// fallback, because the GP60NB50 refuses it on a DVD-R (5/24/00, 2026-11-13) although it accepts it on CD.
+    /// </summary>
+    private TrackInformation? ReadInvisibleTrackInformation()
+    {
+        if (ReadLastTrackNumber() is int number && ReadTrackInformation(number) is { Blank: true } byNumber)
+        {
+            return byNumber;
+        }
+        return ReadTrackInformation(0xFF);
     }
 
     /// <summary>

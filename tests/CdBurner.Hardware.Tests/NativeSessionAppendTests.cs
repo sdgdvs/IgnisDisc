@@ -26,9 +26,12 @@ public sealed class NativeSessionAppendTests : IDisposable
     private const int CdRunOutSectors = 2; // Track-at-Once: two run-out blocks end each track
 
     // GP60NB50, DVD-R: a 36,032-sector first session left open reported its lead-out at 65,264 and the next session at
-    // 93,952; a 102,464-sector one was followed by a session at 131,152 (2026-11-10/11).
+    // 93,952; a 102,464-sector one was followed by a session at 131,152 (2026-11-10/11). Later sessions are only 6,160
+    // sectors apart: four direct sessions went to 0, 93,952, 115,520 (after a track ending at 109,360) and 137,040
+    // (after 130,880), 2026-11-13.
     private const int DvdFirstSessionMinimumEnd = 65_264;
-    private const int DvdGap = 28_688;
+    private const int DvdGapAfterFirstSession = 28_688;
+    private const int DvdGapAfterLaterSessions = 6_160;
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "cdburner-test-" + Guid.NewGuid().ToString("N"));
 
@@ -179,7 +182,7 @@ public sealed class NativeSessionAppendTests : IDisposable
             int end = previous.StartLba + previous.SectorCount;
             int expected = type == DiscMediaType.CdR
                 ? end + CdRunOutSectors + (n == 2 ? CdGapAfterFirstSession : CdGapAfterLaterSessions)
-                : (n == 2 ? Math.Max(end, DvdFirstSessionMinimumEnd) : end) + DvdGap;
+                : n == 2 ? Math.Max(end, DvdFirstSessionMinimumEnd) + DvdGapAfterFirstSession : end + DvdGapAfterLaterSessions;
             Assert.Equal(expected, starts[n - 1]);
             if (type == DiscMediaType.DvdMinusR)
             {

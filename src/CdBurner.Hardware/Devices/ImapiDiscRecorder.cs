@@ -1000,11 +1000,12 @@ public class ImapiDiscRecorder : IDiscRecorderBackend, IDiscTocProvider, IMediaM
     }
 
     /// <inheritdoc/>
+    /// <remarks>Checked against the drive's own track list, since a DVD-R's READ TOC can miss a just-added session.</remarks>
     public IReadOnlyList<DiscTocTrack> ReadTableOfContents()
     {
         try
         {
-            return _comProvider.ReadTableOfContents(VolumePath);
+            return _comProvider.ReadTableOfContentsCheckedAgainstTracks(VolumePath);
         }
         catch
         {

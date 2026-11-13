@@ -1250,6 +1250,14 @@ public interface IImapiComProvider
     int? ReadCapacity(string volumePath);
     int? ReadSessionCount(string volumePath);
     IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContents(string volumePath);
+
+    /// <summary>
+    /// The table of contents checked against the drive's track list, for callers that act on it (import of an
+    /// earlier session, ripping, copying); sends one more drive command, so not for QueryMediaStatus.
+    /// </summary>
+    IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContentsCheckedAgainstTracks(string volumePath) =>
+        ReadTableOfContents(volumePath);
+
     byte[]? ReadCdTextPacks(string volumePath);
     int? TryGetMountedVolumeSectors(string? volumePath);
 
@@ -1275,6 +1283,7 @@ public sealed class DefaultImapiComProvider : IImapiComProvider
     public int? ReadCapacity(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadCapacity(volumePath);
     public int? ReadSessionCount(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadSessionCount(volumePath);
     public IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContents(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadTableOfContents(volumePath);
+    public IReadOnlyList<CdBurner.Core.Abstractions.DiscTocTrack> ReadTableOfContentsCheckedAgainstTracks(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadTableOfContentsCheckedAgainstTracks(volumePath);
     public byte[]? ReadCdTextPacks(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadCdTextPacks(volumePath);
     public bool TrySpinDown(string? volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.TrySpinDown(volumePath);
     public int? ReadFileSystemEndSector(string volumePath) => CdBurner.Hardware.Scsi.PhysicalSectorReader.ReadFileSystemEndSector(volumePath);

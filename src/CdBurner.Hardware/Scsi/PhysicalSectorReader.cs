@@ -454,6 +454,87 @@ public static partial class PhysicalSectorReader
         return result;
     }
 
+    /// <summary>
+    /// <see cref="ReadTableOfContents(string)"/>, checked against the drive's own track list. Straight after a session
+    /// is added to a DVD-R, the GP60NB50 can leave tracks out of READ TOC while the ones it lists are in order (measured
+    /// 2026-11-13: sessions at 0, 93,952, 115,520 and 137,040; READ TOC gave track 1 at 0 and "track 2" at 115,520,
+    /// and after the fourth session still the same two), until the disc is reloaded. READ DISC INFORMATION and READ
+    /// TRACK INFORMATION are right at once. Sends READ DISC INFORMATION on every call, so it is not for
+    /// QueryMediaStatus; the import of an earlier session, ripping and copying use it.
+    /// </summary>
+    public static IReadOnlyList<DiscTocTrack> ReadTableOfContentsCheckedAgainstTracks(string volumePath)
+    {
+        var toc = ReadTableOfContents(volumePath);
+        return ReadRecordedTrackCount(volumePath) is int recorded
+            ? RebuildMissingTracks(toc, recorded, number => ReadTrackInformation(volumePath, number))
+            : toc;
+    }
+
+    /// <summary>
+    /// When the drive reports more recorded tracks (<paramref name="recordedTracks"/>) than the table of contents
+    /// lists, the table is stale: every track is then placed by its track information, and a track keeps the
+    /// table's audio flag where the table has it at the same start (otherwise it is taken as data, as every track
+    /// of an appended session is). The table is returned unchanged when the counts agree, when the drive will not
+    /// describe a track, or when the tracks it describes are not in order.
+    /// </summary>
+    public static IReadOnlyList<DiscTocTrack> RebuildMissingTracks(
+        IReadOnlyList<DiscTocTrack> toc, int recordedTracks, Func<int, (int Start, int Size)?> readTrackInformation)
+    {
+        ArgumentNullException.ThrowIfNull(toc);
+        ArgumentNullException.ThrowIfNull(readTrackInformation);
+        if (recordedTracks <= toc.Count || recordedTracks > 99)
+        {
+            return toc;
+        }
+
+        var rebuilt = new List<DiscTocTrack>(recordedTracks);
+        for (int number = 1; number <= recordedTracks; number++)
+        {
+            if (readTrackInformation(number) is not { Start: >= 0, Size: > 0 } info)
+            {
+                return toc;
+            }
+            if (rebuilt.Count > 0 && info.Start < rebuilt[^1].StartLba + rebuilt[^1].SectorCount)
+            {
+                return toc;
+            }
+            bool isAudio = toc.FirstOrDefault(t => t.StartLba == info.Start)?.IsAudio ?? false;
+            rebuilt.Add(new DiscTocTrack(number, info.Start, info.Size, isAudio));
+        }
+        return rebuilt;
+    }
+
+    /// <summary>
+    /// Recorded tracks by READ DISC INFORMATION (0x51): the last track of the last session (bytes 6 and 11), less the
+    /// empty track waiting for the next session on an open disc whose last session is empty. 0 on a blank disc.
+    /// </summary>
+    private static int? ReadRecordedTrackCount(string volumePath)
+    {
+        using var handle = OpenDevice(volumePath, FileAccess.ReadWrite, out _);
+        if (handle == null)
+        {
+            return null;
+        }
+
+        using var transport = new Win32ScsiTransport(handle, ownsHandle: false);
+        byte[] data = new byte[34];
+        var r = transport.ExecuteCommand(MmcCommandBuilder.BuildReadDiscInformationCdb(34), data,
+            ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(10));
+        if (!r.IsSuccess || r.DataTransferLength < 12)
+        {
+            return null;
+        }
+
+        int status = data[2] & 0x03;
+        int lastSessionState = (data[2] >> 2) & 0x03;
+        int lastTrack = data[6] | (data[11] << 8);
+        if (status == 0)
+        {
+            return 0;
+        }
+        return status == 1 && lastSessionState == 0 ? lastTrack - 1 : lastTrack;
+    }
+
     /// <summary>READ TRACK INFORMATION (0x52) by track number: where the track starts and how long it is.</summary>
     private static (int Start, int Size)? ReadTrackInformation(string volumePath, int trackNumber)
     {

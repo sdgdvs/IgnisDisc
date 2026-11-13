@@ -85,6 +85,74 @@ public class StaleTocRepairTests
         Assert.Equal(119_752, PhysicalSectorReader.CorrectSessionEnds(TwoSessionDvdR, _ => null)[0].SectorCount);       // drive will not say
     }
 
+    // ---- Tracks left out of the table (DVD-R, direct writer, 2026-11-13) ----
+
+    /// <summary>The drive's track list after the third and fourth sessions, by READ TRACK INFORMATION.</summary>
+    private static readonly Dictionary<int, (int Start, int Size)> FourSessionDvdR = new()
+    {
+        [1] = (0, 65_264), [2] = (93_952, 15_408), [3] = (115_520, 15_360), [4] = (137_040, 2_656)
+    };
+
+    private static (int Start, int Size)? AskFourSessionDvdR(int number) =>
+        FourSessionDvdR.TryGetValue(number, out var t) ? t : null;
+
+    [Fact]
+    public void TableMissingASession_IsRebuiltFromTheDrivesTrackList()
+    {
+        // READ TOC right after the third session, read as ReadTableOfContents gives it: track 1, then "track 2" at the
+        // third session's address; the second session (93,952) is missing. READ DISC INFORMATION: 3 recorded tracks.
+        DiscTocTrack[] stale = [new(1, 0, 65_264, false), new(2, 115_520, 15_360, false)];
+
+        var result = PhysicalSectorReader.RebuildMissingTracks(stale, 3, AskFourSessionDvdR);
+
+        Assert.Equal(new DiscTocTrack[] { new(1, 0, 65_264, false), new(2, 93_952, 15_408, false), new(3, 115_520, 15_360, false) }, result);
+    }
+
+    [Fact]
+    public void TableMissingTheNewestSession_GivesItsStartAsTheLastTrack()
+    {
+        // After the fourth session READ TOC still listed the same two tracks: taken at its word, the import of the last
+        // session would read the third session (115,520) and the next session would leave out the fourth one's files.
+        DiscTocTrack[] stale = [new(1, 0, 65_264, false), new(2, 115_520, 24_176, false)];
+
+        var result = PhysicalSectorReader.RebuildMissingTracks(stale, 4, AskFourSessionDvdR);
+
+        Assert.Equal(4, result.Count);
+        Assert.Equal(137_040, result[^1].StartLba);
+        Assert.Equal(2_656, result[^1].SectorCount);
+    }
+
+    [Fact]
+    public void TableWithEveryTrack_IsLeftAlone_AndTheTracksAreNotAsked()
+    {
+        DiscTocTrack[] toc = [new(1, 0, 15_415, false), new(2, 26_817, 15_396, false), new(3, 49_115, 15_348, false)];
+        int asked = 0;
+
+        var result = PhysicalSectorReader.RebuildMissingTracks(toc, 3, _ => { asked++; return (0, 1); });
+
+        Assert.Same(toc, result);
+        Assert.Equal(0, asked);
+    }
+
+    [Fact]
+    public void TrackListTheDriveWillNotGiveOrThatOverlaps_LeavesTheTableAsItWas()
+    {
+        DiscTocTrack[] stale = [new(1, 0, 65_264, false), new(2, 115_520, 15_360, false)];
+
+        Assert.Same(stale, PhysicalSectorReader.RebuildMissingTracks(stale, 3, n => n == 2 ? null : AskFourSessionDvdR(n)));
+        Assert.Same(stale, PhysicalSectorReader.RebuildMissingTracks(stale, 3, n => n == 2 ? (60_000, 15_408) : AskFourSessionDvdR(n)));
+    }
+
+    [Fact]
+    public void AudioFlag_IsKeptForTracksTheTableHasAtTheSameStart()
+    {
+        DiscTocTrack[] stale = [new(1, 0, 20_000, true), new(2, 40_000, 5_000, false)];
+
+        var result = PhysicalSectorReader.RebuildMissingTracks(stale, 3, n => n switch { 1 => (0, 20_000), 2 => (31_400, 2_000), 3 => (40_000, 5_000), _ => null });
+
+        Assert.Equal(new[] { true, false, false }, result.Select(t => t.IsAudio));
+    }
+
     [Fact]
     public void TracksSizedFromTheirNeighbours_AreLeftAlone_AndTheDriveIsNotAsked()
     {
