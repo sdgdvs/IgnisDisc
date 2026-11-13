@@ -385,8 +385,43 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>DVD-RW partly formatted: sectors that can be written before it is expanded.</summary>
     public int PartlyFormattedSectors { get; set; }
 
-    /// <summary>DVD-RAM: false makes it an unformatted disc that refuses writes.</summary>
+    /// <summary>
+    /// DVD-RAM: false makes it a never-formatted disc. It refuses writes (5/30/10) until FORMAT UNIT type 00h has run,
+    /// and, when <see cref="FormatCapacitiesResponse"/> is null, READ FORMAT CAPACITIES describes it from this state
+    /// (<see cref="BuildDvdRamFormatCapacities"/>).
+    /// </summary>
     public bool RamFormatted { get; set; } = true;
+
+    /// <summary>
+    /// DVD-RAM: how many TEST UNIT READY polls answer 2/04/04 (format in progress, with the progress indication in
+    /// sense bytes 15–17) after a FORMAT UNIT with Immed; WRITE and READ (10) get the same answer meanwhile. The disc
+    /// counts as formatted once the last of them has been answered.
+    /// </summary>
+    public int RamFormatBusyPolls { get; set; } = 4;
+
+    /// <summary>The progress fractions (0 to 65,535 of 65,536) sent in the 2/04/04 answers so far.</summary>
+    public List<int> FormatProgressSent { get; } = new();
+
+    private int _ramFormatPollsLeft;
+
+    /// <summary>
+    /// A READ FORMAT CAPACITIES reply for a DVD-RAM (MMC-5 6.24.3): the current/maximum descriptor (type 01b
+    /// unformatted, with the most the disc can be formatted to, or 10b formatted) with block length 2,048, then one
+    /// formattable descriptor of format type 00h (full format) whose type-dependent parameter is the block length
+    /// 2,048.
+    /// </summary>
+    public static byte[] BuildDvdRamFormatCapacities(int blocks, bool formatted)
+    {
+        byte[] r = new byte[4 + 16];
+        r[3] = 16;
+        BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(4), blocks);
+        r[8] = (byte)(formatted ? 2 : 1);
+        r[10] = 0x08; // block length 2,048
+        BinaryPrimitives.WriteInt32BigEndian(r.AsSpan(12), blocks);
+        r[16] = NativeWriteCommands.FormatTypeDefault << 2;
+        r[18] = 0x08; // type-dependent parameter: block length 2,048
+        return r;
+    }
 
     /// <summary>A READ FORMAT CAPACITIES reply: the current/maximum descriptor plus the formattable descriptors given.</summary>
     public static byte[] BuildFormatCapacities(int blocks, bool formatted, params (byte Type, int Blocks)[] formattable)
@@ -555,7 +590,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             0x28 => Read10(cdb, dataBuffer),
             0x43 => ReadToc(cdb, dataBuffer),
             0x42 => ReadSubChannel(cdb, dataBuffer),
-            MmcMediaReport.OpCodeReadFormatCapacities => CannedResponse(FormatCapacitiesResponse, dataBuffer),
+            MmcMediaReport.OpCodeReadFormatCapacities => CannedResponse(
+                FormatCapacitiesResponse ?? (Profile == NativeTaoDataWriter.ProfileDvdRam ? BuildDvdRamFormatCapacities(Capacity, RamFormatted) : null), dataBuffer),
             MmcMediaReport.OpCodeGetPerformance when cdb.Length >= 11 && cdb[10] == MmcMediaReport.PerformanceTypeWriteSpeed
                 => CannedResponse(WriteSpeedPerformanceResponse, dataBuffer),
             0xBB => SetCdSpeed(cdb),
@@ -593,6 +629,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private ScsiExecutionResult TestUnitReady()
     {
+        if (_ramFormatPollsLeft > 0)
+        {
+            return RamFormatInProgress(countPoll: true);
+        }
         if (NotReadyResponses > 0)
         {
             NotReadyResponses--;
@@ -1042,6 +1082,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
         if (fua && RejectsFua)
         {
             return Sense(0x05, 0x24, 0x00);
+        }
+        if (_ramFormatPollsLeft > 0)
+        {
+            return RamFormatInProgress(countPoll: false);
         }
         byte[]? image = DataDiscImage;
         if (image == null && IsDvd && DiscStatus == 2)
@@ -1605,6 +1649,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     private ScsiExecutionResult WriteOverwrite(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> data)
     {
+        if (_ramFormatPollsLeft > 0)
+        {
+            return RamFormatInProgress(countPoll: false);
+        }
         if ((IsDvdPlusRw && BackgroundFormatStatus == 0) || (Profile == NativeTaoDataWriter.ProfileDvdRam && !RamFormatted) ||
             (Profile == NativeTaoDataWriter.ProfileBdRe && !BdReFormatted))
         {
@@ -1698,6 +1746,10 @@ public sealed class VirtualMmcDrive : IScsiTransport
             }
             return Good(0);
         }
+        if (Profile == NativeTaoDataWriter.ProfileDvdRam)
+        {
+            return FormatDvdRam(cdb, list);
+        }
         if (Profile == NativeTaoDataWriter.ProfileDvdMinusRwRestricted)
         {
             // Format 13h with 0 blocks and packet size 16 expands a partly formatted DVD-RW to the intermediate state.
@@ -1732,6 +1784,66 @@ public sealed class VirtualMmcDrive : IScsiTransport
             NotReadyResponses += 1;
         }
         return Good(0);
+    }
+
+    /// <summary>
+    /// FORMAT UNIT on a DVD-RAM (MMC-5 6.5): FmtData with format code 001b, a list header with descriptor length 8,
+    /// then format type 00h (full format) whose type-dependent parameter is the block length, which must be 2,048,
+    /// and a number of blocks from 1 up to what READ FORMAT CAPACITIES offers. Anything else is refused with 5/26/00
+    /// before the disc changes. With Immed the drive answers 2/04/04 for <see cref="RamFormatBusyPolls"/> polls.
+    /// </summary>
+    private ScsiExecutionResult FormatDvdRam(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> list)
+    {
+        if (cdb[1] != 0x11 || list.Length < 12 || list[3] != 8)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        uint blocks = BinaryPrimitives.ReadUInt32BigEndian(list.Slice(4, 4));
+        int blockLength = (list[9] << 16) | (list[10] << 8) | list[11];
+        if ((list[8] >> 2) != NativeWriteCommands.FormatTypeDefault || (list[8] & 0x03) != 0 || blockLength != 2048 ||
+            blocks == 0 || blocks > (uint)Capacity)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        FormatUnitCount++;
+        LastFormatParameters = list[..12].ToArray();
+        DataDiscImage = null; // a full format leaves nothing readable of what was there
+        Recorded = false;
+        FormatProgressSent.Clear();
+        if ((list[1] & 0x02) != 0 && RamFormatBusyPolls > 0)
+        {
+            _ramFormatPollsLeft = RamFormatBusyPolls;
+            RamFormatted = false;
+        }
+        else
+        {
+            RamFormatted = true;
+        }
+        return Good(0);
+    }
+
+    /// <summary>
+    /// 2/04/04 (not ready, format in progress) with the sense-key specific progress indication (SPC-4 4.5.2.4.4):
+    /// SKSV in byte 15 bit 7, the fraction done of 65,536 in bytes 16–17. A counted poll moves the format on.
+    /// </summary>
+    private ScsiExecutionResult RamFormatInProgress(bool countPoll)
+    {
+        int done = (RamFormatBusyPolls - _ramFormatPollsLeft) * 65536 / RamFormatBusyPolls;
+        if (countPoll && --_ramFormatPollsLeft == 0)
+        {
+            RamFormatted = true;
+        }
+        FormatProgressSent.Add(done);
+        byte[] sense = new byte[18];
+        sense[0] = 0x70;
+        sense[2] = 0x02;
+        sense[7] = 10;
+        sense[12] = 0x04;
+        sense[13] = 0x04;
+        sense[15] = 0x80;
+        sense[16] = (byte)(done >> 8);
+        sense[17] = (byte)done;
+        return ScsiExecutionResult.CheckCondition(0x02, 0, sense);
     }
 
     /// <summary>READ DISC STRUCTURE: only format 20h (DVD+R DL layer boundary) is simulated, the growisofs layout.</summary>

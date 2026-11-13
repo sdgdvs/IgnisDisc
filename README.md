@@ -172,8 +172,8 @@ far). Any other disc (dual-layer DVD-R, multi-layer Blu-ray, a Blu-ray or dual-l
 Windows writer as before, and the result says so. A DVD+RW is
 written from sector 0 (formatted first if it is new); one that holds data is only written over with `--overwrite`.
 A used DVD+RW (written over) and a new one (formatted first) have been burned this way on real hardware.
-A DVD-RW in overwrite mode and a DVD-RAM are handled the same way (a partly formatted DVD-RW is expanded first; an
-unformatted DVD-RAM is refused), so far only in the simulator. A single-layer BD-R is written like a DVD+R and
+A DVD-RW in overwrite mode and a DVD-RAM are handled the same way (a partly formatted DVD-RW is expanded first; a
+never-formatted DVD-RAM is formatted first), so far only in the simulator. A single-layer BD-R is written like a DVD+R and
 finalized, and a BD-RE is formatted first when new and then written like a DVD+RW; Blu-ray has also only run in the
 simulator, and multi-layer Blu-ray discs go to the Windows writer. On a dual-layer DVD+R the layer break is set before
 writing: an image that fits on the first layer stays there, a larger one is split in half (the first layer never

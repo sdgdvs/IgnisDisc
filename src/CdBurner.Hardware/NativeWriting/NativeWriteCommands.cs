@@ -143,6 +143,29 @@ public static class NativeWriteCommands
         return list;
     }
 
+    /// <summary>Block length a DVD-RAM is formatted to, sent as the type-dependent parameter of format type 00h.</summary>
+    public const int DvdRamBlockLength = 2048;
+
+    /// <summary>
+    /// FORMAT UNIT parameter list for a never-formatted DVD-RAM, format type 00h (full format), MMC-5 6.5.3: header
+    /// byte 1 = FOV | DCRT | Immed (0xA2; DCRT skips the surface certification, which can take an hour, and leaves
+    /// defect management to the spare areas), bytes 2–3 = descriptor length 8; descriptor bytes 4–7 = the number of
+    /// blocks READ FORMAT CAPACITIES offered for type 00h, byte 8 = type 00h &lt;&lt; 2 with subtype 0, bytes 9–11 =
+    /// the type-dependent parameter, for type 00h the block length 2,048 (0x000800).
+    /// </summary>
+    public static byte[] BuildDvdRamFormatParameters(uint blocks)
+    {
+        byte[] list = new byte[12];
+        list[1] = 0xA2;
+        list[3] = 8;
+        BinaryPrimitives.WriteUInt32BigEndian(list.AsSpan(4, 4), blocks);
+        list[8] = FormatTypeDefault << 2;
+        list[9] = (byte)(DvdRamBlockLength >> 16);
+        list[10] = (byte)(DvdRamBlockLength >> 8);
+        list[11] = DvdRamBlockLength & 0xFF;
+        return list;
+    }
+
     /// <summary>
     /// RESERVE TRACK (0x53) with ARSV = 0 and RMZ = 0: reserves <paramref name="sectors"/> 2,048-byte blocks for the
     /// next track. DVD-R Disc-At-Once needs it; the size goes in CDB bytes 5–8.

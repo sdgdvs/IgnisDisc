@@ -201,8 +201,14 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   blocks = partly formatted, expanded first with `FORMAT UNIT` type 13h (list byte 1 0x82, byte 3 = 8, blocks 0,
   byte 8 = 13h << 2, byte 11 = 16, the packet size libburn sets for types 10h–15h), which leaves the intermediate
   state; no current capacity = intermediate already. `CLOSE SESSION` (010b) after writing ends the intermediate
-  state. DVD-RAM: must be formatted (an unformatted one is refused rather than formatted with defect management
-  here); 2 KiB alignment; no close command. Both: no test write, same leave-to-replace rule. The size is the format
+  state. DVD-RAM: 2 KiB alignment; no close command. A never-formatted one (2026-11-13, simulator only; current
+  descriptor type 01b in `READ FORMAT CAPACITIES`) gets `FORMAT UNIT` type 00h, the full format of MMC-5 6.5: list
+  byte 1 0xA2 (FOV, DCRT so the drive skips the hour-long certification, Immed), byte 3 = 8, the blocks offered for
+  type 00h, byte 8 = 00h, bytes 9–11 = the block length 0x000800 (refused if the drive offers another). The writer
+  then polls `TEST UNIT READY` through 2/04/04 for up to 90 minutes, showing the progress indication (sense byte 15
+  bit 7, bytes 16–17 of 65,536) as "Formatting n %". To check on a real disc: whether the drive offers 00h with
+  2,048 in its type parameter, whether it accepts DCRT, how long it stays "format in progress", and whether its
+  2/04/04 answers carry the progress bytes. Both: no test write, same leave-to-replace rule. The size is the format
   capacity; the track size is used only when the drive reports no format information.
 - *Blu-ray* (built 2026-11-11, simulator only; `NativeTaoDataWriter.BluRay.cs`). Both need the BD Write feature
   (0x0041) current: a drive that only reads Blu-ray still reports the disc's profile. BD-R in sequential recording

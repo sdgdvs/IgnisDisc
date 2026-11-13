@@ -368,10 +368,132 @@ public sealed class NativeOverwritableDvdWriterTests : IDisposable
     {
         Profile = NativeTaoDataWriter.ProfileDvdRam,
         CapacitySectors = Capacity,
-        RamFormatted = formatted,
-        FormatCapacitiesResponse = VirtualMmcDrive.BuildFormatCapacities(Capacity, formatted),
+        RamFormatted = formatted, // READ FORMAT CAPACITIES follows this state
         WriteSpeedPerformanceResponse = Speeds(Speed4x)
     };
+
+    /// <summary>ECMA-330 (120 mm DVD-RAM, 4.7 GB per side): 2,295,104 user sectors of 2,048 bytes.</summary>
+    private const int DvdRam47Sectors = 2_295_104;
+
+    [Fact]
+    public void DvdRamFormatParameters_MatchTheMmcLayoutForFormatType00h()
+    {
+        // MMC-5 6.5.3 (FORMAT UNIT parameter list): header byte 1 = FOV (bit 7) | DCRT (bit 5) | Immed (bit 1), bytes 2-3
+        // format descriptor length 8; descriptor bytes 0-3 number of blocks (0x00230540 = 2,295,104), byte 4 format
+        // type 00h in bits 7-2 with subtype 0, bytes 5-7 type-dependent parameter = block length 2,048 (0x000800).
+        byte[] expected = { 0x00, 0xA2, 0x00, 0x08, 0x00, 0x23, 0x05, 0x40, 0x00, 0x00, 0x08, 0x00 };
+        Assert.Equal(expected, NativeWriteCommands.BuildDvdRamFormatParameters(DvdRam47Sectors));
+    }
+
+    [Fact]
+    public void UnformattedDvdRam_ReportsItselfAsUnformatted_WithFormat00hOffered()
+    {
+        var drive = DvdRam(formatted: false);
+        drive.CapacitySectors = DvdRam47Sectors;
+
+        // READ FORMAT CAPACITIES (0x23), allocation length 0xFC in bytes 7-8.
+        byte[] reply = new byte[252];
+        var r = drive.ExecuteCommand(new byte[] { 0x23, 0, 0, 0, 0, 0, 0, 0x00, 0xFC, 0 }, reply,
+            CdBurner.Hardware.Scsi.ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(5));
+
+        Assert.True(r.IsSuccess);
+        // MMC-5 6.24.3: list length 16; current/maximum descriptor with descriptor type 01b (unformatted media, the
+        // most it can be formatted to) and block length 2,048; one formattable descriptor of type 00h whose
+        // type-dependent parameter is the block length.
+        byte[] expected =
+        {
+            0x00, 0x00, 0x00, 0x10,
+            0x00, 0x23, 0x05, 0x40, 0x01, 0x00, 0x08, 0x00,
+            0x00, 0x23, 0x05, 0x40, 0x00, 0x00, 0x08, 0x00
+        };
+        Assert.Equal(expected, reply[..20]);
+    }
+
+    [Fact]
+    public void UnformattedDvdRam_IsFormatted_ThenWrittenAndReadBack()
+    {
+        var drive = DvdRam(formatted: false);
+        drive.CapacitySectors = DvdRam47Sectors;
+        drive.RamFormatBusyPolls = 4;
+        byte[] image = Image(777);
+        var progress = new List<BurnProgressSnapshot>();
+
+        var writer = new NativeTaoDataWriter(drive, sleep: _ => { });
+        var result = writer.Write(new NativeDataWriteRequest(new MemoryStream(image), 0, image.Length, false, true),
+            new SyncProgress(progress.Add), CancellationToken.None);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("formatted", result.Message);
+        Assert.Equal(1, drive.FormatUnitCount);
+        Assert.Equal(NativeWriteCommands.BuildDvdRamFormatParameters(DvdRam47Sectors), drive.LastFormatParameters);
+        Assert.True(drive.RamFormatted);
+        // Every 2/04/04 answer was waited out before the first WRITE.
+        Assert.Equal(4, drive.FormatProgressSent.Count);
+        Assert.Contains(progress, p => p.CurrentActionDescription == "Formatting 75 %");
+        Assert.DoesNotContain(NativeWriteCommands.OpCodeCloseTrackSession, drive.CommandsReceived);
+
+        // Read back through READ (10), as the verify after a burn does.
+        byte[] back = new byte[image.Length];
+        for (int lba = 0; lba < 777; lba += 16)
+        {
+            int count = Math.Min(16, 777 - lba);
+            var r = drive.ExecuteCommand(CdBurner.Hardware.Scsi.MmcCommandBuilder.BuildRead10Cdb(lba, count, forceUnitAccess: true),
+                back.AsSpan(lba * 2048, count * 2048), CdBurner.Hardware.Scsi.ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, TimeSpan.FromSeconds(5));
+            Assert.True(r.IsSuccess, r.SenseInfo?.ToString());
+        }
+        Assert.Equal(image, back);
+    }
+
+    [Fact]
+    public void DvdRamThatRefusesTheFormat_IsLeftUnwritten()
+    {
+        var drive = DvdRam(formatted: false);
+        drive.RejectsFormatUnit = true;
+
+        var result = Write(drive, Image(320));
+
+        Assert.False(result.Success);
+        Assert.Contains("refused to format", result.Message);
+        Assert.Equal(0, drive.WriteCommandCount);
+        Assert.False(drive.RamFormatted);
+    }
+
+    [Fact]
+    public void SimulatedDvdRam_RefusesAFormatWithTheWrongBlockLength()
+    {
+        var drive = DvdRam(formatted: false);
+        byte[] list = NativeWriteCommands.BuildDvdRamFormatParameters(1000);
+        list[10] = 0x02; // 512-byte blocks
+
+        var r = drive.ExecuteCommand(NativeWriteCommands.BuildFormatUnit(), list,
+            CdBurner.Hardware.Scsi.ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, TimeSpan.FromSeconds(5));
+
+        Assert.False(r.IsSuccess);
+        Assert.Equal((byte)0x26, r.SenseInfo?.Asc);
+        Assert.False(drive.RamFormatted);
+    }
+
+    [Fact]
+    public void FormatProgress_IsReadFromTheSenseKeySpecificBytes()
+    {
+        // SPC-4 4.5.2.4.4: fixed sense 70h, key 2, SKSV (byte 15 bit 7), progress in bytes 16-17 of 65,536.
+        byte[] sense = new byte[18];
+        sense[0] = 0x70;
+        sense[2] = 0x02;
+        sense[7] = 10;
+        sense[12] = 0x04;
+        sense[13] = 0x04;
+        sense[15] = 0x80;
+        sense[16] = 0x40; // 0x4000 = a quarter
+        Assert.Equal(0.25, NativeTaoDataWriter.FormatProgress(sense));
+        sense[15] = 0;
+        Assert.Null(NativeTaoDataWriter.FormatProgress(sense));
+    }
+
+    private sealed class SyncProgress(Action<BurnProgressSnapshot> report) : IProgress<BurnProgressSnapshot>
+    {
+        public void Report(BurnProgressSnapshot value) => report(value);
+    }
 
     [Fact]
     public void DvdRam_IsWrittenFrom0_WithNothingToClose()
@@ -390,15 +512,43 @@ public sealed class NativeOverwritableDvdWriterTests : IDisposable
     }
 
     [Fact]
-    public void UnformattedDvdRam_IsRefusedBeforeWriting()
+    public void UnformattedDvdRam_WithNoFormatOffered_IsRefusedBeforeWriting()
     {
         var drive = DvdRam(formatted: false);
+        drive.FormatCapacitiesResponse = VirtualMmcDrive.BuildFormatCapacities(Capacity, formatted: false);
 
         var result = Write(drive, Image(320));
 
         Assert.True(result.StoppedBeforeWriting);
-        Assert.Contains("not formatted", result.Message);
+        Assert.Contains("offers no format", result.Message);
+        Assert.Equal(0, drive.FormatUnitCount);
         Assert.Equal(0, drive.WriteCommandCount);
+    }
+
+    [Fact]
+    public async Task NeverFormattedDvdRam_IsFormattedWrittenAndVerified_ThroughTheBurnService()
+    {
+        VirtualMmcDrive? used = null;
+        var engine = new NativeDataBurnEngine(logDirectory: _dir)
+        {
+            ConfigureVirtualDrive = d =>
+            {
+                d.WriteSpeedPerformanceResponse = Speeds(Speed4x);
+                d.RamFormatted = false;
+                used = d;
+            }
+        };
+        using var medium = VirtualDiscMedium.CreateBlankDvdRam();
+        var service = new DataBurnService(engine);
+
+        byte[] image = IsoLikeImage(900, seed: 12);
+        var result = await service.BurnStreamAsync(Recorder(medium), new MemoryStream(image), new DataBurnOptions { VerifyAfterBurn = true });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified);
+        Assert.Null(engine.LastFallbackReason);
+        Assert.Equal(1, used!.FormatUnitCount);
+        Assert.True(OnDisc(medium, 900).SequenceEqual(image));
     }
 
     [Theory]

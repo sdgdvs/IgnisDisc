@@ -16,8 +16,10 @@ namespace CdBurner.Hardware.NativeWriting;
 /// <item>DVD-RW restricted overwrite: 32 KiB alignment, so the image is padded to whole 16-sector blocks. A partly
 /// formatted disc (READ FORMAT CAPACITIES offers format 13h with blocks) is first expanded with format 13h and 0
 /// blocks, which leaves it in the intermediate state; CLOSE SESSION (010b) at the end brings it out of that state.</item>
-/// <item>DVD-RAM: sold formatted; an unformatted one is refused (formatting it with defect management is not done
-/// here). 2 KiB alignment; nothing to close.</item>
+/// <item>DVD-RAM: usually sold formatted. A never-formatted one (READ FORMAT CAPACITIES current descriptor type 01b)
+/// gets FORMAT UNIT type 00h with the blocks the drive offers for it and the block length 2,048 (MMC-5 6.5), without
+/// certification; the drive answers 2/04/04 with a progress indication until it is done. 2 KiB alignment; nothing
+/// to close.</item>
 /// </list>
 /// A disc that holds a file system is only written over when <see cref="NativeDataWriteRequest.OverwriteExistingData"/>
 /// says the user allowed it. A refused CLOSE SESSION is logged, not fatal: the data is already on the disc.
@@ -64,7 +66,7 @@ public sealed partial class NativeTaoDataWriter
         var report = MmcMediaReport.Query(_transport, ShortTimeout);
         var formats = report.FormattedCapacity;
         byte? formatType = null;          // the format to start before writing, if any
-        uint formatBlocks = 0;            // BD-RE: the blocks the drive offered for format 00h
+        uint formatBlocks = 0;            // BD-RE and DVD-RAM: the blocks the drive offered for format 00h
         bool mayHoldData = true;
         switch (kind)
         {
@@ -115,9 +117,27 @@ public sealed partial class NativeTaoDataWriter
                 }
                 break;
             default:
+                // MMC-5 6.24.3: format type 00h on DVD-RAM is the full format; its type-dependent parameter is the
+                // block length, 2,048 on every DVD-RAM.
                 if (formats is not { State: FormattedCapacityState.Formatted })
                 {
-                    throw Stop("This DVD-RAM is not formatted. Format it first (Windows can do this), then burn again.");
+                    var offer = formats?.Formats.FirstOrDefault(f => f.FormatType == NativeWriteCommands.FormatTypeDefault && f.Blocks > 0);
+                    if (offer is null)
+                    {
+                        throw Stop("This DVD-RAM is not formatted, and the drive offers no format for it.");
+                    }
+                    if (offer.TypeParameter != NativeWriteCommands.DvdRamBlockLength)
+                    {
+                        throw Stop($"This DVD-RAM is not formatted, and the drive offers it only with {offer.TypeParameter}-byte blocks, not 2,048.");
+                    }
+                    formatType = NativeWriteCommands.FormatTypeDefault;
+                    formatBlocks = (uint)Math.Min(uint.MaxValue, offer.Blocks);
+                    mayHoldData = false;
+                    _note($"Not formatted; format 00h offered with {offer.Blocks} blocks of {offer.TypeParameter} bytes.");
+                }
+                else
+                {
+                    _note($"Formatted ({formats.Blocks} blocks).");
                 }
                 break;
         }
@@ -166,12 +186,14 @@ public sealed partial class NativeTaoDataWriter
         Check(ct, state);
 
         // 5. Format first where needed. From here the disc changes.
+        var reporter = new ProgressReporter(this, progress, clock, sectors, state.IsBluRay ? BdSectorsPerSecondAt1x : DvdSectorsPerSecondAt1x);
         if (formatType is byte type)
         {
             byte[] parameters = kind switch
             {
                 OverwritableKind.DvdPlusRw => NativeWriteCommands.BuildDvdPlusRwFormatParameters(restart: false),
                 OverwritableKind.BdRe => NativeWriteCommands.BuildBdReDefaultFormatParameters(formatBlocks),
+                OverwritableKind.DvdRam => NativeWriteCommands.BuildDvdRamFormatParameters(formatBlocks),
                 _ => NativeWriteCommands.BuildDvdMinusRwExpandParameters()
             };
             var format = _transport.ExecuteCommand(NativeWriteCommands.BuildFormatUnit(), parameters, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, ShortTimeout);
@@ -181,12 +203,11 @@ public sealed partial class NativeTaoDataWriter
             }
             state.WritingStarted = true;
             _note($"FORMAT UNIT type {type:X2}h sent.");
-            WaitUntilReady(FlushTimeout, ct, state, "after starting the format");
+            WaitForFormat(kind == OverwritableKind.DvdRam ? DvdRamFormatTimeout : FlushTimeout, ct, state, reporter);
         }
 
         // 6. The data, in 64 KiB WRITEs from LBA 0.
         request.Image.Position = request.StartPosition;
-        var reporter = new ProgressReporter(this, progress, clock, sectors, state.IsBluRay ? BdSectorsPerSecondAt1x : DvdSectorsPerSecondAt1x);
         var writing = Stopwatch.StartNew();
         WriteTrack(request, 0, sectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite);
         writing.Stop();
@@ -218,6 +239,48 @@ public sealed partial class NativeTaoDataWriter
             Message = written + closeNote,
             DiscRecorded = true
         };
+    }
+
+    /// <summary>
+    /// The longest wait for a DVD-RAM format. Without certification drives take minutes; the margin covers one that
+    /// certifies anyway.
+    /// </summary>
+    private static readonly TimeSpan DvdRamFormatTimeout = TimeSpan.FromMinutes(90);
+
+    /// <summary>
+    /// Waits for a FORMAT UNIT sent with Immed to finish: TEST UNIT READY until it succeeds, as
+    /// <see cref="WaitUntilReady"/> does. While the drive answers 2/04/xx with a progress indication (sense byte 15
+    /// bit 7, bytes 16–17 the fraction done of 65,536; SPC-4 4.5.2.4.4) it is shown as "Formatting n %" and noted in
+    /// the log at each further tenth.
+    /// </summary>
+    private void WaitForFormat(TimeSpan limit, CancellationToken ct, RunState state, ProgressReporter reporter)
+    {
+        int lastTenth = -1;
+        WaitUntilReady(limit, ct, state, "after starting the format", sense =>
+        {
+            if (FormatProgress(sense) is not double done)
+            {
+                return;
+            }
+            int percent = (int)(done * 100);
+            reporter.Report(0, $"Formatting {percent} %");
+            if (percent / 10 > lastTenth)
+            {
+                lastTenth = percent / 10;
+                _note($"Format in progress: {percent} %.");
+            }
+        });
+        _note("Format finished; the drive is ready.");
+    }
+
+    /// <summary>The progress indication of a fixed-format "not ready" sense (key 2, SKSV set), 0 to 1; null if none.</summary>
+    public static double? FormatProgress(ReadOnlySpan<byte> sense)
+    {
+        if (sense.Length < 18 || (sense[0] & 0x7E) != 0x70 || (sense[2] & 0x0F) != 0x02 || (sense[15] & 0x80) == 0)
+        {
+            return null;
+        }
+        return ((sense[16] << 8) | sense[17]) / 65536.0;
     }
 
     /// <summary>The volume descriptor identifier at sector 16 (ISO 9660 "CD001", UDF "BEA01"), or null if none is readable.</summary>

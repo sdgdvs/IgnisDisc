@@ -136,7 +136,9 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
             }
             if (medium.MediaType == DiscMediaType.DvdRam)
             {
-                drive.FormatCapacitiesResponse = VirtualMmcDrive.BuildFormatCapacities(drive.CapacitySectors ?? 0, formatted: true);
+                // DVD-RAM is sold formatted; READ FORMAT CAPACITIES then follows the drive's RamFormatted state.
+                drive.RamFormatted = true;
+                drive.FormatCapacitiesResponse = null;
             }
             if (medium.MediaType == DiscMediaType.DvdPlusRw)
             {

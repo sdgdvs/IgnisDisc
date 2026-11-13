@@ -761,7 +761,7 @@ public sealed partial class NativeTaoDataWriter
         return true;
     }
 
-    private void WaitUntilReady(TimeSpan limit, CancellationToken ct, RunState state, string when)
+    private void WaitUntilReady(TimeSpan limit, CancellationToken ct, RunState state, string when, Action<byte[]>? whileNotReady = null)
     {
         var clock = Stopwatch.StartNew();
         int unitAttentions = 0;
@@ -785,6 +785,7 @@ public sealed partial class NativeTaoDataWriter
             }
             if (s is { SenseKey: 0x02, Asc: 0x04 } && clock.Elapsed < limit)
             {
+                whileNotReady?.Invoke(r.SenseData);
                 _sleep(TimeSpan.FromMilliseconds(500));
                 continue;
             }
