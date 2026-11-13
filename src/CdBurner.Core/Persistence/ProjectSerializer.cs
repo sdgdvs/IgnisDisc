@@ -537,6 +537,7 @@ public static class ProjectSerializer
             NormalizeAllTracks = compilation.NormalizeAllTracks,
             DefaultPreGapFrames = compilation.DefaultPreGapFrames,
             UseRmsLoudnessLeveling = compilation.UseRmsLoudnessLeveling,
+            LoudnessNormalization = (int)compilation.LoudnessNormalization,
             CrossfadeSeconds = compilation.CrossfadeSeconds,
             CreatedAtUtc = DateTime.UtcNow,
             ModifiedAtUtc = DateTime.UtcNow,
@@ -598,6 +599,9 @@ public static class ProjectSerializer
             NormalizeAllTracks = document.NormalizeAllTracks,
             DefaultPreGapFrames = document.DefaultPreGapFrames,
             UseRmsLoudnessLeveling = document.UseRmsLoudnessLeveling,
+            LoudnessNormalization = Enum.IsDefined(typeof(LoudnessNormalizationMode), document.LoudnessNormalization)
+                ? (LoudnessNormalizationMode)document.LoudnessNormalization
+                : LoudnessNormalizationMode.Off,
             CrossfadeSeconds = Math.Max(0.0, document.CrossfadeSeconds)
         };
 

@@ -221,6 +221,7 @@ public class AudioCdBurnService
         {
             int totalRequiredFrames = 0;
             var preparedTracks = new byte[compilation.Tracks.Count][];
+            var albumMeasurements = new ReplayGainResult?[compilation.Tracks.Count];
 
             for (int i = 0; i < compilation.Tracks.Count; i++)
             {
@@ -307,7 +308,19 @@ public class AudioCdBurnService
                         pcmBytes = mem.ToArray();
                     }
 
-                    if (compilation.UseRmsLoudnessLeveling)
+                    if (compilation.LoudnessNormalization == LoudnessNormalizationMode.PerTrack)
+                    {
+                        var measured = ReplayGainCalculator.CalculateTrackReplayGain(pcmBytes);
+                        if (!double.IsNegativeInfinity(measured.IntegratedLoudnessLufs))
+                        {
+                            pcmBytes = RedBookPcmDspProcessor.ApplyLoudnessGain(pcmBytes, measured.GainDb);
+                        }
+                    }
+                    else if (compilation.LoudnessNormalization == LoudnessNormalizationMode.PerAlbum)
+                    {
+                        albumMeasurements[i] = ReplayGainCalculator.CalculateTrackReplayGain(pcmBytes);
+                    }
+                    else if (compilation.UseRmsLoudnessLeveling)
                     {
                         pcmBytes = RedBookPcmDspProcessor.NormalizeRmsLoudness(pcmBytes);
                     }
@@ -321,6 +334,23 @@ public class AudioCdBurnService
                 }
 
                 preparedTracks[i] = pcmBytes;
+            }
+
+            // Album mode: one gain from all tracks' gated blocks together (data tracks have no measurement).
+            if (compilation.LoudnessNormalization == LoudnessNormalizationMode.PerAlbum)
+            {
+                var measured = albumMeasurements.Where(m => m != null).Select(m => m!).ToList();
+                double albumGainDb = ReplayGainCalculator.CalculateAlbumReplayGain(measured).AlbumGainDb;
+                if (measured.Any(m => !double.IsNegativeInfinity(m.IntegratedLoudnessLufs)))
+                {
+                    for (int i = 0; i < preparedTracks.Length; i++)
+                    {
+                        if (albumMeasurements[i] is { } own && !double.IsNegativeInfinity(own.IntegratedLoudnessLufs))
+                        {
+                            preparedTracks[i] = RedBookPcmDspProcessor.ApplyLoudnessGain(preparedTracks[i], albumGainDb);
+                        }
+                    }
+                }
             }
 
             // Crossfade adjacent tracks by overlapping them (the next track's head is mixed into this track's tail

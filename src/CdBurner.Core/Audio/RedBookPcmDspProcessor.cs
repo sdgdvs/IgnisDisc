@@ -343,6 +343,237 @@ public static class RedBookPcmDspProcessor
         return output;
     }
 
+    /// <summary>ReplayGain 2.0 reference loudness used by <see cref="ApplyLoudnessGain"/> callers (-18 LUFS).</summary>
+    public const double LoudnessTargetLufs = ReplayGainCalculator.ReferenceLoudnessLufs;
+
+    /// <summary>True-peak ceiling of the loudness limiter in dBTP.</summary>
+    public const double LoudnessCeilingDbTp = -1.0;
+
+    private const int OversampleFactor = 4;
+    private const int OversampleTapsPerPhase = 12;      // 48 taps in total, as in the BS.1770-4 Annex 2 example
+    private const int LimiterWindowFrames = 88;         // about 2 ms attack and release
+    private const double LimiterDitherHeadroomLsb = 3.0; // room for TPDF dither (+-1 LSB) and interpolation error
+
+    // Polyphase interpolation filter: Hann-windowed sinc, cutoff at the original Nyquist frequency.
+    private static readonly double[][] OversamplePhases = BuildOversamplePhases();
+
+    /// <summary>
+    /// Measures a Red Book 16-bit stereo buffer with the BS.1770-4 meter and returns the gain in dB that brings its
+    /// integrated loudness to <see cref="LoudnessTargetLufs"/>. Silence returns 0.
+    /// </summary>
+    public static double MeasureLoudnessGainDb(ReadOnlySpan<byte> pcmData)
+        => ReplayGainCalculator.CalculateTrackReplayGain(pcmData).GainDb;
+
+    /// <summary>
+    /// Applies <paramref name="gainDb"/> to 16-bit stereo PCM and then a look-ahead limiter that keeps the
+    /// 4x-oversampled true peak at or below <paramref name="ceilingDbTp"/> (default -1 dBTP). The result is rounded
+    /// to 16 bits with deterministic TPDF dither. Exact digital silence stays exactly zero, and a gain of 0 dB
+    /// with a signal already under the ceiling still goes through dither, so callers skip the call when the
+    /// option is off to keep the output bit-exact.
+    /// </summary>
+    public static byte[] ApplyLoudnessGain(ReadOnlySpan<byte> pcmData, double gainDb, double ceilingDbTp = LoudnessCeilingDbTp)
+    {
+        if (!double.IsFinite(gainDb))
+        {
+            throw new ArgumentOutOfRangeException(nameof(gainDb), "Gain must be a finite value.");
+        }
+        if (!double.IsFinite(ceilingDbTp) || ceilingDbTp > 0.0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ceilingDbTp), "Ceiling must be a finite level at or below 0 dBTP.");
+        }
+
+        int frames = pcmData.Length / 4;
+        byte[] output = pcmData.ToArray();
+        if (frames == 0)
+        {
+            return output;
+        }
+
+        double gain = Math.Pow(10.0, gainDb / 20.0);
+        double ceiling = Math.Max(1e-6, Math.Pow(10.0, ceilingDbTp / 20.0) - LimiterDitherHeadroomLsb / 32768.0);
+
+        // Gained signal in full-scale units.
+        var left = new double[frames];
+        var right = new double[frames];
+        for (int i = 0; i < frames; i++)
+        {
+            left[i] = BinaryPrimitives.ReadInt16LittleEndian(pcmData.Slice(i * 4, 2)) / 32768.0 * gain;
+            right[i] = BinaryPrimitives.ReadInt16LittleEndian(pcmData.Slice(i * 4 + 2, 2)) / 32768.0 * gain;
+        }
+
+        double[] limiterGain = ComputeLimiterGain(left, right, ceiling);
+
+        uint rng = 0x9E3779B9u;
+        for (int i = 0; i < frames; i++)
+        {
+            double l = left[i] * limiterGain[i];
+            double r = right[i] * limiterGain[i];
+            BinaryPrimitives.WriteInt16LittleEndian(output.AsSpan(i * 4, 2), QuantizeDithered(l, ref rng));
+            BinaryPrimitives.WriteInt16LittleEndian(output.AsSpan(i * 4 + 2, 2), QuantizeDithered(r, ref rng));
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Largest 4x-oversampled absolute sample value of a 16-bit stereo buffer (full scale = 1.0): the true peak
+    /// per BS.1770-4 Annex 2. Used by tests and by the limiter.
+    /// </summary>
+    public static double MeasureTruePeak(ReadOnlySpan<byte> pcmData)
+    {
+        int frames = pcmData.Length / 4;
+        var left = new double[frames];
+        var right = new double[frames];
+        for (int i = 0; i < frames; i++)
+        {
+            left[i] = BinaryPrimitives.ReadInt16LittleEndian(pcmData.Slice(i * 4, 2)) / 32768.0;
+            right[i] = BinaryPrimitives.ReadInt16LittleEndian(pcmData.Slice(i * 4 + 2, 2)) / 32768.0;
+        }
+
+        double peak = 0.0;
+        double[] frameNeed = FramePeaks(left, right);
+        foreach (double p in frameNeed)
+        {
+            if (p > peak) peak = p;
+        }
+        return peak;
+    }
+
+    private static short QuantizeDithered(double value, ref uint rng)
+    {
+        double scaled = value * 32768.0;
+        if (scaled == 0.0)
+        {
+            return 0; // digital silence stays silent
+        }
+
+        double tpdf = NextUnit(ref rng) - NextUnit(ref rng); // triangular, (-1, +1) LSB
+        return (short)Math.Clamp(Math.Round(scaled + tpdf), short.MinValue, short.MaxValue);
+    }
+
+    private static double NextUnit(ref uint state)
+    {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state / 4294967296.0;
+    }
+
+    /// <summary>Per-frame true-peak magnitude over both channels (original samples and 3 interpolated phases).</summary>
+    private static double[] FramePeaks(double[] left, double[] right)
+    {
+        int n = left.Length;
+        var peaks = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            double p = Math.Max(Math.Abs(left[i]), Math.Abs(right[i]));
+            for (int phase = 1; phase < OversampleFactor; phase++)
+            {
+                p = Math.Max(p, Math.Abs(Interpolate(left, i, phase)));
+                p = Math.Max(p, Math.Abs(Interpolate(right, i, phase)));
+            }
+            peaks[i] = p;
+        }
+        return peaks;
+    }
+
+    // Value between sample i and i+1 at fraction phase/4, from the 12 samples around it.
+    private static double Interpolate(double[] x, int i, int phase)
+    {
+        double[] h = OversamplePhases[phase];
+        double sum = 0.0;
+        // h[k] weighs x[i - (taps/2 - 1) + k]
+        int first = i - (OversampleTapsPerPhase / 2 - 1);
+        for (int k = 0; k < OversampleTapsPerPhase; k++)
+        {
+            int idx = first + k;
+            if ((uint)idx < (uint)x.Length)
+            {
+                sum += h[k] * x[idx];
+            }
+        }
+        return sum;
+    }
+
+    private static double[][] BuildOversamplePhases()
+    {
+        var phases = new double[OversampleFactor][];
+        int half = OversampleTapsPerPhase / 2;
+        for (int phase = 0; phase < OversampleFactor; phase++)
+        {
+            var h = new double[OversampleTapsPerPhase];
+            double frac = (double)phase / OversampleFactor;
+            double sum = 0.0;
+            for (int k = 0; k < OversampleTapsPerPhase; k++)
+            {
+                double t = (k - (half - 1)) - frac; // distance in input samples from the interpolation point
+                double sinc = Math.Abs(t) < 1e-12 ? 1.0 : Math.Sin(Math.PI * t) / (Math.PI * t);
+                double window = 0.5 * (1.0 + Math.Cos(Math.PI * t / half));
+                h[k] = sinc * window;
+                sum += h[k];
+            }
+            for (int k = 0; k < OversampleTapsPerPhase; k++) h[k] /= sum; // unity DC gain
+            phases[phase] = h;
+        }
+        return phases;
+    }
+
+    /// <summary>
+    /// Look-ahead limiter gain per frame: the gain needed to put each frame's true peak at the ceiling, held as a
+    /// sliding minimum over +-window and then smoothed with a moving average, so no frame ends up with more gain
+    /// than it needs while the gain moves without steps.
+    /// </summary>
+    private static double[] ComputeLimiterGain(double[] left, double[] right, double ceiling)
+    {
+        int n = left.Length;
+        double[] peaks = FramePeaks(left, right);
+        var need = new double[n];
+        bool any = false;
+        for (int i = 0; i < n; i++)
+        {
+            need[i] = peaks[i] > ceiling ? ceiling / peaks[i] : 1.0;
+            if (need[i] < 1.0) any = true;
+        }
+
+        var result = new double[n];
+        if (!any)
+        {
+            Array.Fill(result, 1.0);
+            return result;
+        }
+
+        int w = LimiterWindowFrames;
+
+        // m[k] = min need[j] for j in [k - (w-1), k + (w-1)] (monotonic deque, O(n)).
+        var m = new double[n];
+        var deque = new int[n];
+        int head = 0, tail = 0, next = 0;
+        for (int k = 0; k < n; k++)
+        {
+            int hi = Math.Min(n - 1, k + w - 1);
+            while (next <= hi)
+            {
+                while (tail > head && need[deque[tail - 1]] >= need[next]) tail--;
+                deque[tail++] = next++;
+            }
+            while (deque[head] < k - (w - 1)) head++;
+            m[k] = need[deque[head]];
+        }
+
+        // a[i] = mean of m[k] for k in [i - (w-1), i]: every such window contains frame i, so a[i] <= need[i].
+        double running = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            running += m[i];
+            if (i >= w) running -= m[i - w];
+            int count = Math.Min(i + 1, w);
+            // Before the first full window, the missing terms stand for the signal start where the gain is m[0].
+            result[i] = (running + (w - count) * m[0]) / w;
+            if (result[i] > need[i]) result[i] = need[i]; // guard against rounding
+        }
+        return result;
+    }
+
     /// <summary>
     /// Applies smooth cosine-curve fade-in and/or fade-out envelopes to a Red Book 16-bit Stereo PCM buffer.
     /// </summary>

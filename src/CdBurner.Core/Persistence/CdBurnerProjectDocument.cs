@@ -129,6 +129,11 @@ public class CdBurnerProjectDocument
     public bool UseRmsLoudnessLeveling { get; set; }
 
     /// <summary>
+    /// Loudness normalization to -18 LUFS: 0 = off, 1 = per track, 2 = per album (audio projects).
+    /// </summary>
+    public int LoudnessNormalization { get; set; }
+
+    /// <summary>
     /// Crossfade length in seconds between adjacent tracks (0 = disabled; audio projects).
     /// </summary>
     public double CrossfadeSeconds { get; set; }

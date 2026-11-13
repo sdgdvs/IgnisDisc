@@ -21,6 +21,21 @@ public enum AudioRecordingMode
 }
 
 /// <summary>
+/// How tracks are brought to the -18 LUFS reference loudness.
+/// </summary>
+public enum LoudnessNormalizationMode
+{
+    /// <summary>No loudness change (output is bit-exact apart from the other selected options).</summary>
+    Off = 0,
+
+    /// <summary>Each track gets its own gain, so every track measures -18 LUFS.</summary>
+    PerTrack = 1,
+
+    /// <summary>One gain for the whole disc, from the BS.1770-4 gated loudness of all tracks together; keeps the level differences between tracks.</summary>
+    PerAlbum = 2
+}
+
+/// <summary>
 /// Represents a track item within an Audio CD compilation project.
 /// </summary>
 public record AudioCdTrackItem(
@@ -384,6 +399,12 @@ public class AudioCdCompilation
     /// Whether to perform perceptual RMS / ReplayGain-style loudness leveling (-14 dBFS) across all tracks.
     /// </summary>
     public bool UseRmsLoudnessLeveling { get; set; } = false;
+
+    /// <summary>
+    /// Loudness normalization to -18 LUFS (BS.1770-4) with a -1 dBTP true-peak limiter. Off by default. When on it
+    /// replaces the RMS leveling step; source files are never changed.
+    /// </summary>
+    public LoudnessNormalizationMode LoudnessNormalization { get; set; } = LoudnessNormalizationMode.Off;
 
     /// <summary>
     /// Equal-power crossfade duration in seconds between adjacent tracks (0.0 = disabled).

@@ -61,6 +61,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     private AudioRecordingMode _recordingMode = AudioRecordingMode.DiscAtOnceGapless;
     private bool _normalizeAllTracks = false;
     private bool _useRmsLoudnessLeveling = false;
+    private bool _normalizeLoudness = false;
+    private bool _loudnessPerAlbum = false;
     private double _crossfadeSeconds = 0.0;
     private int _defaultPreGapFrames = OpticalConstants.CdLeadInFrames; // 150 frames = 2.0s
     private bool _includeCdText = true;
@@ -215,6 +217,23 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     {
         get => _useRmsLoudnessLeveling;
         set => SetProperty(ref _useRmsLoudnessLeveling, value);
+    }
+
+    /// <summary>
+    /// When true, tracks are brought to -18 LUFS with a -1 dBTP true-peak limiter (per track, or per album when
+    /// <see cref="LoudnessPerAlbum"/> is set). Off by default.
+    /// </summary>
+    public bool NormalizeLoudness
+    {
+        get => _normalizeLoudness;
+        set => SetProperty(ref _normalizeLoudness, value);
+    }
+
+    /// <summary>When true with <see cref="NormalizeLoudness"/>, one gain for the whole disc keeps the level differences between tracks.</summary>
+    public bool LoudnessPerAlbum
+    {
+        get => _loudnessPerAlbum;
+        set => SetProperty(ref _loudnessPerAlbum, value);
     }
 
     /// <summary>
@@ -1621,6 +1640,9 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             RecordingMode = RecordingMode,
             NormalizeAllTracks = NormalizeAllTracks,
             UseRmsLoudnessLeveling = UseRmsLoudnessLeveling,
+            LoudnessNormalization = !NormalizeLoudness
+                ? LoudnessNormalizationMode.Off
+                : LoudnessPerAlbum ? LoudnessNormalizationMode.PerAlbum : LoudnessNormalizationMode.PerTrack,
             CrossfadeSeconds = CrossfadeSeconds,
             DefaultPreGapFrames = DefaultPreGapFrames,
             IncludeCdText = IncludeCdText
