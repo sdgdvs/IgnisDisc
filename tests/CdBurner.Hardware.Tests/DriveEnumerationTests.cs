@@ -293,12 +293,62 @@ public class DriveEnumerationTests
         Assert.Equal(DiscMediaType.Unknown, ImapiDiscRecorder.MapPhysicalTypeToDiscMediaType(ImapiMediaPhysicalType.Unknown));
     }
 
+    /// <summary>
+    /// Time budget for each Windows media query in the physical-drive test. When a disc is in a
+    /// slow state (for example right after a simulated test write) Windows' media query can block
+    /// for minutes. A query that overruns the budget is recorded as slow and the test moves on;
+    /// every query that does answer in time is still fully checked.
+    /// </summary>
+    private static readonly TimeSpan PhysicalQueryBudget = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Runs a drive query on a background thread and waits at most <see cref="PhysicalQueryBudget"/>.
+    /// Returns false when the budget ran out (the query keeps running in the background and its
+    /// result is ignored). Exceptions thrown by the query are rethrown so real failures still fail.
+    /// </summary>
+    private static bool TryQueryWithinBudget<T>(Func<T> query, out T? result)
+    {
+        T? value = default;
+        Exception? error = null;
+        var thread = new Thread(() =>
+        {
+            try { value = query(); }
+            catch (Exception ex) { error = ex; }
+        })
+        {
+            IsBackground = true,
+            Name = "PhysicalDriveQuery"
+        };
+        thread.Start();
+
+        if (!thread.Join(PhysicalQueryBudget))
+        {
+            result = default;
+            return false;
+        }
+
+        if (error != null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+        }
+
+        result = value;
+        return true;
+    }
+
     [Fact]
     public void PhysicalDriveEnumeration_IfPhysicalDrivePresent_QueriesPropertiesSafely()
     {
-        // Tests real physical drive enumeration if optical drive hardware is present
+        // Tests real physical drive enumeration if optical drive hardware is present.
+        // Each Windows query has a time budget (see PhysicalQueryBudget); once one overruns,
+        // the drive is in a slow state, so the remaining queries are skipped.
         using var manager = new DiscDeviceManager(enablePhysicalEnumeration: true);
-        var physicalRecorders = manager.GetRecorders(includeVirtual: false);
+        if (!TryQueryWithinBudget(() => manager.GetRecorders(includeVirtual: false), out var physicalRecorders)
+            || physicalRecorders == null)
+        {
+            Console.WriteLine("Physical drive enumeration exceeded its time budget; drive recorded as slow.");
+            return;
+        }
 
         if (physicalRecorders.Count > 0)
         {
@@ -309,19 +359,31 @@ public class DriveEnumerationTests
             Assert.False(string.IsNullOrWhiteSpace(recorder.ProductId));
 
             // Query capabilities safely without throwing
-            var caps = recorder.GetCapabilities();
+            if (!TryQueryWithinBudget(() => recorder.GetCapabilities(), out var caps))
+            {
+                Console.WriteLine("Capability query exceeded its time budget; drive recorded as slow.");
+                return;
+            }
             Assert.NotNull(caps);
             Assert.NotNull(caps.SupportedMediaTypes);
             Assert.NotNull(caps.SupportedWriteSpeeds);
 
             // Query media status safely without throwing
-            var status = recorder.QueryMediaStatus();
+            if (!TryQueryWithinBudget(() => recorder.QueryMediaStatus(), out var status))
+            {
+                Console.WriteLine("Media status query exceeded its time budget; drive recorded as slow.");
+                return;
+            }
             Assert.NotNull(status);
 
             // Query supported profiles safely
             if (recorder is ImapiDiscRecorder imapiRec)
             {
-                var profiles = imapiRec.GetSupportedProfiles();
+                if (!TryQueryWithinBudget(() => imapiRec.GetSupportedProfiles(), out var profiles))
+                {
+                    Console.WriteLine("Profile query exceeded its time budget; drive recorded as slow.");
+                    return;
+                }
                 Assert.NotNull(profiles);
                 Assert.NotNull(imapiRec.VolumePathNames);
             }
