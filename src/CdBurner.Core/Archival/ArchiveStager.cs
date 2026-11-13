@@ -63,6 +63,10 @@ public static class ArchiveStager
             }
         }
 
+        // Every disc carries the same list of the whole set, so every source file is hashed once before staging.
+        progress?.Report("Cataloging the whole set...");
+        var catalog = await ArchiveCatalog.BuildEntriesAsync(plan, progress, cancellationToken).ConfigureAwait(false);
+
         var stagedDiscs = new List<ArchiveStagedDisc>(plan.Discs.Count);
 
         for (int d = 0; d < plan.Discs.Count; d++)
@@ -95,7 +99,20 @@ public static class ArchiveStager
             }
 
             progress?.Report($"Staging disc {disc.DiscNumber}/{plan.Discs.Count}: writing manifest...");
-            await ArchiveManifest.WriteAsync(discRoot, plan, disc, cancellationToken).ConfigureAwait(false);
+            var index = await ArchiveManifest.WriteAsync(discRoot, plan, disc, cancellationToken, catalog).ConfigureAwait(false);
+
+            // The catalog hashed the sources, the manifest hashed the copies: a difference means a source file
+            // changed while it was being staged, and the catalog on every disc would then be wrong.
+            var cataloged = catalog.Where(e => e.DiscNumber == disc.DiscNumber).ToDictionary(e => e.Path, e => e.Sha256, StringComparer.Ordinal);
+            foreach (var entry in index.Files)
+            {
+                if (cataloged.TryGetValue(entry.RelativePath, out string? catalogHash) &&
+                    !string.Equals(catalogHash, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"'{entry.RelativePath}' changed while it was being staged (its copy does not match the catalog). Stage again once nothing writes to the source folder.");
+                }
+            }
 
             Par2RecoveryLayout? layout = null;
             long budget = 0;

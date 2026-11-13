@@ -44,6 +44,9 @@ public sealed class ArchiveDamageTests : IDisposable
         return Assert.Single(discs);
     }
 
+    /// <summary>Every staged disc also lists CATALOG.JSON and INDEX.HTML in its manifest.</summary>
+    private const int CatalogFiles = 2;
+
     private Task<string> StageThreeFilesAsync() =>
         StageAsync(("alpha.txt", "alpha payload"), ("beta.txt", "beta payload"), ("docs/gamma.txt", "gamma payload"));
 
@@ -87,7 +90,7 @@ public sealed class ArchiveDamageTests : IDisposable
         var result = await ArchiveManifest.VerifyAsync(disc);
 
         Assert.False(result.IsIntact);
-        Assert.Equal(3, result.FilesChecked);
+        Assert.Equal(3 + CatalogFiles, result.FilesChecked);
         Assert.Contains(result.Corrupt, c => c.StartsWith(ArchiveManifest.ManifestFileName, StringComparison.Ordinal));
         Assert.Empty(result.Missing);
     }
@@ -129,7 +132,7 @@ public sealed class ArchiveDamageTests : IDisposable
         var result = await ArchiveManifest.VerifyAsync(disc);
 
         Assert.False(result.IsIntact);
-        Assert.Equal(3, result.FilesChecked);
+        Assert.Equal(3 + CatalogFiles, result.FilesChecked);
         string problem = Assert.Single(result.Corrupt);
         Assert.StartsWith(ArchiveManifest.IndexFileName, problem);
     }
@@ -158,7 +161,7 @@ public sealed class ArchiveDamageTests : IDisposable
         var result = await ArchiveManifest.VerifyAsync(disc);
 
         Assert.True(result.IsIntact, string.Join("; ", result.Missing.Concat(result.Corrupt)));
-        Assert.Equal(2, result.FilesChecked);
+        Assert.Equal(2 + CatalogFiles, result.FilesChecked);
     }
 
     [Theory]
@@ -236,7 +239,7 @@ public sealed class ArchiveDamageTests : IDisposable
         var (exitCode, output) = RunVerifyScript(disc, startedFromPowerShell7);
 
         Assert.True(exitCode == 0, output);
-        Assert.Contains("PASSED (3 files intact)", output);
+        Assert.Contains($"PASSED ({3 + CatalogFiles} files intact)", output);
     }
 
     [Theory]

@@ -142,21 +142,41 @@ public static class ArchiveManifest
     /// <param name="plan">The overall archive plan.</param>
     /// <param name="disc">The disc plan for this specific disc.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="catalog">
+    /// The whole set's file list. When given, CATALOG.JSON and INDEX.HTML are written to the disc first and are
+    /// listed in the manifest and the index like any other file, so the cross-check covers them too.
+    /// </param>
     /// <returns>The generated <see cref="ArchiveIndex"/> metadata.</returns>
     public static async Task<ArchiveIndex> WriteAsync(
         string discRoot,
         ArchivePlan plan,
         ArchiveDiscPlan disc,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<ArchiveCatalogEntry>? catalog = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(discRoot);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(disc);
 
-        var entries = new List<ArchiveManifestEntry>(disc.Files.Count);
+        var listed = new List<(string RelativePath, long SizeBytes)>(disc.Files.Count + 2);
+        foreach (var file in disc.Files)
+        {
+            listed.Add((file.RelativePath, file.SizeBytes));
+        }
+
+        if (catalog != null)
+        {
+            await ArchiveCatalog.WriteAsync(discRoot, plan, disc.DiscNumber, catalog, cancellationToken).ConfigureAwait(false);
+            foreach (string name in new[] { ArchiveCatalog.CatalogFileName, ArchiveCatalog.HtmlIndexFileName })
+            {
+                listed.Add((name, new FileInfo(Path.Combine(discRoot, name)).Length));
+            }
+        }
+
+        var entries = new List<ArchiveManifestEntry>(listed.Count);
         var manifestBuilder = new StringBuilder();
 
-        foreach (var file in disc.Files)
+        foreach (var file in listed)
         {
             cancellationToken.ThrowIfCancellationRequested();
 

@@ -98,6 +98,8 @@ ignisdisc-cli <command> [options]
   check-disc --drive <id>                      Read a CD once with C2 error pointers: where it is weak (may skip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
              [--redundancy <min %>] [--no-fill]      Recovery data fills each disc; --no-fill keeps exactly that %
+             [--keep-folders | --order size|path]    Largest-first packing (default); whole folders; or path order.
+                                                     Every disc gets CATALOG.JSON and INDEX.HTML listing the whole set
   archive-burn --drive <id> --disc <staged disc folder> [--native [--test-write | --test-first] [--log-dir <folder>]]
                                                Burn one staged archive disc; --native uses direct drive commands
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest

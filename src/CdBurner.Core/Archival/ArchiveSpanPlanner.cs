@@ -68,7 +68,8 @@ public static class ArchiveSpanPlanner
         int redundancyPercent,
         string? setId = null,
         bool fillFreeSpace = true,
-        int? ceilingSectorsOverride = null)
+        int? ceilingSectorsOverride = null,
+        ArchivePackingMode packing = ArchivePackingMode.FirstFitDecreasing)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceFolder);
         if (!Directory.Exists(sourceFolder))
@@ -86,7 +87,7 @@ public static class ArchiveSpanPlanner
             files.Add(new ArchiveSourceFile(fullPath, relative, size));
         }
 
-        return Plan(files, mediaType, redundancyPercent, setId, fillFreeSpace, ceilingSectorsOverride);
+        return Plan(files, mediaType, redundancyPercent, setId, fillFreeSpace, ceilingSectorsOverride, packing);
     }
 
     /// <summary>
@@ -99,13 +100,15 @@ public static class ArchiveSpanPlanner
     /// <returns>The calculated spanning plan.</returns>
     /// <param name="fillFreeSpace">Grow recovery data to fill each disc (redundancy is then the minimum).</param>
     /// <param name="ceilingSectorsOverride">Sectors per disc in all, instead of the media type's (tests, odd media).</param>
+    /// <param name="packing">How files are placed on discs; see <see cref="ArchivePackingMode"/>.</param>
     public static ArchivePlan Plan(
         IReadOnlyList<ArchiveSourceFile> files,
         DiscMediaType mediaType,
         int redundancyPercent,
         string? setId = null,
         bool fillFreeSpace = true,
-        int? ceilingSectorsOverride = null)
+        int? ceilingSectorsOverride = null,
+        ArchivePackingMode packing = ArchivePackingMode.FirstFitDecreasing)
     {
         ArgumentNullException.ThrowIfNull(files);
         if (redundancyPercent < 0 || redundancyPercent > 100)
@@ -133,15 +136,17 @@ public static class ArchiveSpanPlanner
                 FillFreeSpace: fillFreeSpace);
         }
 
-        var discs = new List<ArchiveDiscPlan>();
-        var currentDiscFiles = new List<ArchiveSourceFile>();
-        long currentDiscBytes = 0;
-        int currentDiscSectors = 0;
-        int currentNonEmpty = 0;
-        int fileLimit = redundancyPercent > 0 ? MaxNonEmptyFilesPerDisc : int.MaxValue;
-
         foreach (var file in orderedFiles)
         {
+            string leaf = file.RelativePath.Replace('\\', '/');
+            if (string.Equals(leaf, ArchiveCatalog.CatalogFileName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(leaf, ArchiveCatalog.HtmlIndexFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"The source folder holds a file named '{file.RelativePath}' in its top level, a name every archive disc uses for its own " +
+                    "catalog. Rename or move that file.");
+            }
+
             int fileSectors = CompilationCapacityCalculator.CalculateFileSectors(file.SizeBytes);
             if (fileSectors > usableSectors)
             {
@@ -151,36 +156,30 @@ public static class ArchiveSpanPlanner
                 throw new InvalidOperationException(
                     $"File '{file.RelativePath}' requires {requiredSectors} sectors, which is larger than one disc usable capacity ({usableSectors} sectors).");
             }
-
-            bool countsTowardsLimit = file.SizeBytes > 0;
-            if (currentDiscFiles.Count > 0 &&
-                (currentDiscSectors + fileSectors > usableSectors || (countsTowardsLimit && currentNonEmpty >= fileLimit)))
-            {
-                discs.Add(new ArchiveDiscPlan(
-                    DiscNumber: discs.Count + 1,
-                    Files: currentDiscFiles,
-                    DataBytes: currentDiscBytes,
-                    DataSectors: currentDiscSectors));
-
-                currentDiscFiles = new List<ArchiveSourceFile>();
-                currentDiscBytes = 0;
-                currentDiscSectors = 0;
-                currentNonEmpty = 0;
-            }
-
-            currentDiscFiles.Add(file);
-            if (countsTowardsLimit) currentNonEmpty++;
-            currentDiscBytes += file.SizeBytes;
-            currentDiscSectors += fileSectors;
         }
 
-        if (currentDiscFiles.Count > 0)
+        // Every disc also carries CATALOG.JSON and INDEX.HTML, which list the whole set: keep room for them.
+        long packCapacity = usableSectors - ArchiveCatalog.EstimateSectors(orderedFiles);
+        int fileLimit = redundancyPercent > 0 ? MaxNonEmptyFilesPerDisc : int.MaxValue;
+
+        List<Bin> bins = packing switch
         {
+            ArchivePackingMode.PathOrder => PackNextFit(orderedFiles, packCapacity, fileLimit),
+            ArchivePackingMode.KeepFolders => PackFirstFitDecreasing(BuildFolderUnits(orderedFiles, packCapacity, fileLimit), packCapacity, fileLimit),
+            ArchivePackingMode.FirstFitDecreasing => PackFirstFitDecreasing(BuildFileUnits(orderedFiles), packCapacity, fileLimit),
+            _ => throw new ArgumentOutOfRangeException(nameof(packing), packing, "Unknown packing mode.")
+        };
+
+        var discs = new List<ArchiveDiscPlan>(bins.Count);
+        foreach (var bin in bins)
+        {
+            // List each disc's files in path order, whatever order they were placed in.
+            var discFiles = bin.Files.OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToList();
             discs.Add(new ArchiveDiscPlan(
                 DiscNumber: discs.Count + 1,
-                Files: currentDiscFiles,
-                DataBytes: currentDiscBytes,
-                DataSectors: currentDiscSectors));
+                Files: discFiles,
+                DataBytes: discFiles.Sum(f => f.SizeBytes),
+                DataSectors: (int)bin.Sectors));
         }
 
         long totalBytes = discs.Sum(d => d.DataBytes);
@@ -192,6 +191,137 @@ public static class ArchiveSpanPlanner
             Discs: discs,
             TotalBytes: totalBytes,
             CeilingSectorsPerDisc: ceilingSectors,
-            FillFreeSpace: fillFreeSpace);
+            FillFreeSpace: fillFreeSpace,
+            PackingMode: packing);
+    }
+
+    /// <summary>One disc being filled.</summary>
+    private sealed class Bin
+    {
+        public List<ArchiveSourceFile> Files { get; } = new();
+        public long Sectors { get; private set; }
+        public int NonEmpty { get; private set; }
+
+        /// <summary>An empty disc takes anything (a lone file always fits, the caller checked it against the disc).</summary>
+        public bool Fits(PackUnit unit, long capacity, int fileLimit) =>
+            Files.Count == 0 || (Sectors + unit.Sectors <= capacity && NonEmpty + unit.NonEmpty <= fileLimit);
+
+        public void Add(PackUnit unit)
+        {
+            Files.AddRange(unit.Files);
+            Sectors += unit.Sectors;
+            NonEmpty += unit.NonEmpty;
+        }
+    }
+
+    /// <summary>Files placed together: one file, or a whole folder that fits on a disc.</summary>
+    private sealed class PackUnit
+    {
+        public PackUnit(string key, IReadOnlyList<ArchiveSourceFile> files)
+        {
+            Key = key;
+            Files = files;
+            foreach (var f in files)
+            {
+                Sectors += CompilationCapacityCalculator.CalculateFileSectors(f.SizeBytes);
+                if (f.SizeBytes > 0) NonEmpty++;
+            }
+        }
+
+        public string Key { get; }
+        public IReadOnlyList<ArchiveSourceFile> Files { get; }
+        public long Sectors { get; }
+        public int NonEmpty { get; }
+    }
+
+    /// <summary>The original loop: files in path order, a new disc when the next file does not fit the current one.</summary>
+    private static List<Bin> PackNextFit(IReadOnlyList<ArchiveSourceFile> orderedFiles, long capacity, int fileLimit)
+    {
+        var bins = new List<Bin>();
+        Bin? current = null;
+        foreach (var file in orderedFiles)
+        {
+            var unit = new PackUnit(file.RelativePath, new[] { file });
+            if (current == null || !current.Fits(unit, capacity, fileLimit))
+            {
+                current = new Bin();
+                bins.Add(current);
+            }
+
+            current.Add(unit);
+        }
+
+        return bins;
+    }
+
+    /// <summary>
+    /// First-Fit-Decreasing: largest unit first (ties by ordinal path), each into the first disc it fits, a new disc
+    /// when none has room. The result depends only on the input, never on enumeration order.
+    /// </summary>
+    private static List<Bin> PackFirstFitDecreasing(IEnumerable<PackUnit> units, long capacity, int fileLimit)
+    {
+        var bins = new List<Bin>();
+        foreach (var unit in units.OrderByDescending(u => u.Sectors).ThenBy(u => u.Key, StringComparer.Ordinal))
+        {
+            Bin? target = null;
+            foreach (var bin in bins)
+            {
+                if (bin.Fits(unit, capacity, fileLimit))
+                {
+                    target = bin;
+                    break;
+                }
+            }
+
+            if (target == null)
+            {
+                target = new Bin();
+                bins.Add(target);
+            }
+
+            target.Add(unit);
+        }
+
+        return bins;
+    }
+
+    private static List<PackUnit> BuildFileUnits(IReadOnlyList<ArchiveSourceFile> files) =>
+        files.Select(f => new PackUnit(f.RelativePath, new[] { f })).ToList();
+
+    /// <summary>
+    /// Folder units: a folder with everything under it that fits on one disc is placed whole; a folder too big for
+    /// one disc is opened, its own files placed one by one and each subfolder tried the same way.
+    /// </summary>
+    private static List<PackUnit> BuildFolderUnits(IReadOnlyList<ArchiveSourceFile> files, long capacity, int fileLimit)
+    {
+        var units = new List<PackUnit>();
+        var items = files.Select(f => (File: f, Parts: f.RelativePath.Replace('\\', '/').Split('/'))).ToList();
+        CollectFolderUnits(items, 0, string.Empty, capacity, fileLimit, units);
+        return units;
+    }
+
+    private static void CollectFolderUnits(
+        List<(ArchiveSourceFile File, string[] Parts)> items, int depth, string prefix, long capacity, int fileLimit, List<PackUnit> units)
+    {
+        var whole = new PackUnit(prefix, items.Select(i => i.File).ToList());
+        if (whole.Sectors <= capacity && whole.NonEmpty <= fileLimit)
+        {
+            units.Add(whole);
+            return;
+        }
+
+        foreach (var direct in items.Where(i => i.Parts.Length == depth + 1))
+        {
+            units.Add(new PackUnit(direct.File.RelativePath, new[] { direct.File }));
+        }
+
+        var subfolders = items.Where(i => i.Parts.Length > depth + 1)
+            .GroupBy(i => i.Parts[depth], StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal);
+        foreach (var group in subfolders)
+        {
+            string path = prefix.Length == 0 ? group.Key : prefix + "/" + group.Key;
+            CollectFolderUnits(group.ToList(), depth + 1, path, capacity, fileLimit, units);
+        }
     }
 }

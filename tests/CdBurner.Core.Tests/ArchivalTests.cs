@@ -361,7 +361,7 @@ public sealed class ArchivalTests : IDisposable
 
         var verify1 = await ArchiveManifest.VerifyAsync(stagedDirs[0]);
         Assert.True(verify1.IsIntact);
-        Assert.Equal(2, verify1.FilesChecked);
+        Assert.Equal(2 + 2, verify1.FilesChecked); // two data files + CATALOG.JSON + INDEX.HTML
         Assert.Equal("testset12345", verify1.SetId);
         Assert.Equal(1, verify1.DiscNumber);
         Assert.Equal(2, verify1.DiscCount);
@@ -370,7 +370,7 @@ public sealed class ArchivalTests : IDisposable
         Assert.True(verify2.IsIntact);
         Assert.Empty(verify2.Missing);
         Assert.Empty(verify2.Corrupt);
-        Assert.Equal(1, verify2.FilesChecked);
+        Assert.Equal(1 + 2, verify2.FilesChecked);
         Assert.Equal("testset12345", verify2.SetId);
         Assert.Equal(2, verify2.DiscNumber);
         Assert.Equal(2, verify2.DiscCount);

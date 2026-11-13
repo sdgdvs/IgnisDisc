@@ -50,7 +50,7 @@ public static class CliCommandRunner
     {
         "json", "udf", "joliet", "verify", "close", "no-close", "raw", "full", "dao", "help", "h", "version", "v",
         "lookup", "keep-wav", "continue-on-error", "verify-accuraterip", "secure", "plan-only",
-        "overwrite", "strict-verify", "no-verify", "no-secure", "allow-damaged", "no-fill"
+        "overwrite", "strict-verify", "no-verify", "no-secure", "allow-damaged", "no-fill", "keep-folders"
     };
 
     private static void WriteJsonResult(TextWriter stdout, object payload)
@@ -2135,7 +2135,21 @@ public static class CliCommandRunner
         }
 
         // Recovery data fills each disc unless --no-fill; --redundancy is then the minimum.
-        var plan = ArchiveSpanPlanner.Plan(input, media, redundancy, fillFreeSpace: !cmd.HasFlag("no-fill"));
+        string order = (cmd.GetOption("order") ?? "size").ToLowerInvariant();
+        if (order is not ("size" or "path"))
+        {
+            throw new CommandLineException($"Invalid order '{order}'. Supported: size (default, fewest discs), path.");
+        }
+
+        if (cmd.HasFlag("keep-folders") && order == "path")
+        {
+            throw new CommandLineException("--keep-folders and --order path cannot be combined: --order path fills discs in path order and splits folders.");
+        }
+
+        ArchivePackingMode packing = order == "path"
+            ? ArchivePackingMode.PathOrder
+            : cmd.HasFlag("keep-folders") ? ArchivePackingMode.KeepFolders : ArchivePackingMode.FirstFitDecreasing;
+        var plan = ArchiveSpanPlanner.Plan(input, media, redundancy, fillFreeSpace: !cmd.HasFlag("no-fill"), packing: packing);
 
         string? par2Path = null;
         if (!planOnly && redundancy > 0)
@@ -2943,8 +2957,10 @@ public static class CliCommandRunner
         stdout.WriteLine("      Reads a CD once with C2 error pointers and says where it is weak (where a player may skip). Read-only.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
-        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--json]");
+        stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--keep-folders | --order size|path] [--json]");
         stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data (fills free space unless --no-fill).");
+        stdout.WriteLine("      Files are packed largest first into the first disc with room (--order size, the default); --keep-folders keeps a folder whole when it fits on one disc;");
+        stdout.WriteLine("      --order path fills discs in path order. Every disc also gets CATALOG.JSON and INDEX.HTML listing the whole set.");
         stdout.WriteLine("  archive-burn --drive <id> --disc <staged disc folder> [--speed <X|max>] [--no-verify | --strict-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Burns one staged archive disc (ISO 9660 + Joliet + UDF, closed). With --native, discs the direct writer does not cover go to the Windows writer, and the output says why.");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");

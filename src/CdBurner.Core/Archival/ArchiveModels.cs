@@ -10,6 +10,19 @@ namespace CdBurner.Core.Archival;
 /// <param name="SizeBytes">Length of the source file in bytes.</param>
 public sealed record ArchiveSourceFile(string FullPath, string RelativePath, long SizeBytes);
 
+/// <summary>How the planner places files on discs. No mode ever splits a file.</summary>
+public enum ArchivePackingMode
+{
+    /// <summary>Largest file first, each into the first disc with room (fewest discs).</summary>
+    FirstFitDecreasing = 0,
+
+    /// <summary>Like first-fit-decreasing, but a folder that fits on one disc is kept whole.</summary>
+    KeepFolders = 1,
+
+    /// <summary>Files in path order, a new disc when the next file does not fit the current one.</summary>
+    PathOrder = 2
+}
+
 /// <summary>
 /// Layout plan for a single disc in an archival set.
 /// </summary>
@@ -40,7 +53,8 @@ public sealed record ArchivePlan(
     IReadOnlyList<ArchiveDiscPlan> Discs,
     long TotalBytes,
     int CeilingSectorsPerDisc = 0,
-    bool FillFreeSpace = true)
+    bool FillFreeSpace = true,
+    ArchivePackingMode PackingMode = ArchivePackingMode.FirstFitDecreasing)
 {
     /// <summary>The ceiling in effect: <see cref="CeilingSectorsPerDisc"/> or the media type's.</summary>
     public int EffectiveCeilingSectors =>
