@@ -81,6 +81,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     private string _ripReport = string.Empty;
     private AudioRipFormat _selectedRipFormat = AudioRipFormat.Wav;
     private string _ripBitrateKbps = string.Empty;
+    private string _ripCoverArtPath = string.Empty;
 
     private AudioTrackRowViewModel? _selectedTrack;
     private IDiscRecorderBackend? _selectedRecorder;
@@ -581,6 +582,15 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Optional front-cover image (JPEG, PNG, GIF or WebP) embedded in ripped FLAC and MP3 files. Empty means no cover.
+    /// </summary>
+    public string RipCoverArtPath
+    {
+        get => _ripCoverArtPath;
+        set => SetProperty(ref _ripCoverArtPath, value ?? string.Empty);
+    }
+
+    /// <summary>
     /// When true, unreadable sectors that fail all retries are zero-filled with silence instead of failing the rip.
     /// </summary>
     public bool ContinueOnUnreadable
@@ -656,6 +666,12 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     /// Browses for an output directory to store ripped audio files.
     /// </summary>
     public RelayCommand BrowseRipOutputFolderCommand { get; }
+
+    /// <summary>Picks the cover image to embed in ripped files.</summary>
+    public RelayCommand BrowseRipCoverArtCommand { get; }
+
+    /// <summary>Removes the chosen cover image.</summary>
+    public RelayCommand ClearRipCoverArtCommand { get; }
 
     /// <summary>
     /// Decodes and plays a Red Book audio preview of the currently selected track.
@@ -740,6 +756,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         DetectReadOffsetCommand = new AsyncRelayCommand(DetectReadOffsetAsync, () => !IsBusy);
         LookupDiscMetadataCommand = new AsyncRelayCommand(async _ => await LookupDiscMetadataAsync(), _ => !IsBusy);
         BrowseRipOutputFolderCommand = new RelayCommand(BrowseRipOutputFolder);
+        BrowseRipCoverArtCommand = new RelayCommand(BrowseRipCoverArt);
+        ClearRipCoverArtCommand = new RelayCommand(_ => RipCoverArtPath = string.Empty);
         PreviewSelectedTrackCommand = new RelayCommand(p => PreviewTrack(p as AudioTrackRowViewModel), _ => SelectedTrack != null || Tracks.Count > 0);
         StopPreviewCommand = new RelayCommand(_ => StopPreview(), _ => IsPreviewPlaying);
         ExportCoverSheetCommand = new RelayCommand(p => ExportJewelCaseCoverHtml(p as string), _ => Tracks.Count > 0);
@@ -1709,6 +1727,21 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void BrowseRipCoverArt()
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Select Cover Image to Embed in Ripped Tracks",
+            Filter = "Images (*.jpg;*.jpeg;*.png;*.gif;*.webp)|*.jpg;*.jpeg;*.png;*.gif;*.webp|All Files (*.*)|*.*",
+            Multiselect = false
+        };
+
+        if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+        {
+            RipCoverArtPath = dlg.FileName;
+        }
+    }
+
     #endregion
 
     #region Burning & Ripping Operations
@@ -2222,6 +2255,26 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         var transcodeSettings = new AudioRipTranscodeSettings(
             SelectedRipFormat, AudioRipFormats.UsesBitrate(SelectedRipFormat) ? bitrate : 0, ffmpegPath);
         formatProblem ??= transcoder.CheckPrerequisites(transcodeSettings);
+
+        // Read and check the cover now, so a missing or wrong file fails before the disc is read (same rule as rip-audio --cover).
+        byte[]? coverBytes = null;
+        string? coverMime = null;
+        if (formatProblem == null && !string.IsNullOrWhiteSpace(RipCoverArtPath))
+        {
+            try
+            {
+                coverBytes = await File.ReadAllBytesAsync(RipCoverArtPath.Trim(), ct);
+                coverMime = FlacEncoder.DetectImageMimeType(coverBytes);
+                if (coverMime == null)
+                {
+                    formatProblem = $"'{RipCoverArtPath}' is not a JPEG, PNG, GIF or WebP image.";
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                formatProblem = $"Cover image could not be read: {ex.Message}";
+            }
+        }
         if (formatProblem != null)
         {
             StatusMessage = formatProblem;
@@ -2297,7 +2350,10 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 ContinueOnUnreadableSector = ContinueOnUnreadable,
                 MetadataOverride = metadataOverride,
                 ReadOffsetSamples = ReadOffsetSamples,
-                SecureMode = SecureRip
+                SecureMode = SecureRip,
+                CalculateReplayGain = true, // track and album ReplayGain 2.0, same as rip-audio without --no-replaygain
+                CoverArtBytes = coverBytes,
+                CoverArtMimeType = coverMime
             };
 
             var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, activeToken);
@@ -2309,7 +2365,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 StatusMessage = $"Converting tracks to {AudioRipFormats.DisplayName(SelectedRipFormat)}...";
                 try
                 {
-                    var converted = await transcoder.TranscodeAsync(ripResult, transcodeSettings, cancellationToken: activeToken);
+                    var converted = await transcoder.TranscodeAsync(ripResult, transcodeSettings, coverBytes, coverMime, activeToken);
                     ripResult = AudioRipResultWithFiles(ripResult, converted.Files);
                     if (converted.Warnings.Count > 0)
                     {

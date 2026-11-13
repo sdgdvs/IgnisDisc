@@ -1,6 +1,7 @@
 using System.IO;
 using CdBurner.App.ViewModels;
 using CdBurner.Core.Audio;
+using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Persistence;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Devices;
@@ -138,6 +139,95 @@ public sealed class AudioRipOptionsViewModelTests : IDisposable
         Assert.NotNull(vm.LastRipResult);
         Assert.True(vm.LastRipResult.Success);
         Assert.DoesNotContain(staleReport, vm.RipReport);
+    }
+
+    // Smallest bytes the app accepts as a PNG: the 8-byte signature from the PNG specification, then filler.
+    private static byte[] FakePng() => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8];
+
+    [Fact]
+    public async Task Rip_WithCoverThatIsNotAnImage_FailsBeforeReadingTheDisc()
+    {
+        var vm = await CreateAndBurnVirtualAudioCdAsync();
+        string ripOutput = Path.Combine(_tempDir, "Rip_Out_BadCover");
+        string notAnImage = Path.Combine(_tempDir, "cover.txt");
+        await File.WriteAllTextAsync(notAnImage, "this is not a picture");
+
+        vm.LookupMetadata = false;
+        vm.VerifyAccurateRip = false;
+        vm.SelectedRipFormat = AudioRipFormat.Wav;
+        vm.RipCoverArtPath = notAnImage;
+
+        var result = await vm.RipAudioCdAsync("VDRV-01", ripOutput);
+
+        Assert.False(result.Success);
+        Assert.Contains("not a JPEG, PNG, GIF or WebP image", vm.RipReport);
+        Assert.False(Directory.Exists(ripOutput) && Directory.GetFiles(ripOutput).Length > 0);
+
+        vm.RipCoverArtPath = Path.Combine(_tempDir, "missing.png");
+        result = await vm.RipAudioCdAsync("VDRV-01", ripOutput);
+        Assert.False(result.Success);
+        Assert.Contains("Cover image could not be read", vm.RipReport);
+    }
+
+    [Fact]
+    public void ClearRipCoverArt_EmptiesThePath()
+    {
+        var vm = new AudioBurnViewModel(_deviceManager, _burnEngine) { RipCoverArtPath = "x.png" };
+        vm.ClearRipCoverArtCommand.Execute(null);
+        Assert.Equal(string.Empty, vm.RipCoverArtPath);
+    }
+
+    [Fact]
+    public async Task Rip_ToFlac_CarriesReplayGainAndCoverLikeTheCommandLine()
+    {
+        // Needs ffmpeg with the FLAC encoder (the optional download); skipped where it is not installed.
+        string? ffmpeg = FfmpegLocator.FindFfmpegExecutable(Environment.GetEnvironmentVariable("IGNISDISC_TEST_FFMPEG"));
+        if (ffmpeg == null) return;
+
+        string settingsPath = Path.Combine(_tempDir, "settings-flac.json");
+        var settingsService = new AppSettingsService(settingsPath);
+        settingsService.CurrentSettings = new AppSettings { FfmpegExecutablePath = ffmpeg };
+
+        string wav1 = Path.Combine(_tempDir, "F1.wav");
+        string wav2 = Path.Combine(_tempDir, "F2.wav");
+        WavFileCodec.WriteWavFile(wav1, new byte[75 * OpticalConstants.RawSectorSize]);
+        WavFileCodec.WriteWavFile(wav2, new byte[150 * OpticalConstants.RawSectorSize]);
+        var vm = new AudioBurnViewModel(_deviceManager, _burnEngine, settingsService: settingsService)
+        {
+            AlbumTitle = "Flac Tag Album",
+            AlbumPerformer = "Test Artist",
+            RecordingMode = AudioRecordingMode.DiscAtOnceGapless,
+            NormalizeAllTracks = false
+        };
+        vm.AddAudioFilesCommand.Execute(new[] { wav1, wav2 });
+        Assert.True((await vm.StartAudioBurnAsync("VDRV-01")).Success);
+
+        byte[] cover = FakePng();
+        string coverPath = Path.Combine(_tempDir, "cover.png");
+        await File.WriteAllBytesAsync(coverPath, cover);
+
+        vm.LookupMetadata = false;
+        vm.VerifyAccurateRip = false;
+        vm.SelectedRipFormat = AudioRipFormat.Flac;
+        vm.RipCoverArtPath = coverPath;
+        string ripOutput = Path.Combine(_tempDir, "Rip_Out_Flac");
+
+        var result = await vm.RipAudioCdAsync("VDRV-01", ripOutput);
+        Assert.True(result.Success, vm.RipReport);
+
+        var flacs = Directory.GetFiles(ripOutput, "*.flac");
+        Assert.Equal(2, flacs.Length);
+        foreach (string flac in flacs)
+        {
+            var meta = FlacFileCodec.ProbeMetadata(flac);
+            Assert.True(meta.HasEmbeddedCoverArt);
+            Assert.Equal(cover, meta.CoverArtBytes);
+            Assert.Equal("image/png", meta.CoverArtMimeType);
+            Assert.EndsWith(" dB", meta.ReplayGainTrackGain);
+            Assert.EndsWith(" dB", meta.ReplayGainAlbumGain);
+            Assert.False(string.IsNullOrEmpty(meta.ReplayGainTrackPeak));
+            Assert.False(string.IsNullOrEmpty(meta.ReplayGainAlbumPeak));
+        }
     }
 
     [Fact]

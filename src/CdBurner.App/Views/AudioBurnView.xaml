@@ -592,6 +592,42 @@
                                          ToolTip="MP3 32-320, Opus 6-510, AAC 96, 128, 160 or 192. Empty uses the default for the format." />
                             </StackPanel>
 
+                            <!-- Cover image row -->
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="Cover image:"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,10,0" />
+                                <TextBox Grid.Column="1"
+                                         AutomationProperties.Name="Cover image to embed in ripped files"
+                                         Text="{Binding RipCoverArtPath, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="8,6"
+                                         Background="{DynamicResource ControlBackgroundBrush}"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         BorderBrush="{DynamicResource ControlBorderBrush}"
+                                         Margin="0,0,8,0"
+                                         ToolTip="JPEG, PNG, GIF or WebP picture embedded as the front cover in FLAC and MP3 files. Empty embeds no cover." />
+                                <Button Grid.Column="2"
+                                        Content="Browse..."
+                                        AutomationProperties.Name="Browse Cover Image"
+                                        Command="{Binding BrowseRipCoverArtCommand}"
+                                        Margin="0,0,8,0"
+                                        VerticalAlignment="Center" />
+                                <Button Grid.Column="3"
+                                        Content="Clear"
+                                        AutomationProperties.Name="Clear Cover Image"
+                                        Command="{Binding ClearRipCoverArtCommand}"
+                                        VerticalAlignment="Center" />
+                            </Grid>
+
                             <!-- CheckBoxes -->
                             <WrapPanel Orientation="Horizontal">
                                 <CheckBox Content="Secure rip (C2 re-reads)"
