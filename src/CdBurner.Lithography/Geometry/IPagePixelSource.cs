@@ -1,4 +1,4 @@
-namespace CdBurner.Core.OpticalLithography;
+namespace CdBurner.Lithography.Geometry;
 
 /// <summary>
 /// Answers "is there ink here?" for a point on one page of a <see cref="PolarPageLayout"/>.

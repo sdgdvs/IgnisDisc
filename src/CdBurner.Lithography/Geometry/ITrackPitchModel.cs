@@ -1,4 +1,4 @@
-namespace CdBurner.Core.OpticalLithography;
+namespace CdBurner.Lithography.Geometry;
 
 /// <summary>
 /// Track pitch (radial distance between neighbouring turns of the spiral) as a function of radius.

@@ -1,4 +1,4 @@
-namespace CdBurner.Core.OpticalLithography;
+namespace CdBurner.Lithography.Geometry;
 
 /// <summary>
 /// Nominal (textbook) spiral geometry for CD, DVD and single-layer BD.

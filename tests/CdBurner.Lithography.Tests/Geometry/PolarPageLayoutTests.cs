@@ -1,7 +1,7 @@
-using CdBurner.Core.OpticalLithography;
+using CdBurner.Lithography.Geometry;
 using Xunit;
 
-namespace CdBurner.Core.Tests.OpticalLithography;
+namespace CdBurner.Lithography.Tests.Geometry;
 
 /// <summary>
 /// <see cref="PolarPageLayout"/>: a 38–58 mm band of 1.5 mm pages with 0.2 mm gutters.

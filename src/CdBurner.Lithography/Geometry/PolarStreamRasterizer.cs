@@ -1,4 +1,4 @@
-namespace CdBurner.Core.OpticalLithography;
+namespace CdBurner.Lithography.Geometry;
 
 /// <summary>
 /// Walks along the track and reports, sample by sample, whether the page artwork has ink under the track.

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>CdBurner.Lithography</RootNamespace>
+    <AssemblyName>CdBurner.Lithography</AssemblyName>
+  </PropertyGroup>
+
+</Project>

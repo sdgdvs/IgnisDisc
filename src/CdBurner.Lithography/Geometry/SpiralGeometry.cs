@@ -1,4 +1,4 @@
-namespace CdBurner.Core.OpticalLithography;
+namespace CdBurner.Lithography.Geometry;
 
 /// <summary>
 /// Maps positions along the data spiral of an optical disc to physical positions on the disc surface.

@@ -1,8 +1,8 @@
-using CdBurner.Core.OpticalLithography;
+using CdBurner.Lithography.Geometry;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace CdBurner.Core.Tests.OpticalLithography;
+namespace CdBurner.Lithography.Tests.Geometry;
 
 /// <summary>
 /// <see cref="SpiralGeometry"/>: LBA / track length to radius and angle, for constant and cubic pitch models,

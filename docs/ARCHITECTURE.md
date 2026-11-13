@@ -21,6 +21,7 @@ graph TD
     Cli --> Hw
     Hw --> Core
     CoreTests["tests/CdBurner.Core.Tests"] --> Core
+    LithTests["tests/CdBurner.Lithography.Tests"] --> Lith["src/CdBurner.Lithography (headless)"]
     HwTests["tests/CdBurner.Hardware.Tests"] --> Hw
     HwTests --> Core
     IntTests["tests/CdBurner.Integration.Tests"] --> App
@@ -216,3 +217,27 @@ sequenceDiagram
     7. `Settings & Logs` (`SettingsViewModel`)
   - **Top Hardware Ribbon**: Recorder ComboBox, Refresh button, Eject/Close Tray buttons, Virtual Media quick-mount dropdown, Write Speed selector, and Burn Mode pills.
   - **Bottom Capacity & Status Bar**: Animated segmented capacity progress bar (`Green` $\rightarrow$ `Amber` $\rightarrow$ `Red Overburn`), exact byte/LBA counter, and active background task indicator.
+
+---
+
+## 8. Lithography Module (`src/CdBurner.Lithography/`)
+
+`CdBurner.Lithography` is a headless library (no WPF, no COM, no reference to Core or Hardware) for turning images
+into disc-surface patterns. It holds the pure geometry in `Geometry/` (namespace `CdBurner.Lithography.Geometry`):
+LBA and track length to radius and angle, polar page layout and a streaming rasterizer. Its tests live in
+`tests/CdBurner.Lithography.Tests`. It was split out of Core so that code ported from an upstream project stays in
+one assembly with a clear provenance boundary. Nothing in it touches a drive.
+
+### Porting rules for upstream code (M5)
+
+1. **Pinned upstream revision.** Port only from commit `619ec7505ac8955f35fe2f353ebda74b6ea90dda` of the upstream
+   repository. Moving the pin is a deliberate change of its own, recorded in the commit message.
+2. **Golden bytes first.** Before a ported routine is changed (renamed, restructured, optimized), capture its output
+   for fixed inputs as golden bytes in a test and commit that test. Later changes must keep the bytes identical.
+3. **Notices with the code.** The `THIRD-PARTY-NOTICES.md` entry (source URL, pinned SHA, license text, list of
+   ported files) lands in the same commit as the first ported file, never before and never after. Each ported file
+   also carries its origin and license in a header comment.
+4. **License compatibility.** The ported code's license must be compatible with GPL-3.0-or-later; check this before
+   porting, not after.
+5. **Separation.** Ported files stay under their own folder inside this project so the provenance boundary is visible
+   in the file tree. Clean-room code (such as `Geometry/`) never copies from upstream.

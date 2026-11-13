@@ -1,8 +1,8 @@
-using CdBurner.Core.OpticalLithography;
+using CdBurner.Lithography.Geometry;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace CdBurner.Core.Tests.OpticalLithography;
+namespace CdBurner.Lithography.Tests.Geometry;
 
 /// <summary>
 /// <see cref="PolarStreamRasterizer"/>: samples land on the right page, the amount of ink matches the page

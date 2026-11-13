@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace CdBurner.Core.OpticalLithography;
+namespace CdBurner.Lithography.Geometry;
 
 /// <summary>A point found on a page: which page, and where on it.</summary>
 /// <param name="Ring">Ring index, 0 = innermost.</param>
