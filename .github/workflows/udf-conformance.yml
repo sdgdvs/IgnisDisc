@@ -2,13 +2,15 @@ name: UDF conformance
 
 # Builds one image per UDF revision on Windows, then checks each one on Linux with udftools' udfinfo and the kernel's
 # own UDF driver (read-only loop mount), comparing every file with the source folder. Independent of IgnisDisc's
-# own reader, so it catches structures our tests would accept by mistake.
+# own reader, so it catches structures our tests would accept by mistake. A second Linux job checks the SHA256SUMS and
+# BLAKE3SUMS lists on a mounted image with sha256sum and b3sum, and that two builds are byte-identical.
 
 on:
   push:
     branches: [master]
     paths:
       - 'src/CdBurner.Core/Iso/**'
+      - 'src/CdBurner.Core/Utilities/Blake3Hasher.cs'
       - 'scripts/ci/make-udf-test-tree.py'
       - '.github/workflows/udf-conformance.yml'
   workflow_dispatch:
@@ -47,6 +49,20 @@ jobs:
         with:
           name: udf-images
           path: images/*.iso
+      # Separate images: the hash lists sit in the disc root, which the file-by-file diff above would flag as extra.
+      - name: Build the same image twice with hash lists
+        shell: pwsh
+        run: |
+          $cli = Get-ChildItem src/CdBurner.Cli/bin/Release -Recurse -Filter cdburner-cli.exe | Select-Object -First 1
+          New-Item -ItemType Directory manifest-images | Out-Null
+          foreach ($n in 'a', 'b') {
+            & $cli.FullName build-iso --input tree --output "manifest-images/hashed-$n.iso" --udf-rev 2.01 --label "HASHED" --fixed-time 1767225600 --sha256sums --blake3sums
+            if ($LASTEXITCODE -ne 0) { throw "hashed build $n failed" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest-images
+          path: manifest-images/*.iso
 
   check-on-linux:
     name: Check with udftools and the Linux kernel
@@ -86,3 +102,47 @@ jobs:
             echo "::endgroup::"
           done
           exit $fail
+
+  check-hash-lists-on-linux:
+    name: Check SHA256SUMS and BLAKE3SUMS on Linux
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifest-images
+          path: manifest-images
+      - name: Install udftools
+        run: sudo apt-get update -q && sudo apt-get install -y -q udftools
+      - name: Install b3sum from its official release
+        run: |
+          set -euo pipefail
+          curl -fsSL -o b3sum https://github.com/BLAKE3-team/BLAKE3/releases/latest/download/b3sum_linux_x64_bin
+          sudo install -m 0755 b3sum /usr/local/bin/b3sum
+          b3sum --version
+      - name: Two builds have the same SHA-256
+        run: |
+          set -euo pipefail
+          sha256sum manifest-images/hashed-a.iso manifest-images/hashed-b.iso
+          a=$(sha256sum manifest-images/hashed-a.iso | cut -d' ' -f1)
+          b=$(sha256sum manifest-images/hashed-b.iso | cut -d' ' -f1)
+          [ "$a" = "$b" ] || { echo "the two builds differ"; exit 1; }
+      - name: Check with udfinfo, sha256sum and b3sum
+        run: |
+          set -euo pipefail
+          img="$PWD/manifest-images/hashed-a.iso"
+          udfinfo "$img" 2> warnings.txt | tee info.txt
+          cat warnings.txt
+          [ ! -s warnings.txt ] || { echo "udfinfo printed warnings or errors"; exit 1; }
+          grep -q "^udfrev=2.01$" info.txt || { echo "udfinfo reports a different revision"; exit 1; }
+          sudo mkdir -p /mnt/udf
+          sudo mount -t udf -o ro,loop "$img" /mnt/udf
+          cd /mnt/udf
+          test -s SHA256SUMS || { echo "SHA256SUMS missing or empty"; exit 1; }
+          test -s BLAKE3SUMS || { echo "BLAKE3SUMS missing or empty"; exit 1; }
+          sha256sum -c SHA256SUMS
+          b3sum -c BLAKE3SUMS
+          cd "$OLDPWD"
+          sudo umount /mnt/udf
