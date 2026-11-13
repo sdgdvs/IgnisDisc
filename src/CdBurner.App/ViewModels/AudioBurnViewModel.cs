@@ -2290,6 +2290,10 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 {
                     formatProblem = $"'{RipCoverArtPath}' is not a JPEG, PNG, GIF or WebP image.";
                 }
+                else
+                {
+                    formatProblem = FlacEncoder.CoverArtSizeProblem(coverBytes.Length);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {

@@ -246,6 +246,12 @@ public static class FlacFileCodec
             picMs.Write(tags.CoverArtBytes);
 
             byte[] picArray = picMs.ToArray();
+            if (picArray.Length > FlacEncoder.MaxMetadataBlockLength)
+            {
+                // The length field is 24 bits: written anyway, it would wrap and leave a corrupt file.
+                throw new InvalidDataException(FlacEncoder.CoverArtSizeProblem(tags.CoverArtBytes.Length)
+                    ?? $"The FLAC picture block is {picArray.Length:N0} bytes; FLAC allows at most {FlacEncoder.MaxMetadataBlockLength:N0}.");
+            }
             Span<byte> picHeader = stackalloc byte[4];
             picHeader[0] = 0x86; // isLast (0x80) | blockType 6 (PICTURE)
             picHeader[1] = (byte)((picArray.Length >> 16) & 0xFF);

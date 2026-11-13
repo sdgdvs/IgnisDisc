@@ -35,6 +35,19 @@ public static class FlacEncoder
     /// <summary>FLAC metadata block lengths are 24-bit.</summary>
     public const int MaxMetadataBlockLength = 0xFF_FFFF;
 
+    /// <summary>
+    /// Largest cover image that fits in a FLAC PICTURE block: the block's 24-bit length also covers 32 bytes of fields
+    /// and the MIME type (at most "image/webp"), so 64 bytes are kept back.
+    /// </summary>
+    public const int MaxCoverArtBytes = MaxMetadataBlockLength - 64;
+
+    /// <summary>Why a cover image cannot be embedded, or null when it can. Checked before a rip starts.</summary>
+    public static string? CoverArtSizeProblem(int imageBytes) =>
+        imageBytes > MaxCoverArtBytes
+            ? $"The cover image is {imageBytes / (1024.0 * 1024.0):0.0} MB; the largest that fits in a FLAC file is " +
+              $"{MaxCoverArtBytes / (1024.0 * 1024.0):0.0} MB. Choose a smaller image."
+            : null;
+
     /// <summary>Identifies JPEG, PNG, GIF and WebP from their signatures, or null.</summary>
     public static string? DetectImageMimeType(ReadOnlySpan<byte> data)
     {

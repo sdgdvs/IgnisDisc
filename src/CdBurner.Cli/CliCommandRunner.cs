@@ -1811,6 +1811,10 @@ public static class CliCommandRunner
             coverBytes = await File.ReadAllBytesAsync(coverPath).ConfigureAwait(false);
             coverMime = FlacEncoder.DetectImageMimeType(coverBytes)
                 ?? throw new InvalidDataException($"'{coverPath}' is not a JPEG, PNG, GIF or WebP image.");
+            if (FlacEncoder.CoverArtSizeProblem(coverBytes.Length) is { } tooLarge)
+            {
+                throw new InvalidDataException(tooLarge); // before the disc is read, not after the rip
+            }
         }
 
         var options = new AudioRipOptions
