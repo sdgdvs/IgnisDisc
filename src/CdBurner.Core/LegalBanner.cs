@@ -10,7 +10,7 @@ public static class LegalBanner
     /// Line 1: Product name, version, copyright attribution, and canonical project URL.
     /// </summary>
     public const string Line1 =
-        "IgnisDisc v1.13 — Copyright (C) 2026 Tetherworks (https://ignisdisc.tetherworks.dev)";
+        "IgnisDisc v1.14 — Copyright (C) 2026 Tetherworks (https://ignisdisc.tetherworks.dev)";
 
     /// <summary>
     /// Line 2: GPLv3+ pointer, copyleft statement, and absolute no-warranty disclaimer.
@@ -22,12 +22,12 @@ public static class LegalBanner
     /// Complete 2-line Appropriate Legal Notice banner.
     /// </summary>
     public const string VersionNotice =
-        "IgnisDisc v1.13 — Copyright (C) 2026 Tetherworks (https://ignisdisc.tetherworks.dev)\n" +
+        "IgnisDisc v1.14 — Copyright (C) 2026 Tetherworks (https://ignisdisc.tetherworks.dev)\n" +
         "License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>. Free & open-source software; comes with ABSOLUTELY NO WARRANTY.";
 
     /// <summary>
     /// Engine identifier embedded in root properties of machine-readable JSON output payloads.
     /// </summary>
     public const string JsonEngine =
-        "IgnisDisc v1.13 (GPL-3.0-or-later, https://ignisdisc.tetherworks.dev)";
+        "IgnisDisc v1.14 (GPL-3.0-or-later, https://ignisdisc.tetherworks.dev)";
 }

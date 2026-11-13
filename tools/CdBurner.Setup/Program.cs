@@ -10,7 +10,7 @@ namespace CdBurner.Setup;
 internal static class Program
 {
     public const string AppTitle = "IgnisDisc Optical Studio";
-    public const string AppVersion = "1.13";
+    public const string AppVersion = "1.14";
     public const string Publisher = "tetherworks";
     public const string UninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\IgnisDisc";
     public const string LegacyUninstallRegKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CdBurner";
