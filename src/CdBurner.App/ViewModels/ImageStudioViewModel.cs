@@ -873,7 +873,7 @@ public class ImageStudioViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Select Disc Image to Open",
-            Filter = "All Supported Disc Images (*.iso;*.cue;*.bin;*.nrg;*.mdf;*.mds;*.ccd;*.img)|*.iso;*.cue;*.bin;*.nrg;*.mdf;*.mds;*.ccd;*.img|ISO Images (*.iso)|*.iso|CUE Sheets (*.cue)|*.cue|Legacy Images (*.nrg;*.mdf;*.mds;*.ccd;*.img)|*.nrg;*.mdf;*.mds;*.ccd;*.img|Raw Binary Images (*.bin)|*.bin|All Files (*.*)|*.*"
+            Filter = "All Supported Disc Images (*.iso;*.cue;*.bin;*.nrg;*.cdi;*.mdf;*.mds;*.ccd;*.img)|*.iso;*.cue;*.bin;*.nrg;*.cdi;*.mdf;*.mds;*.ccd;*.img|ISO Images (*.iso)|*.iso|CUE Sheets (*.cue)|*.cue|Legacy Images (*.nrg;*.cdi;*.mdf;*.mds;*.ccd;*.img)|*.nrg;*.cdi;*.mdf;*.mds;*.ccd;*.img|Raw Binary Images (*.bin)|*.bin|All Files (*.*)|*.*"
         };
 
         if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
@@ -1076,7 +1076,7 @@ public class ImageStudioViewModel : ObservableObject
                 var dlg = new OpenFileDialog
                 {
                     Title = "Select Disc Image to Queue",
-                    Filter = "Disc Images (*.iso;*.nrg;*.mdf;*.ccd;*.bin)|*.iso;*.nrg;*.mdf;*.ccd;*.bin|All Files (*.*)|*.*"
+                    Filter = "Disc Images (*.iso;*.nrg;*.cdi;*.mdf;*.ccd;*.bin)|*.iso;*.nrg;*.cdi;*.mdf;*.ccd;*.bin|All Files (*.*)|*.*"
                 };
                 if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.FileName))
                 {

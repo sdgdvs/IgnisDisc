@@ -43,7 +43,7 @@ public static class LegacyDiscImageConverter
     {
         if (string.IsNullOrWhiteSpace(filePath)) return false;
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext is ".nrg" or ".mdf" or ".mds" or ".ccd" or ".img";
+        return ext is ".nrg" or ".mdf" or ".mds" or ".ccd" or ".img" or ".cdi";
     }
 
     /// <summary>
@@ -63,6 +63,7 @@ public static class LegacyDiscImageConverter
             ".iso" => InspectIso(filePath),
             ".bin" => InspectRawBin(filePath),
             ".nrg" => InspectNrg(filePath),
+            ".cdi" => InspectDiscJuggler(filePath),
             ".ccd" => InspectCloneCdCcd(filePath),
             ".img" => InspectCloneCdImg(filePath),
             ".mds" => InspectAlcoholMds(filePath),
@@ -122,7 +123,7 @@ public static class LegacyDiscImageConverter
         }
 
         string ext = Path.GetExtension(sourcePath).ToLowerInvariant();
-        if (ext is not (".iso" or ".nrg" or ".mdf" or ".mds" or ".ccd" or ".img" or ".bin"))
+        if (ext is not (".iso" or ".nrg" or ".cdi" or ".mdf" or ".mds" or ".ccd" or ".img" or ".bin"))
         {
             throw new NotSupportedException($"Unsupported disc image extension '{ext}' for BIN/CUE conversion.");
         }
@@ -620,9 +621,185 @@ public static class LegacyDiscImageConverter
         File.WriteAllBytes(mdsFilePath, mdsBytes);
     }
 
+    /// <summary>
+    /// Creates a single-session, single-track DiscJuggler (.cdi) image for tests. Layout follows the open-source
+    /// cdirip reader (GPL-2.0, https://github.com/jozip/cdirip): track data first, then a descriptor block, then the
+    /// trailer (uint32 LE version, uint32 LE descriptor position). <paramref name="version"/> is 2, 3 or 35 (for 3.5).
+    /// <paramref name="sectorData"/> holds whole stored sectors of <paramref name="sectorSize"/> bytes (2048, 2336 or 2352).
+    /// </summary>
+    public static void CreateDiscJugglerFile(string cdiFilePath, ReadOnlySpan<byte> sectorData, int sectorSize, int version = 3, bool audio = false, int pregapSectors = 0)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cdiFilePath);
+        uint versionCode = version switch { 2 => CdiVersion2, 3 => CdiVersion3, 35 => CdiVersion35, _ => throw new ArgumentOutOfRangeException(nameof(version)) };
+        uint sizeCode = sectorSize switch { 2048 => 0u, SectorSize2336 => 1u, 2352 => 2u, _ => throw new ArgumentOutOfRangeException(nameof(sectorSize)) };
+        uint mode = audio ? 0u : (sectorSize == 2352 && sectorData.Length > 15 && sectorData[15] == 2 ? 2u : 1u);
+        uint userSectors = (uint)(sectorData.Length / sectorSize);
+
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        w.Write(sectorData.ToArray());
+        // Pregap sectors are stored in the track's data area ahead of the user sectors.
+        long headerPos = ms.Position;
+
+        w.Write((ushort)1); // sessions
+        w.Write((ushort)1); // tracks in session 1
+        w.Write(0u);        // extra-data flag (0 = none)
+        w.Write(CdiStartMark); w.Write(CdiStartMark);
+        w.Write(new byte[4]);
+        w.Write((byte)0);   // filename length
+        w.Write(new byte[11 + 4 + 4]);
+        w.Write(0u);        // 0x80000000 would add 8 bytes
+        w.Write(new byte[2]);
+        w.Write((uint)pregapSectors);
+        w.Write(userSectors - (uint)pregapSectors);
+        w.Write(new byte[6]);
+        w.Write(mode);
+        w.Write(new byte[12]);
+        w.Write(0u);        // start LBA
+        w.Write(userSectors);
+        w.Write(new byte[16]);
+        w.Write(sizeCode);
+        w.Write(new byte[29]);
+        if (version != 2)
+        {
+            w.Write(new byte[5]);
+            w.Write(0u);    // 0xFFFFFFFF would add 78 bytes
+        }
+
+        w.Write(new byte[12 + (version == 2 ? 0 : 1)]); // session trailer
+        long headerLen = ms.Position - headerPos;
+        w.Write(versionCode);
+        // v2 stores the descriptor position from the start of the file; v3/v3.5 store the distance from the end.
+        w.Write(version == 2 ? (uint)headerPos : (uint)(headerLen + 8));
+        string? dir = Path.GetDirectoryName(cdiFilePath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllBytes(cdiFilePath, ms.ToArray());
+    }
+
     #endregion
 
     #region Format Inspectors
+
+    private const uint CdiVersion2 = 0x80000004;
+    private const uint CdiVersion3 = 0x80000005;
+    private const uint CdiVersion35 = 0x80000006;
+    private static readonly byte[] CdiStartMark = { 0, 0, 1, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF };
+
+    /// <summary>
+    /// Reads a DiscJuggler .cdi (v2, v3, v3.5). Layout per the open-source cdirip reader (GPL-2.0,
+    /// https://github.com/jozip/cdirip), re-implemented here from its format description: the file ends with
+    /// uint32 LE version + uint32 LE descriptor position, track data is stored back to back from byte 0.
+    /// The first data track becomes the payload; an image whose tracks are all audio is flagged as audio.
+    /// </summary>
+    private static LegacyDiscImageInfo InspectDiscJuggler(string cdiPath)
+    {
+        using var fs = new FileStream(cdiPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        long fileLen = fs.Length;
+        if (fileLen < 8) throw new InvalidDataException("DiscJuggler image is too small to contain a trailer.");
+
+        using var r = new BinaryReader(fs);
+        fs.Position = fileLen - 8;
+        uint versionCode = r.ReadUInt32();
+        uint headerValue = r.ReadUInt32();
+        if (versionCode is not (CdiVersion2 or CdiVersion3 or CdiVersion35))
+            throw new InvalidDataException($"'{Path.GetFileName(cdiPath)}' is not a DiscJuggler image (unknown version 0x{versionCode:X8}).");
+        if (headerValue == 0) throw new InvalidDataException("DiscJuggler descriptor position is zero.");
+
+        long headerPos = versionCode == CdiVersion2 ? headerValue : fileLen - headerValue;
+        if (headerPos < 0 || headerPos >= fileLen - 8)
+            throw new InvalidDataException("DiscJuggler descriptor position is outside the file.");
+        string versionName = versionCode switch { CdiVersion2 => "2", CdiVersion3 => "3", _ => "3.5" };
+
+        void Skip(long n)
+        {
+            if (n < 0 || fs.Position + n > fileLen) throw new InvalidDataException("DiscJuggler descriptor is truncated.");
+            fs.Position += n;
+        }
+
+        fs.Position = headerPos;
+        int sessions = r.ReadUInt16();
+        if (sessions is < 1 or > 99) throw new InvalidDataException($"DiscJuggler image reports {sessions} sessions.");
+
+        long dataCursor = 0;
+        int trackCount = 0;
+        bool anyData = false;
+        long payloadOffset = 0, payloadLength = 0;
+        int sectorSize = OpticalConstants.DataSectorSize;
+        int dataSectors = 0;
+
+        for (int s = 0; s < sessions; s++)
+        {
+            int tracks = r.ReadUInt16();
+            for (int t = 0; t < tracks; t++)
+            {
+                if (r.ReadUInt32() != 0) Skip(8);
+                byte[] mark1 = r.ReadBytes(10);
+                byte[] mark2 = r.ReadBytes(10);
+                if (!mark1.AsSpan().SequenceEqual(CdiStartMark) || !mark2.AsSpan().SequenceEqual(CdiStartMark))
+                    throw new InvalidDataException("DiscJuggler track descriptor is corrupt (start marker mismatch).");
+                Skip(4);
+                int nameLen = r.ReadByte();
+                Skip(nameLen);
+                Skip(11 + 4 + 4);
+                if (r.ReadUInt32() == 0x80000000) Skip(8);
+                Skip(2);
+                uint pregap = r.ReadUInt32();
+                uint length = r.ReadUInt32();
+                Skip(6);
+                uint mode = r.ReadUInt32();
+                if (mode > 2) throw new InvalidDataException($"DiscJuggler track mode {mode} is not supported.");
+                Skip(12);
+                r.ReadUInt32(); // start LBA (unused: tracks are stored back to back)
+                uint totalLength = r.ReadUInt32();
+                Skip(16);
+                uint sizeCode = r.ReadUInt32();
+                int size = sizeCode switch
+                {
+                    0 => OpticalConstants.DataSectorSize,
+                    1 => SectorSize2336,
+                    2 => OpticalConstants.RawSectorSize,
+                    _ => throw new InvalidDataException($"DiscJuggler sector size code {sizeCode} is not supported.")
+                };
+                Skip(29);
+                if (versionCode != CdiVersion2)
+                {
+                    Skip(5);
+                    if (r.ReadUInt32() == 0xFFFFFFFF) Skip(78);
+                }
+
+                trackCount++;
+                if (mode != 0 && !anyData)
+                {
+                    anyData = true;
+                    payloadOffset = dataCursor + (long)pregap * size;
+                    sectorSize = size;
+                    dataSectors = checked((int)length);
+                    payloadLength = (long)length * size;
+                    if (payloadOffset + payloadLength > headerPos)
+                        throw new InvalidDataException("DiscJuggler track extends past the end of the data area.");
+                }
+
+                dataCursor += (long)totalLength * size;
+            }
+
+            // Session trailer: 4 + 8 bytes, plus 1 more from v3 onward (cdirip CDI_skip_next_session).
+            Skip(12 + (versionCode == CdiVersion2 ? 0 : 1));
+        }
+
+        if (trackCount == 0) throw new InvalidDataException("DiscJuggler image has no tracks.");
+
+        return new LegacyDiscImageInfo(
+            SourceFilePath: cdiPath,
+            BinaryPayloadPath: cdiPath,
+            FormatName: $"DiscJuggler v{versionName} (.cdi)",
+            PayloadOffsetBytes: payloadOffset,
+            PayloadLengthBytes: payloadLength,
+            SectorSizeBytes: sectorSize,
+            SectorCount: dataSectors,
+            IsRaw2352: sectorSize == OpticalConstants.RawSectorSize,
+            IsAudioDisc: !anyData,
+            TrackCount: trackCount);
+    }
 
     private static LegacyDiscImageInfo InspectIso(string isoPath)
     {

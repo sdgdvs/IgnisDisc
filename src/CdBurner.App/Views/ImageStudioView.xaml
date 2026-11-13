@@ -190,7 +190,7 @@
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <DockPanel Grid.Row="0" Margin="0,0,0,8">
-                                <TextBlock Text="Supported: ISO (.iso), CDRWIN (.cue + .bin/.flac/.wav), Nero (.nrg), Alcohol 120% (.mds/.mdf), CloneCD (.ccd/.img)"
+                                <TextBlock Text="Supported: ISO (.iso), CDRWIN (.cue + .bin/.flac/.wav), Nero (.nrg), DiscJuggler (.cdi), Alcohol 120% (.mds/.mdf), CloneCD (.ccd/.img)"
                                            FontSize="12"
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextSecondaryBrush}"

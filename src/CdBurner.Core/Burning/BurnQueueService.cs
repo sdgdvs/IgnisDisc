@@ -377,7 +377,7 @@ public class BurnQueueService
 
         reason = ext == ".cue"
             ? $"'{Path.GetFileName(imagePath)}' is a CUE sheet. The burn queue takes data images only; burn CUE sheets from the Burn Image tab."
-            : $"'{Path.GetFileName(imagePath)}' is not a supported image for the burn queue (.iso, .bin, .nrg, .mdf, .ccd, .img).";
+            : $"'{Path.GetFileName(imagePath)}' is not a supported image for the burn queue (.iso, .bin, .nrg, .cdi, .mdf, .ccd, .img).";
         return false;
     }
 }
