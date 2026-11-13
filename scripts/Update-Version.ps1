@@ -251,6 +251,8 @@ ManifestVersion: 1.6.0
             $loc = [regex]::Replace($loc, 'ReleaseNotesUrl:\s*https://github\.com/tether-works/IgnisDisc/releases/tag/v[^/\s\r\n]+', "ReleaseNotesUrl: https://github.com/tether-works/IgnisDisc/releases/tag/v$NewVersion")
             $loc = [regex]::Replace($loc, 'Publisher:\s*tetherWorks', "Publisher: tetherworks")
             $loc = [regex]::Replace($loc, 'License:\s*MIT', "License: GPL-3.0-or-later")
+            # Pin the licence link to the release's own tag, so the manifest never points at a newer licence text.
+            $loc = [regex]::Replace($loc, 'LicenseUrl:\s*https://github\.com/tether-works/IgnisDisc/blob/[^/\s]+/LICENSE', "LicenseUrl: https://github.com/tether-works/IgnisDisc/blob/v$NewVersion/LICENSE")
             Set-Content -Path (Join-Path $NewWingetDir "TetherWorks.IgnisDisc.locale.en-US.yaml") -Value $loc -Encoding UTF8
         }
 
