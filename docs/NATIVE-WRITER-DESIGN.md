@@ -86,7 +86,7 @@ is sent: on CD the flush closes a Track-at-Once track. The read-back check is `D
 FUA over every sector, compared with the image. A test write skips the close and must leave sector 0 unreadable. A
 disc that is not blank is never erased by the writer.
 
-**Adding a session (CD-R, CD-RW, DVD-R, DVD-RW, DVD+R left open; built 2026-11-12, simulator only so far):**
+**Adding a session (CD-R, CD-RW, DVD-R, DVD-RW, DVD+R left open; built 2026-11-12; simulator only so far, with one real attempt):**
 the image is built by `IsoUdfImageBuilder` from the disc's next writable address, with the last session's tree
 imported (`MultiSessionManager`), as for the Windows writer. Before anything is written the writer checks:
 `READ DISC INFORMATION` status 1 (appendable) with an empty last session (byte 2 bits 3–2 = 00b); `READ TRACK
@@ -100,6 +100,7 @@ format 0 as a second opinion, then `DataBurnService`'s FUA read-back from the se
 DVD+R, BD-R and overwritable discs are not appended to (the Windows writer adds the session, and says so). The
 simulator places the next session as the Orange Book does on CD (11,400 sectors after the first session's lead-out,
 6,900 after later ones) and as measured on DVD-R (first session at least to LBA 65,264, then 28,688 sectors).
+First real attempt (GP60NB50, Verbatim DVD-R, 2026-11-13): the invisible-track query (track FFh) is answered 5/24/00 on DVD-R, so the session was refused with nothing written; the writer now uses the track number from `READ DISC INFORMATION`. The drive's `READ TOC` also left a session out after the third session, so it is checked against the track count and tracks are placed by `READ TRACK INFORMATION`; later sessions measured 28,688 sectors after the first and 6,160 after later ones. No completed direct session on a real disc is recorded yet.
 
 **Audio CD, Session-at-Once with CD-Text:**
 
@@ -161,7 +162,7 @@ from the track's own stream (its INDEX 00 area). Track 1's first 150 sectors (be
 audio after them and before INDEX 01 is hidden audio that players reach by rewinding. From a single-file `.cue`
 album the bytes on the disc stay in file order; only the track marks move.
 
-**Data DVD** (built 2026-11-11, simulator only so far). Sequences from libburn's cookbook (libburnia,
+**Data DVD** (built 2026-11-11; run on real discs for DVD-R, DVD+R and DVD+RW, see the results table; DVD-RW only in the simulator). Sequences from libburn's cookbook (libburnia,
 `doc/cookbook.txt`); `SET STREAMING` layout from libburn's `mmc.c`. Every case starts with `GET CONFIGURATION`
 (current profile), `READ DISC INFORMATION` (status must be blank) and `READ TRACK INFORMATION` track 1 (next writable
 address must be 0, free blocks must hold the image). The image is padded with zeros to whole 16-sector (32 KiB) ECC
@@ -186,7 +187,7 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   (2026-11-13): GOOD at once, then 2/04/07 for 79 s while it finalizes.
 - A drive that answers 2/04/xx to a close command is waited out and asked again (up to three times), as growisofs
   does for some drives.
-- *DVD+RW* (built 2026-11-11, simulator only so far; `NativeTaoDataWriter.DvdPlusRw.cs`). No mode page, no test
+- *DVD+RW* (built 2026-11-11; real runs 2026-11-11 on a used and a new Verbatim disc, see the results table; `NativeTaoDataWriter.DvdPlusRw.cs`). No mode page, no test
   write, nothing to reserve. `READ DISC INFORMATION` byte 7 bits 0–1 give the background format status. A disc never
   formatted (0) gets `FORMAT UNIT` (CDB byte 1 0x11; list: byte 1 FOV | Immed = 0x82, byte 3 = 8, blocks
   0xFFFFFFFF, byte 8 = 26h << 2; libburn's `mmc_format_unit`) and is written while the drive formats in the
@@ -357,7 +358,7 @@ Results:
 | 2026-11-11 (night) | GP60NB50 | the mixed-mode CD-R copy (CD-Text checked) | `rip --raw` of the disc, then `verify --cue` of the disc against the ripped cue (read-only) | First rip: 37,058 sectors in 60 s, all identical to the source `.bin` (Mode 1 sectors with the drive's EDC/ECC, gaps, audio), but 2 sectors short: it stopped at Windows' used size, not the lead-out at 37,060, and cut the end of track 3. Its cue had no album TITLE/PERFORMER and no INDEX 00 for track 2. Fixed: a raw rip runs to the lead-out in the table of contents, the cue gets the album text, and the cue import gives track 2's pre-gap (audio sectors at the end of track 1's range) back to track 2. Second rip: 37,060 sectors, byte-identical to the source `.bin`; `verify --cue` against it passed (CD-Text, the data track's 1,493 sectors, 20,825,196 samples), so `burn-audio --native` takes the rip back as the same disc. |
 | 2026-11-13 | GP60NB50 | blank Verbatim DVD+R (2,295,104 sectors free) | Data, real write, closed disc, 198 MB (102,523 sectors + 5 padding, 479 files), 8x setting | No mode page, no test write. GET PERFORMANCE offered 8x and 4x; SET STREAMING 8x accepted. The first WRITE took 23 s (the drive's start-up), then 3,204 WRITEs of 64 KiB, about 13.7 ms each (2.2x average over the data). SYNCHRONIZE CACHE 2.1 s; CLOSE TRACK (001b) accepted; **finalize 101b (`5B 01 05`) accepted**, then 2/04/07 for 79 s; no 010b fallback was sent. TOC: one data track, lead-out at 102,528; READ DISC INFORMATION status 2 (complete). Read-back of every sector 45 s: passed. Independent check: Windows mounted it as UDF and all 479 files were SHA-256 identical to the source. 153 s for the writer. |
 
-Media on hand: CD-RW, CD-R, DVD-R and DVD+RW (Verbatim). Ordered: DVD+R, DVD+R DL, BD-R, BD-RE and M-DISC BD-R, a Blu-ray writer (LG BP50NB40) and a second DVD writer (Lite-On iHAS124). No DVD-RW, DVD-RAM, BD-R DL or BDXL yet.
+Media on hand: CD-RW, CD-R, DVD-R, DVD+RW and DVD+R (Verbatim). Ordered: DVD+R DL, BD-R, BD-RE and M-DISC BD-R, a Blu-ray writer (LG BP50NB40) and a second DVD writer (Lite-On iHAS124). No DVD-RW, DVD-RAM, BD-R DL or BDXL yet.
 
 The GP60NB50 has a spring-loaded slim tray that cannot close itself: automated runs never eject it, and the owner
 swaps discs by hand. Drives added later get a row here with their probe result.
