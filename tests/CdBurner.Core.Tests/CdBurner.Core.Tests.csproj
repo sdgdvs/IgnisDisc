@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <None Include="Fixtures\Flac\*.flac" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\Health\*.svg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

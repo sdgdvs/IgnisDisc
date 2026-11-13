@@ -1601,6 +1601,84 @@ public sealed class CliIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task ArchiveBurn_WritesNoHealthCertificate_UnlessAskedTo()
+    {
+        var (discFolder, _) = await StageOneArchiveDiscAsync("archive_no_cert");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-burn", "--drive", "VDRV-01", "--disc", discFolder, "--json" }, outText, errText, _deviceService, _burnEngine);
+
+        Assert.True(code == 0, errText.ToString());
+        using var doc = ParseJsonOutput(outText);
+        Assert.False(doc.RootElement.TryGetProperty("healthCertificate", out _)); // off by default: nothing reported, nothing written
+        string staged = Path.GetDirectoryName(discFolder)!;
+        Assert.Empty(Directory.GetFiles(staged, "*HEALTH*"));
+    }
+
+    [Fact]
+    public async Task ArchiveBurn_HealthCertificate_WritesJsonAndSvgNextToTheDiscFolder()
+    {
+        var (discFolder, setId) = await StageOneArchiveDiscAsync("archive_cert");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-burn", "--drive", "VDRV-01", "--disc", discFolder, "--health-certificate", "--json" },
+            outText, errText, _deviceService, _burnEngine);
+
+        Assert.True(code == 0, errText.ToString());
+        using var doc = ParseJsonOutput(outText);
+        string jsonPath = doc.RootElement.GetProperty("healthCertificate").GetString()!;
+        string staged = Path.GetDirectoryName(discFolder)!;
+        Assert.Equal(Path.Combine(staged, "disc01.HEALTH.json"), jsonPath);
+        Assert.True(File.Exists(Path.Combine(staged, "disc01.HEALTH.svg")));
+        Assert.False(Directory.Exists(Path.Combine(discFolder, "HEALTH"))); // nothing added to the disc folder itself
+
+        var cert = CdBurner.Core.Verification.DiscHealthCertificate.Load(jsonPath);
+        Assert.Equal(setId, cert.SetId);
+        Assert.Equal(1, cert.DiscNumber);
+        Assert.Equal(doc.RootElement.GetProperty("sectorsWritten").GetInt32(), cert.SectorsWritten);
+        Assert.Equal(doc.RootElement.GetProperty("verified").GetBoolean(), cert.Verified);
+        Assert.Null(cert.Scan); // a virtual drive cannot be read the way a real CD is: the certificate says so
+        Assert.Contains("no check-disc counts", File.ReadAllText(Path.Combine(staged, "disc01.HEALTH.svg")));
+    }
+
+    [Fact]
+    public async Task ArchiveBurn_HealthCertificate_IsRefusedForATestWrite()
+    {
+        var (discFolder, _) = await StageOneArchiveDiscAsync("archive_cert_test");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-burn", "--drive", "VDRV-01", "--disc", discFolder, "--native", "--test-write", "--health-certificate" },
+            outText, errText, _deviceService, _burnEngine);
+
+        Assert.NotEqual(0, code);
+        Assert.Contains("--health-certificate", errText.ToString());
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(discFolder)!, "*HEALTH*"));
+    }
+
+    [Fact]
+    public async Task CheckDisc_Compare_RejectsAFileThatIsNotACertificate()
+    {
+        string bad = Path.Combine(_tempDir, "not-a-certificate.json");
+        await File.WriteAllTextAsync(bad, "{\"hello\":1}");
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "check-disc", "--drive", "VDRV-01", "--compare", bad }, outText, errText, _deviceService, _burnEngine);
+
+        Assert.NotEqual(0, code);
+        Assert.Contains("--compare", errText.ToString());
+    }
+
+    [Fact]
     public async Task ArchiveBurn_Native_HandsADualLayerBdRToTheWindowsWriter_AndSaysWhy()
     {
         var (discFolder, _) = await StageOneArchiveDiscAsync("archive_fallback");

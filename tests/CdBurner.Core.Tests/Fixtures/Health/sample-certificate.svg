@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="monospace" font-size="11">
+<rect width="720" height="380" fill="#ffffff"/>
+<text x="56" y="16" font-size="13" fill="#111111">abc123def456 disc 2: read-back passed</text>
+<text x="56" y="30" fill="#555555">2026-11-13 UTC, TEST DRIVE X1, media 97:26.66 (Example Media)</text>
+<text x="56" y="36" fill="#333333">Write speed (x) along the disc (%)</text>
+<rect x="56" y="40" width="644" height="120" fill="none" stroke="#999999"/>
+<text x="4" y="44" fill="#555555">10x</text>
+<text x="4" y="160" fill="#555555">0x</text>
+<polyline fill="none" stroke="#c2410c" stroke-width="1.5" points="56,112 378,64 700,40"/>
+<text x="56" y="216" fill="#333333">Problem sectors per minute of the disc</text>
+<rect x="56" y="220" width="644" height="120" fill="none" stroke="#999999"/>
+<text x="4" y="224" fill="#555555">2</text>
+<text x="4" y="340" fill="#555555">0</text>
+<rect x="217" y="220" width="160" height="120" fill="#b91c1c"/>
+<rect x="539" y="280" width="160" height="60" fill="#b91c1c"/>
+<text x="56" y="356" fill="#333333">Weak: 3 flagged, 0 unreadable of 4000 sectors; minute 0 to 3</text>
+</svg>

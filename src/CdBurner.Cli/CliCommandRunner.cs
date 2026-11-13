@@ -1330,6 +1330,22 @@ public static class CliCommandRunner
     private static int HandleCheckDisc(CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService)
     {
         string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        DiscHealthCertificate? certificate = null;
+        if (cmd.GetOption("compare") is { } certificatePath)
+        {
+            try
+            {
+                certificate = DiscHealthCertificate.Load(certificatePath);
+            }
+            catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
+            {
+                throw new CommandLineException($"--compare: {ex.Message}");
+            }
+            if (certificate.Scan == null)
+            {
+                throw new CommandLineException("--compare: that certificate has no check-disc counts (the disc could not be read after its burn).");
+            }
+        }
         var recorder = FindRecorder(deviceService, driveId);
         if (recorder.IsVirtual || string.IsNullOrWhiteSpace(recorder.VolumePath))
         {
@@ -1351,12 +1367,23 @@ public static class CliCommandRunner
             });
         }
 
+        var comparison = certificate?.Compare(report);
         if (cmd.IsJson)
         {
             WriteJsonResult(stdout, new
             {
                 success = true,
                 driveId = recorder.UniqueId,
+                comparison = comparison == null ? null : new
+                {
+                    verdictBefore = comparison.VerdictBefore,
+                    verdictAfter = comparison.VerdictAfter,
+                    problemsBefore = comparison.ProblemsBefore,
+                    problemsAfter = comparison.ProblemsAfter,
+                    sameLength = comparison.SameLength,
+                    worse = comparison.Worse,
+                    changes = comparison.Changes.Select(c => new { minute = c.Minute, before = c.Before, after = c.After })
+                },
                 verdict = report.Verdict.ToString(),
                 summary = report.Describe(),
                 sectorsRead = report.TotalSectors,
@@ -1382,6 +1409,10 @@ public static class CliCommandRunner
             stdout.WriteLine("  By minute of the disc: " + string.Join(" ", report.ProblemsPerMinute.Select((n, m) => n == 0 ? "." : $"{m}:{n}")));
         }
         stdout.WriteLine($"  Took {report.Elapsed.TotalSeconds:F0} s.");
+        if (comparison != null)
+        {
+            foreach (string line in comparison.Describe()) stdout.WriteLine(line);
+        }
         return 0;
     }
 
@@ -2273,10 +2304,45 @@ public static class CliCommandRunner
             IncludeUdf: true,
             BootConfiguration: null);
 
+        bool healthCertificate = cmd.HasFlag("health-certificate");
+        if (healthCertificate && testWrite)
+        {
+            throw new CommandLineException("--health-certificate describes a finished disc: it cannot go with --test-write.");
+        }
+        string? mediaId = healthCertificate ? recorder.WithManufacturerId(mediaStatus).MediaManufacturerId : null;
+
         var phases = new PhaseTimingProgress(cmd.IsJson ? null : stdout);
+        var curve = new TransferCurveRecorder(phases);
         var burnService = new DataBurnService(nativeEngine ?? burnEngine);
-        var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions, phases).ConfigureAwait(false);
+        var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions, curve).ConfigureAwait(false);
         phases.Complete();
+
+        string? certificateJson = null;
+        string? certificateError = null;
+        if (healthCertificate && result.Success)
+        {
+            try
+            {
+                var scan = TryScanAfterBurn(recorder, mediaStatus.MediaType, cmd.IsJson ? null : stdout);
+                var now = DateTime.UtcNow;
+                var certificate = new DiscHealthCertificate(
+                    DiscHealthCertificate.CurrentSchemaVersion,
+                    new DateTimeOffset(now.Ticks - now.Ticks % TimeSpan.TicksPerSecond, TimeSpan.Zero),
+                    index.SetId, index.DiscNumber, label,
+                    $"{recorder.VendorId} {recorder.ProductId}".Trim(), mediaStatus.MediaType.ToString(), mediaId,
+                    result.SectorsWritten, Math.Round(result.AverageSpeedMultiplier, 2), result.Verified, result.VerificationNote,
+                    curve.Curve, scan == null ? null : DiscHealthCertificate.ScanFrom(scan));
+                string parent = Path.GetDirectoryName(Path.GetFullPath(discFolder).TrimEnd('\\', '/')) ?? ".";
+                string stem = $"disc{index.DiscNumber:D2}";
+                certificateJson = Path.Combine(parent, $"{stem}.{DiscHealthCertificate.JsonFileSuffix}");
+                certificate.Save(certificateJson, Path.Combine(parent, $"{stem}.{DiscHealthCertificate.SvgFileSuffix}"));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                certificateJson = null;
+                certificateError = ex.Message;
+            }
+        }
 
         if (cmd.IsJson)
         {
@@ -2284,6 +2350,8 @@ public static class CliCommandRunner
             {
                 success = result.Success,
                 driveId = recorder.UniqueId,
+                healthCertificate = certificateJson,
+                healthCertificateError = certificateError,
                 discFolder = Path.GetFullPath(discFolder),
                 setId = index.SetId,
                 discNumber = index.DiscNumber,
@@ -2311,6 +2379,8 @@ public static class CliCommandRunner
             if (result.Warning != null) stdout.WriteLine($"  Warning:        {result.Warning}");
             WriteNativeDataSummary(stdout, nativeEngine);
             phases.WriteSummary(stdout);
+            if (certificateJson != null) stdout.WriteLine($"  Health certificate: {certificateJson} (and the .svg chart next to it)");
+            if (certificateError != null) stdout.WriteLine($"  Health certificate not written: {certificateError}");
             if (index.DiscNumber < index.DiscCount)
             {
                 stdout.WriteLine($"  Next: insert a blank disc and burn disc{index.DiscNumber + 1:D2} the same way.");
@@ -2322,6 +2392,29 @@ public static class CliCommandRunner
         WriteNativeDataSummary(stderr, nativeEngine);
         phases.WriteSummary(stderr);
         return 1;
+    }
+
+    /// <summary>
+    /// Reads a freshly burned CD once for the health certificate. Null for a virtual drive, a disc that is not a CD,
+    /// or a drive that cannot be read this way: the certificate then has no per-minute counts, and says so.
+    /// </summary>
+    private static DiscHealthReport? TryScanAfterBurn(IDiscRecorderBackend recorder, DiscMediaType mediaType, TextWriter? progressOut)
+    {
+        if (recorder.IsVirtual || string.IsNullOrWhiteSpace(recorder.VolumePath) || !mediaType.IsCd())
+        {
+            return null;
+        }
+        try
+        {
+            using var transport = Win32ScsiTransport.Open(recorder.VolumePath, FileAccess.ReadWrite);
+            progressOut?.WriteLine("  Reading the disc once for the health certificate...");
+            return new DiscHealthScanner(transport).Scan();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            progressOut?.WriteLine($"  The disc could not be read for the certificate: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>
@@ -2922,15 +3015,17 @@ public static class CliCommandRunner
         stdout.WriteLine("  copy-disc --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]] [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>] [--json]");
         stdout.WriteLine("      Copies a disc, with one drive or two. With one drive (or for each further copy) the tray opens and the copy waits for a blank disc.");
         stdout.WriteLine("      Audio is read with error checks; a copy stops before writing if sectors still read wrong, unless --allow-suspect. --native copies a mixed-mode CD's data track too.");
-        stdout.WriteLine("  check-disc --drive <id> [--json]");
+        stdout.WriteLine("  check-disc --drive <id> [--compare <discNN.HEALTH.json>] [--json]");
         stdout.WriteLine("      Reads a CD once with C2 error pointers and says where it is weak (where a player may skip). Read-only.");
+        stdout.WriteLine("      --compare sets the result against a health certificate and lists the minutes that changed.");
         stdout.WriteLine("  detect-offset --drive <id> [--json]");
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
         stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--keep-folders | --order size|path] [--json]");
         stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data (fills free space unless --no-fill).");
         stdout.WriteLine("      Files are packed largest first into the first disc with room (--order size, the default); --keep-folders keeps a folder whole when it fits on one disc;");
         stdout.WriteLine("      --order path fills discs in path order. Every disc also gets CATALOG.JSON and INDEX.HTML listing the whole set.");
-        stdout.WriteLine("  archive-burn --drive <id> --disc <staged disc folder> [--speed <X|max>] [--no-verify | --strict-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
+        stdout.WriteLine("  archive-burn --drive <id> --disc <staged disc folder> [--speed <X|max>] [--no-verify | --strict-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--health-certificate] [--json]");
+        stdout.WriteLine("      --health-certificate (off by default) writes discNN.HEALTH.json and .svg next to the disc folder: read-back result, write-speed curve, drive, media ID, date and, for a CD, one read-health pass.");
         stdout.WriteLine("      Burns one staged archive disc (ISO 9660 + Joliet + UDF, closed). With --native, discs the direct writer does not cover go to the Windows writer, and the output says why.");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
         stdout.WriteLine("  recover (--drive <id> | --image <file.iso>) --out <folder> [--retries N] [--keep-image] [--json]");
