@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using CdBurner.Core.Audio;
+using CdBurner.Core.DvdVideo;
 using CdBurner.Core.Primitives;
 using CdBurner.Hardware.Interop;
 
@@ -16,6 +17,22 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
     private static readonly object InitLock = new();
     private static bool _mfInitialized;
     private bool _disposed;
+    private readonly Func<string?> _resolveFfmpeg;
+
+    /// <param name="customFfmpegPath">Optional ffmpeg.exe chosen in Settings; the usual install locations and PATH are searched too.</param>
+    public MediaFoundationAudioDecoder(string? customFfmpegPath = null)
+    {
+        string? custom = string.IsNullOrWhiteSpace(customFfmpegPath) ? null : customFfmpegPath;
+        _resolveFfmpeg = () => FfmpegLocator.FindFfmpegExecutable(custom);
+    }
+
+    /// <summary>Uses <paramref name="resolveFfmpeg"/> to find ffmpeg.exe (returns null when it is not installed).</summary>
+    public MediaFoundationAudioDecoder(Func<string?> resolveFfmpeg)
+    {
+        _resolveFfmpeg = resolveFfmpeg ?? throw new ArgumentNullException(nameof(resolveFfmpeg));
+    }
+
+    private bool FfmpegAvailable => _resolveFfmpeg() != null;
 
     /// <summary>
     /// Ensures Windows Media Foundation platform is initialized for this process.
@@ -81,7 +98,76 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             }
         }
 
+        if (FfmpegAudioDecoder.HandlesExtension(filePath))
+        {
+            var exact = GaplessStreamInfo.TryRead(filePath);
+            bool isMp3 = string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase);
+            if (exact is { HasExactLength: true } && exact.Codec != GaplessCodec.Mp3)
+            {
+                return ProbeFromHeader(filePath, exact);
+            }
+
+            if (exact is { HasExactLength: true } && isMp3 && FfmpegAvailable)
+            {
+                // The length of the music, not of the decoded frames, so it matches what the ffmpeg decode returns.
+                var viaMf = ProbeViaMediaFoundation(filePath);
+                long frames = RedBookFramesFor(exact);
+                return viaMf with
+                {
+                    Duration = TimeSpan.FromSeconds((double)exact.TrimmedSamples / exact.SampleRate),
+                    TotalRedBookBytes = frames * OpticalConstants.CdAudioBytesPerSample
+                };
+            }
+
+            if (exact is not null && exact.Codec != GaplessCodec.Mp3)
+            {
+                throw new InvalidDataException($"'{Path.GetFileName(filePath)}' has no readable length in its headers.");
+            }
+        }
+
         return ProbeViaMediaFoundation(filePath);
+    }
+
+    private static long RedBookFramesFor(GaplessStreamInfo info) =>
+        info.SampleRate == OpticalConstants.CdAudioSampleRate
+            ? info.TrimmedSamples
+            : RedBookPcmConverter.ExpectedOutputFrames(info.TrimmedSamples, info.SampleRate);
+
+    private static AudioFormatMetadata ProbeFromHeader(string filePath, GaplessStreamInfo info)
+    {
+        var c = info.Comments;
+        string? Get(string key) => c != null && c.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) ? v : null;
+        int? Number(string key)
+        {
+            string? raw = Get(key);
+            if (raw is null) return null;
+            int slash = raw.IndexOf('/');
+            return int.TryParse(slash > 0 ? raw[..slash] : raw, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out int n) && n > 0 ? n : null;
+        }
+
+        long frames = RedBookFramesFor(info);
+        return new AudioFormatMetadata
+        {
+            FilePath = filePath,
+            FormatName = info.Codec == GaplessCodec.Opus ? "Opus" : "Ogg Vorbis",
+            Channels = info.Channels,
+            SampleRate = info.SampleRate,
+            BitsPerSample = 16,
+            Duration = TimeSpan.FromSeconds((double)info.TrimmedSamples / info.SampleRate),
+            TotalPcmBytes = info.TrimmedSamples * info.Channels * 2,
+            TotalRedBookBytes = frames * OpticalConstants.CdAudioBytesPerSample,
+            Title = Get("TITLE"),
+            Artist = Get("ARTIST"),
+            Album = Get("ALBUM"),
+            AlbumArtist = Get("ALBUMARTIST"),
+            Composer = Get("COMPOSER"),
+            Songwriter = Get("LYRICIST"),
+            Isrc = Get("ISRC"),
+            TrackNumber = Number("TRACKNUMBER"),
+            TrackTotal = Number("TRACKTOTAL") ?? Number("TOTALTRACKS"),
+            Date = Get("DATE")
+        };
     }
 
     /// <summary>
@@ -122,6 +208,35 @@ public class MediaFoundationAudioDecoder : IAudioDecoder, IDisposable
             {
                 // Fall back to Media Foundation source reader if needed
             }
+        }
+
+        if (FfmpegAudioDecoder.HandlesExtension(filePath))
+        {
+            string? ffmpeg = _resolveFfmpeg();
+            if (ffmpeg != null)
+            {
+                byte[] pcm = FfmpegAudioDecoder.DecodeToRedBookPcm(filePath, ffmpeg);
+                return new MemoryStream(pcm, 0, pcm.Length, writable: false, publiclyVisible: true);
+            }
+
+            // Without ffmpeg only MP3 (and Ogg when Windows has the Web Media Extensions) can be decoded.
+            bool isMp3 = string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase);
+            if (isMp3)
+            {
+                return OpenRedBookPcmStreamViaMediaFoundation(filePath);
+            }
+            if (!string.Equals(ext, ".opus", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    return OpenRedBookPcmStreamViaMediaFoundation(filePath);
+                }
+                catch (Exception ex) when (ex is COMException or InvalidDataException)
+                {
+                    // Fall through to the message that says how to get a decoder.
+                }
+            }
+            throw new FfmpegNotInstalledException(filePath);
         }
 
         return OpenRedBookPcmStreamViaMediaFoundation(filePath);

@@ -705,7 +705,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     {
         _deviceService = deviceService ?? new DiscDeviceManager(enablePhysicalEnumeration: false);
         _burnEngine = burnEngine ?? new VirtualBurnEngine();
-        _audioDecoder = audioDecoder ?? new MediaFoundationAudioDecoder();
+        _audioDecoder = audioDecoder ?? new MediaFoundationAudioDecoder(settingsService?.CurrentSettings.FfmpegExecutablePath);
         _audioBurnService = new AudioCdBurnService(_burnEngine, _audioDecoder);
         _ripperService = new AudioCdRipperService();
         _settingsService = settingsService;
@@ -787,7 +787,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
     private static readonly HashSet<string> SupportedAudioExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".flac", ".fla", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".wma", ".m4p", ".raw", ".pcm"
+        ".flac", ".fla", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".m4p", ".raw", ".pcm"
     };
 
     private static List<string> ExpandAudioPaths(IEnumerable<string> rawPaths)
@@ -1406,7 +1406,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         var dlg = new OpenFileDialog
         {
             Title = "Add Audio Tracks, Playlists, or CUE Sheets to Audio CD Compilation",
-            Filter = "Supported Audio, Playlists & CUE (*.flac;*.wav;*.mp3;*.m4a;*.aac;*.ogg;*.wma;*.cue;*.m3u;*.m3u8;*.pls)|*.flac;*.fla;*.wav;*.mp3;*.m4a;*.aac;*.ogg;*.wma;*.cue;*.m3u;*.m3u8;*.pls|FLAC Lossless Audio (*.flac;*.fla)|*.flac;*.fla|WAV Audio (*.wav)|*.wav|MP3 Audio (*.mp3)|*.mp3|Playlists (*.m3u;*.m3u8;*.pls)|*.m3u;*.m3u8;*.pls|CUE Sheet (*.cue)|*.cue|All Files (*.*)|*.*",
+            Filter = "Supported Audio, Playlists & CUE (*.flac;*.wav;*.mp3;*.m4a;*.aac;*.ogg;*.opus;*.wma;*.cue;*.m3u;*.m3u8;*.pls)|*.flac;*.fla;*.wav;*.mp3;*.m4a;*.aac;*.ogg;*.opus;*.wma;*.cue;*.m3u;*.m3u8;*.pls|FLAC Lossless Audio (*.flac;*.fla)|*.flac;*.fla|WAV Audio (*.wav)|*.wav|MP3 Audio (*.mp3)|*.mp3|Playlists (*.m3u;*.m3u8;*.pls)|*.m3u;*.m3u8;*.pls|CUE Sheet (*.cue)|*.cue|All Files (*.*)|*.*",
             Multiselect = true
         };
 
