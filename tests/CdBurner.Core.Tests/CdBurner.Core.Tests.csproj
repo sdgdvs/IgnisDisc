@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Fixtures\Flac\*.flac" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\CdBurner.Core\CdBurner.Core.csproj" />
   </ItemGroup>
 
