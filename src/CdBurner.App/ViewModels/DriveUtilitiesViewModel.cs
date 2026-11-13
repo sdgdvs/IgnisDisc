@@ -421,7 +421,7 @@ public class DriveUtilitiesViewModel : ObservableObject
 
         try
         {
-            var progress = new Progress<BurnProgressSnapshot>(snap =>
+            var progress = new ClosableProgress<BurnProgressSnapshot>(snap =>
             {
                 OperationProgress = snap.ProgressPercentage;
                 if (!string.IsNullOrWhiteSpace(snap.CurrentActionDescription))
@@ -431,6 +431,7 @@ public class DriveUtilitiesViewModel : ObservableObject
             });
 
             var result = await _eraseService.EraseAsync(targetRecorder, IsFullEraseSelected, progress, ct);
+            progress.Close(); // a late progress report must not overwrite the final status line
             StatusMessage = result.Success ? "Erase operation completed successfully." : $"Erase failed: {result.ErrorMessage}";
             MediaDetails = targetRecorder.WithManufacturerId(targetRecorder.QueryMediaStatus());
             return result;
@@ -519,7 +520,7 @@ public class DriveUtilitiesViewModel : ObservableObject
                 ScanBlocks.Add(block);
             });
 
-            var snapProgress = new Progress<BurnProgressSnapshot>(snap =>
+            var snapProgress = new ClosableProgress<BurnProgressSnapshot>(snap =>
             {
                 OperationProgress = snap.ProgressPercentage;
                 if (!string.IsNullOrWhiteSpace(snap.CurrentActionDescription))
@@ -535,6 +536,7 @@ public class DriveUtilitiesViewModel : ObservableObject
             };
 
             var report = await _scanService.ScanAsync(targetRecorder, options, snapProgress, ct);
+            snapProgress.Close(); // a late progress report must not overwrite the final status line
             LatestScanReport = report;
             OperationProgress = 100.0;
             StatusMessage = $"Surface scan finished: {report.TotalSectorsScanned:N0} sectors, {report.GoodBlocks} good, {report.SlowBlocks} slow, {report.DamagedBlocks} damaged.";

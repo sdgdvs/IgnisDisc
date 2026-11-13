@@ -1833,7 +1833,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             StopPreview();
             var compilation = BuildCurrentCompilation();
 
-            var progress = new Progress<BurnProgressSnapshot>(p =>
+            var progress = new ClosableProgress<BurnProgressSnapshot>(p =>
             {
                 if (!_isBusy) return; // Prevent stale background progress from overwriting final status
                 if (p.TotalLba > 0)
@@ -1896,11 +1896,13 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 }
                 else
                 {
+                    progress.Close();
                     StatusMessage = $"Burn not started: {burnResult.ErrorMessage}";
                     LastBurnResult = burnResult;
                     return burnResult;
                 }
             }
+            progress.Close(); // a late progress report must not overwrite the final status line
             LastBurnResult = burnResult;
             LastDirectBurnResult = directEngine?.LastResult;
             LastDirectBurnLogPath = directEngine?.LastLogPath;
@@ -2314,7 +2316,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
         try
         {
-            var progress = new Progress<BurnProgressSnapshot>(p =>
+            var progress = new ClosableProgress<BurnProgressSnapshot>(p =>
             {
                 if (!_isBusy) return;
                 if (p.TotalLba > 0)
@@ -2376,6 +2378,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             };
 
             var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, activeToken);
+            progress.Close(); // a late progress report must not overwrite the final status line
             LastRipResult = ripResult;
 
             string? conversionNote = null;

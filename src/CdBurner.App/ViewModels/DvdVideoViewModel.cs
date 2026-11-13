@@ -1185,7 +1185,7 @@ public class DvdVideoViewModel : ObservableObject
             LastDirectBurnEngine = directEngine;
             LastLayerBreak = null;
             var burnService = new DataBurnService(directEngine ?? _burnEngine);
-            var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
+            var progressHandler = new ClosableProgress<BurnProgressSnapshot>(snap =>
             {
                 if (snap.TotalLba > 0)
                 {
@@ -1205,6 +1205,7 @@ public class DvdVideoViewModel : ObservableObject
             var result = directEngine != null && IsDualLayerRequired
                 ? await BurnDualLayerOnCellBoundaryAsync(burnService, targetRecorder, root, burnOptions, buildOptions, progressHandler, cts.Token)
                 : await burnService.BurnCompilationAsync(targetRecorder, root, burnOptions, buildOptions, progressHandler, cts.Token);
+            progressHandler.Close(); // a late progress report must not overwrite the final status line
             if (result.Success)
             {
                 BurnProgress = 100.0;

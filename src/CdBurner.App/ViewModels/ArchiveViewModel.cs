@@ -832,7 +832,7 @@ public class ArchiveViewModel : ObservableObject
                 : null;
             LastDirectBurnEngine = directEngine;
             var burnService = new DataBurnService(directEngine ?? _burnEngine);
-            var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
+            var progressHandler = new ClosableProgress<BurnProgressSnapshot>(snap =>
             {
                 if (!_isBusy) return;
                 if (snap.TotalLba > 0)
@@ -851,6 +851,7 @@ public class ArchiveViewModel : ObservableObject
             });
 
             var result = await burnService.BurnCompilationAsync(SelectedRecorder, root, burnOptions, buildOptions, progressHandler, token).ConfigureAwait(true);
+            progressHandler.Close(); // a late progress report must not overwrite the final status line
 
             if (result.Success)
             {

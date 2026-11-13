@@ -145,7 +145,12 @@ public sealed class ArchiveRecoveryTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains(json.GetProperty("repairedFiles").EnumerateArray(), f => f.GetString()!.Contains("Schaffer"));
         AssertSameFiles(Source, deep);
-        Assert.Empty(Directory.EnumerateDirectories(Path.GetTempPath(), "ip2-*")); // the junction is removed again
+        // The junction is removed again. Only junctions into this test's own folder count: tests running at the same
+        // time (other classes, other test projects) create and remove their own ip2-* junctions in the same %TEMP%.
+        string ours = Path.GetFullPath(_root).TrimEnd(Path.DirectorySeparatorChar);
+        Assert.DoesNotContain(Directory.EnumerateDirectories(Path.GetTempPath(), "ip2-*"),
+            d => new DirectoryInfo(d).LinkTarget is string target
+                 && Path.GetFullPath(target).StartsWith(ours, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
