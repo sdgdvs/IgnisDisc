@@ -236,7 +236,21 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
   each cell start there, and keeps those on a 16-sector block with layer 0 at least half the disc and within its
   capacity; the one at or nearest the cell picked in the picker (else nearest an even split) becomes
   `LayerBreakSectors`. None usable: the burn stops with nothing written.
-- Dual-layer DVD-R goes to the Windows writer with a stated reason. Dual layer will add `SEND DISC STRUCTURE` with the layer-break address before writing.
+- *DVD-R DL layer jump* (built 2026-11-13, simulator only). Only when `GET CONFIGURATION` reports feature 0033h
+  (Layer Jump Recording) current and the disc is to be closed; otherwise the burn goes to the Windows writer with the
+  reason, before anything is sent to the drive. Mode page 05h with write type 4 (layer jump; Pioneer BDR-203/R11
+  command references), otherwise set as for incremental writing (LS_V, link size 16, FP, packet size 16, track mode 5,
+  data block type 8) and read back. `READ DISC STRUCTURE` 20h gives the layer 0 capacity C of the disc's fixed address
+  space; the layer 0 size N is chosen as for DVD+R DL. `SEND DISC STRUCTURE` 23h (Manual Layer Jump Address: byte 1 =
+  10, bytes 8-11 = the address, as Windows' `DVD_DUAL_LAYER_MANUAL_LAYER_JUMP`) carries N - 1, the last layer 0 LBA,
+  and is read back. Layer 0 is written up to it; the drive then reports its next writable address on layer 1 at the
+  same radius, 2C - N (layer 1 runs from the outer edge in), and the rest is written there. CLOSE TRACK and CLOSE
+  SESSION (multi-session 00b) close the disc, which then reads in one run from LBA 0 with layer 0 reported as N
+  sectors. The address convention (N - 1) and the landing address come from a Plextor PX-760A's report in ImgBurn
+  (Doom9 forum thread 113868, 2006); no IgnisDisc run on a real DVD-R DL yet. To check on the first real disc: whether
+  the drive takes write type 4 with these page fields, the 23h read-back on a blank disc, the next writable address
+  after layer 0, and how long CLOSE SESSION takes. The simulator refuses a write that goes on past the jump on layer
+  0 (5/21/02) and `SEND DISC STRUCTURE` 20h on a DVD-R DL (the R11 reference: format 20h does not work there).
 
 ## Default write speed
 

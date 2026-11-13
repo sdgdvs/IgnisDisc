@@ -18,8 +18,12 @@ namespace CdBurner.Hardware.NativeWriting;
 /// </list>
 /// DVD+RW, DVD-RW in restricted overwrite mode and DVD-RAM have their own path (NativeTaoDataWriter.Overwritable.cs). Data goes out in whole 32 KiB ECC blocks, two per WRITE (one if the adapter refuses 64 KiB); the last block is padded
 /// with zeros. Speed is set
-/// with SET STREAMING from the drive's GET PERFORMANCE list. Only DVD-R/-RW have a test write. Dual-layer discs are left
-/// to the Windows writer until IgnisDisc sets the layer break itself.
+/// with SET STREAMING from the drive's GET PERFORMANCE list. Only DVD-R/-RW have a test write. Dual-layer DVD+R gets its
+/// layer break with SEND DISC STRUCTURE 20h (growisofs). Dual-layer DVD-R is written with Layer Jump Recording, only on
+/// a drive that reports feature 0x0033 current: write type 4, SEND DISC STRUCTURE 23h with the last layer 0 address,
+/// layer 0 written up to it, then the rest from the drive's next writable address on layer 1 (see
+/// <see cref="ApplyLayerJump"/>); CLOSE TRACK and CLOSE SESSION close the disc. Any other DVD-R DL case goes to the
+/// Windows writer.
 /// </summary>
 public sealed partial class NativeTaoDataWriter
 {
@@ -32,6 +36,11 @@ public sealed partial class NativeTaoDataWriter
 
     /// <summary>GET CONFIGURATION feature 0x0021, Incremental Streaming Writable.</summary>
     public const ushort FeatureIncrementalStreaming = 0x0021;
+
+    /// <summary>GET CONFIGURATION feature 0x0033, Layer Jump Recording (DVD-R DL); current when the disc in the drive
+    /// can be written that way (cdrtools scsi_mmc.c lists 0x0033 as "Layer Jump Recording", profile 0x0016 as "DVD-R/DL
+    /// layer jump recording").</summary>
+    public const ushort FeatureLayerJumpRecording = 0x0033;
 
     /// <summary>
     /// Sectors per WRITE on DVD: two 32 KiB ECC blocks (64 KiB, the most the GP60NB50's USB bridge passes), which
@@ -48,7 +57,7 @@ public sealed partial class NativeTaoDataWriter
     /// <summary>Sectors a second at DVD 1x (1,385,000 bytes / 2,048).</summary>
     private const double DvdSectorsPerSecondAt1x = 1_385_000.0 / SectorSize;
 
-    private enum DvdWriteMode { DiscAtOnce, Incremental, PlusR }
+    private enum DvdWriteMode { DiscAtOnce, Incremental, PlusR, LayerJump }
 
     /// <summary>Every DVD profile (0x0010–0x001F, DVD+RW DL 0x002A, DVD+R DL 0x002B).</summary>
     internal static bool IsDvdProfile(ushort profile) => profile is (>= 0x0010 and <= 0x001F) or 0x002A or ProfileDvdPlusRDualLayer;
@@ -77,32 +86,47 @@ public sealed partial class NativeTaoDataWriter
         {
             return RunOverwritable(request, overwritable, progress, ct, clock, state);
         }
-        if (profile is ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump)
-        {
-            state.UnsupportedDisc = true;
-            throw Stop($"Direct writing covers dual-layer DVD+R but not dual-layer DVD-R yet (the disc is {discName}).");
-        }
-        if (profile is not (ProfileDvdMinusR or ProfileDvdMinusRwSequential or ProfileDvdPlusR or ProfileDvdPlusRDualLayer))
+        if (profile is not (ProfileDvdMinusR or ProfileDvdMinusRwSequential or ProfileDvdPlusR or ProfileDvdPlusRDualLayer
+            or ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump))
         {
             state.UnsupportedDisc = true;
             throw Stop($"Direct writing of DVDs covers DVD-R, DVD-RW, DVD+R, DVD+RW and DVD-RAM so far; the disc in the drive is {discName}.");
         }
 
-        bool dualLayer = profile == ProfileDvdPlusRDualLayer;
+        bool layerJump = profile is ProfileDvdMinusRDualLayer or ProfileDvdMinusRDualLayerJump;
+        bool dualLayer = profile == ProfileDvdPlusRDualLayer || layerJump;
         bool plusR = profile is ProfileDvdPlusR or ProfileDvdPlusRDualLayer;
         if (request.AppendsSession && dualLayer)
         {
             state.UnsupportedDisc = true;
             throw Stop($"Direct writing adds sessions to single-layer DVDs only so far (the disc is {discName}).");
         }
+        if (layerJump)
+        {
+            // Checked before anything is sent that changes the drive or the disc, so a refusal leaves the burn to the
+            // Windows writer with this reason.
+            if (!ReadFeature(FeatureLayerJumpRecording).Current)
+            {
+                state.UnsupportedDisc = true;
+                throw Stop("The drive does not offer layer jump recording (feature 0x0033) for this DVD-R DL, which direct writing needs for it.");
+            }
+            if (!request.CloseDisc)
+            {
+                state.UnsupportedDisc = true;
+                throw Stop("Direct writing closes a DVD-R DL when it writes one; leaving it open is left to the Windows writer.");
+            }
+        }
         // Disc-At-Once needs a blank disc; a session added to a DVD-R/-RW is written incrementally, and closing the
         // disc then comes from the multi-session field (00b: CLOSE SESSION closes the disc).
-        var mode = plusR ? DvdWriteMode.PlusR : request.CloseDisc && !request.AppendsSession ? DvdWriteMode.DiscAtOnce : DvdWriteMode.Incremental;
-        string kind = dualLayer ? "DVD+R DL" : plusR ? "DVD+R" : profile == ProfileDvdMinusR ? "DVD-R" : "DVD-RW";
+        var mode = plusR ? DvdWriteMode.PlusR
+            : layerJump ? DvdWriteMode.LayerJump
+            : request.CloseDisc && !request.AppendsSession ? DvdWriteMode.DiscAtOnce : DvdWriteMode.Incremental;
+        string kind = layerJump ? "DVD-R DL" : dualLayer ? "DVD+R DL" : plusR ? "DVD+R" : profile == ProfileDvdMinusR ? "DVD-R" : "DVD-RW";
         state.WriteMode = mode switch
         {
             DvdWriteMode.DiscAtOnce => $"disc-at-once ({kind})",
             DvdWriteMode.Incremental => $"incremental ({kind})",
+            DvdWriteMode.LayerJump => $"layer jump ({kind})",
             _ => $"sequential ({kind})"
         };
         int trackSectors = (state.ImageSectors + WriteParametersPage.DvdPacketBlocks - 1) / WriteParametersPage.DvdPacketBlocks * WriteParametersPage.DvdPacketBlocks;
@@ -178,20 +202,28 @@ public sealed partial class NativeTaoDataWriter
         {
             var current = ReadWriteParameters() ?? throw Stop("The drive did not return its write parameters (mode page 0x05).");
             byte trackMode = track.TrackMode != 0 ? track.TrackMode : WriteParametersPage.TrackModeDvd;
-            var wanted = mode == DvdWriteMode.DiscAtOnce
-                ? current.ForDvdDiscAtOnce(request.TestWrite, bufferUnderrunFree)
-                : current.ForDvdIncremental(request.TestWrite, bufferUnderrunFree, request.CloseDisc, trackMode);
+            var wanted = mode switch
+            {
+                DvdWriteMode.DiscAtOnce => current.ForDvdDiscAtOnce(request.TestWrite, bufferUnderrunFree),
+                DvdWriteMode.LayerJump => current.ForDvdLayerJump(request.TestWrite, bufferUnderrunFree, trackMode),
+                _ => current.ForDvdIncremental(request.TestWrite, bufferUnderrunFree, request.CloseDisc, trackMode)
+            };
             if (!SelectWriteParameters(wanted))
             {
                 throw Stop($"The drive rejected the {state.WriteMode} write parameters.");
             }
             var confirmed = ReadWriteParameters() ?? throw Stop("The drive did not report its write parameters after they were set.");
-            byte wantedType = mode == DvdWriteMode.DiscAtOnce ? WriteParametersPage.WriteTypeSessionAtOnce : WriteParametersPage.WriteTypeIncremental;
+            byte wantedType = mode switch
+            {
+                DvdWriteMode.DiscAtOnce => WriteParametersPage.WriteTypeSessionAtOnce,
+                DvdWriteMode.LayerJump => WriteParametersPage.WriteTypeLayerJump,
+                _ => WriteParametersPage.WriteTypeIncremental
+            };
             if (confirmed.WriteType != wantedType || confirmed.DataBlockType != WriteParametersPage.DataBlockTypeMode1)
             {
                 throw Stop($"The drive did not switch to {state.WriteMode} (write type {confirmed.WriteType}, data block type {confirmed.DataBlockType}).");
             }
-            if (mode == DvdWriteMode.Incremental && (!confirmed.FixedPackets || confirmed.PacketSize != WriteParametersPage.DvdPacketBlocks))
+            if (mode is DvdWriteMode.Incremental or DvdWriteMode.LayerJump && (!confirmed.FixedPackets || confirmed.PacketSize != WriteParametersPage.DvdPacketBlocks))
             {
                 throw Stop($"The drive did not confirm fixed packets of 16 blocks (packet size {confirmed.PacketSize}).");
             }
@@ -202,8 +234,13 @@ public sealed partial class NativeTaoDataWriter
             _note($"Write parameters confirmed: {state.WriteMode}, test write {confirmed.TestWrite}, BUFE {confirmed.BufferUnderrunFree}, multi-session {confirmed.MultiSession}.");
         }
 
-        // 3b. Dual-layer DVD+R: where layer 0 ends. Set before the first WRITE; a refusal stops with nothing written.
-        if (dualLayer)
+        // 3b. Dual-layer: where layer 0 ends. Set before the first WRITE; a refusal stops with nothing written.
+        LayerJump? jump = null;
+        if (layerJump)
+        {
+            jump = ApplyLayerJump(trackSectors, request.LayerBreakSectors, state);
+        }
+        else if (dualLayer)
         {
             ApplyLayerBreak(trackSectors, request.LayerBreakSectors, state);
         }
@@ -231,7 +268,23 @@ public sealed partial class NativeTaoDataWriter
         request.Image.Position = request.StartPosition;
         var reporter = new ProgressReporter(this, progress, clock, trackSectors, DvdSectorsPerSecondAt1x);
         var writing = Stopwatch.StartNew();
-        WriteTrack(request, startLba, trackSectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite);
+        if (jump is { } j)
+        {
+            // Layer 0 up to and including the jump address; the drive then goes on at the same radius on layer 1.
+            WriteTrack(request, startLba, j.Layer0Sectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite);
+            if (ReadTrackInformation(1) is not { NextWritableAddressValid: true } onLayer1 || onLayer1.NextWritableAddress != j.Layer1StartLba)
+            {
+                throw Stop($"Layer 0 was written up to the layer jump, but the drive did not report LBA {j.Layer1StartLba:N0} on layer 1 as the " +
+                           "next writable address; the rest of the image was not written and the disc is not usable.");
+            }
+            _note($"Layer jump: {j.Layer0Sectors} sectors written on layer 0; the drive goes on at LBA {j.Layer1StartLba} on layer 1.");
+            WriteTrack(request, j.Layer1StartLba, trackSectors - j.Layer0Sectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite,
+                imageBytesAlreadyWritten: (long)j.Layer0Sectors * SectorSize);
+        }
+        else
+        {
+            WriteTrack(request, startLba, trackSectors, DvdSectorsPerWrite, state, reporter, ct, DvdMinimumSectorsPerWrite);
+        }
         writing.Stop();
 
         reporter.Report(trackSectors, "Finishing the track");
@@ -356,31 +409,10 @@ public sealed partial class NativeTaoDataWriter
         state.Layer0Sectors = boundary.Layer0Sectors;
         _note($"Layer 0 capacity {boundary.Layer0Sectors} sectors{(boundary.Fixed ? ", fixed already" : "")}; image {trackSectors} sectors.");
 
-        int wanted;
-        if (requested is int asked)
-        {
-            if (asked <= 0 || asked % WriteParametersPage.DvdPacketBlocks != 0)
-            {
-                throw Stop($"The layer break must be a positive multiple of 16 sectors; {asked} is not.");
-            }
-            if (asked > boundary.Layer0Sectors)
-            {
-                throw Stop($"The layer break ({asked:N0} sectors) is beyond the end of layer 0 ({boundary.Layer0Sectors:N0} sectors).");
-            }
-            if (2L * asked < trackSectors)
-            {
-                throw Stop($"The layer break ({asked:N0} sectors) would put more on layer 1 than on layer 0; it must be at least half the image ({(trackSectors + 1) / 2:N0} sectors).");
-            }
-            wanted = asked;
-        }
-        else if (trackSectors <= boundary.Layer0Sectors)
+        if (ChooseLayer0Sectors(trackSectors, requested, boundary.Layer0Sectors) is not int wanted)
         {
             _note("The image fits on layer 0; the layer break is left as it is.");
             return;
-        }
-        else
-        {
-            wanted = (trackSectors / WriteParametersPage.DvdPacketBlocks + 1) / 2 * WriteParametersPage.DvdPacketBlocks;
         }
 
         if (wanted == boundary.Layer0Sectors)
@@ -405,6 +437,102 @@ public sealed partial class NativeTaoDataWriter
         _note(send.IsSuccess
             ? $"Layer break set: {wanted} sectors on layer 0, {trackSectors - wanted} on layer 1."
             : $"The drive answered {Describe(send)} but reports the layer break at {wanted} sectors; going on.");
+    }
+
+    /// <summary>
+    /// How many sectors go on layer 0: the size asked for (a multiple of 16, within layer 0, at least half the image so
+    /// layer 1 never holds more), or growisofs' rule: nothing to choose when the image fits on layer 0 (null), else half
+    /// the image rounded up to whole 16-sector ECC blocks.
+    /// </summary>
+    private static int? ChooseLayer0Sectors(int trackSectors, int? requested, int layer0Capacity)
+    {
+        if (requested is int asked)
+        {
+            if (asked <= 0 || asked % WriteParametersPage.DvdPacketBlocks != 0)
+            {
+                throw Stop($"The layer break must be a positive multiple of 16 sectors; {asked} is not.");
+            }
+            if (asked > layer0Capacity)
+            {
+                throw Stop($"The layer break ({asked:N0} sectors) is beyond the end of layer 0 ({layer0Capacity:N0} sectors).");
+            }
+            if (2L * asked < trackSectors)
+            {
+                throw Stop($"The layer break ({asked:N0} sectors) would put more on layer 1 than on layer 0; it must be at least half the image ({(trackSectors + 1) / 2:N0} sectors).");
+            }
+            return asked;
+        }
+        if (trackSectors <= layer0Capacity)
+        {
+            return null;
+        }
+        return (trackSectors / WriteParametersPage.DvdPacketBlocks + 1) / 2 * WriteParametersPage.DvdPacketBlocks;
+    }
+
+    /// <summary>Where a DVD-R DL track leaves layer 0: the sectors written there, and the layer 1 address writing goes on at.</summary>
+    private readonly record struct LayerJump(int Layer0Sectors, int Layer1StartLba);
+
+    /// <summary>
+    /// Sets the manual layer jump of a blank DVD-R DL written with Layer Jump Recording (write type 4 already selected).
+    /// READ DISC STRUCTURE 20h gives the layer 0 capacity of the disc's fixed address space (Windows SDK ntddcdvd.h,
+    /// DVD_DUAL_LAYER_RECORDING_INFORMATION: bytes 4–7 of the data, after the 4-byte header); the layer 0 size is chosen
+    /// as for DVD+R DL (<see cref="ChooseLayer0Sectors"/>). SEND DISC STRUCTURE 23h then carries the last layer 0 address,
+    /// that size minus 1 (a Plextor PX-760A reported the address 1,864,223 after a burn with 1,864,224 sectors on layer 0,
+    /// ImgBurn's disc information in Doom9 forum thread 113868, 2006), and READ DISC STRUCTURE 23h must give it back.
+    /// Some drives answer SEND DISC STRUCTURE with an error and still take the value (seen with format 20h), so the
+    /// read-back decides.
+    /// <para>The DVD-R DL address space is fixed: layer 0 holds LBAs 0 to C - 1 and layer 1, written from the outside in
+    /// (opposite track path), C to 2C - 1, so LBA x on layer 0 lies over LBA 2C - 1 - x on layer 1. After the jump the
+    /// drive goes on at the same radius on layer 1, LBA 2C - (layer 0 sectors), and the host writes there (the same
+    /// thread: on 100-sector layers a jump after 70 sectors lands at 130). Closing the disc records the shorter layer 0
+    /// (the Plextor then reported a layer 0 capacity of 1,864,224), so the image reads back in one run from LBA 0.</para>
+    /// Null when the image fits on layer 0 and no break was asked for: nothing is sent and the image stays on layer 0.
+    /// </summary>
+    private LayerJump? ApplyLayerJump(int trackSectors, int? requested, RunState state)
+    {
+        var boundary = ReadLayerBoundary() ?? throw Stop("The drive did not report the layer 0 capacity of this DVD-R DL.");
+        int capacity = boundary.Layer0Sectors;
+        if (capacity <= 0 || capacity % WriteParametersPage.DvdPacketBlocks != 0)
+        {
+            throw Stop($"The drive reported a layer 0 capacity of {capacity:N0} sectors, which is not a whole number of 16-sector blocks.");
+        }
+        state.Layer0Sectors = capacity;
+        _note($"Layer 0 capacity {capacity} sectors; image {trackSectors} sectors.");
+
+        if (ChooseLayer0Sectors(trackSectors, requested, capacity) is not int layer0)
+        {
+            _note("The image fits on layer 0; no layer jump is set.");
+            return null;
+        }
+        if (layer0 >= trackSectors)
+        {
+            _note($"The image ({trackSectors} sectors) ends before the layer break asked for ({layer0}); it stays on layer 0 and no layer jump is set.");
+            return null;
+        }
+
+        int address = layer0 - 1;
+        byte[] parameters = NativeWriteCommands.BuildManualLayerJumpParameters(address);
+        var send = _transport.ExecuteCommand(NativeWriteCommands.BuildSendDiscStructure(NativeWriteCommands.FormatManualLayerJump, (ushort)parameters.Length),
+            parameters, ScsiPassThroughNative.SCSI_IOCTL_DATA_OUT, TimeSpan.FromMinutes(3)); // as for format 20h: allow for a calibration
+        uint? after = ReadManualLayerJump();
+        if (after != (uint)address)
+        {
+            throw Stop($"The drive did not set the layer jump at LBA {address:N0}: {(send.IsSuccess ? "it reports " + (after?.ToString("N0") ?? "nothing") : Describe(send))}.");
+        }
+        state.Layer0Sectors = layer0;
+        int layer1Start = 2 * capacity - layer0;
+        _note(send.IsSuccess
+            ? $"Layer jump set after LBA {address}: {layer0} sectors on layer 0, {trackSectors - layer0} on layer 1 from LBA {layer1Start}."
+            : $"The drive answered {Describe(send)} but reports the layer jump at LBA {address}; going on.");
+        return new LayerJump(layer0, layer1Start);
+    }
+
+    private uint? ReadManualLayerJump()
+    {
+        byte[] reply = new byte[NativeWriteCommands.ManualLayerJumpLength];
+        var r = _transport.ExecuteCommand(MmcCommandBuilder.BuildReadDiscStructureCdb(NativeWriteCommands.FormatManualLayerJump, (ushort)reply.Length),
+            reply, ScsiPassThroughNative.SCSI_IOCTL_DATA_IN, ShortTimeout);
+        return r.IsSuccess ? NativeWriteCommands.ParseManualLayerJump(reply) : null;
     }
 
     private (bool Fixed, int Layer0Sectors)? ReadLayerBoundary()

@@ -60,6 +60,40 @@ public static class NativeWriteCommands
         return ((reply[4] & 0x80) != 0, BinaryPrimitives.ReadInt32BigEndian(reply.Slice(8, 4)));
     }
 
+    /// <summary>
+    /// READ/SEND DISC STRUCTURE format 23h: DVD-R DL Manual Layer Jump Address, the last layer 0 address before the
+    /// drive jumps to layer 1 (Pioneer R11 command reference, tables 30 and 35: "Send Logical Block Address for Layer
+    /// Jump on Layer 0"; formats 21h–24h only on drives with Layer Jump Recording, and never on DVD+R DL).
+    /// </summary>
+    public const byte FormatManualLayerJump = 0x23;
+
+    /// <summary>Length of the format 23h structure, header included: the 4-byte header, 4 reserved bytes and the
+    /// 4-byte address (Windows SDK ntddcdvd.h, DVD_DUAL_LAYER_MANUAL_LAYER_JUMP after DVD_DESCRIPTOR_HEADER).</summary>
+    public const int ManualLayerJumpLength = 12;
+
+    /// <summary>
+    /// The format 23h parameters: byte 1 = 10 (the length after the length field, as for format 20h), bytes 4–7
+    /// reserved, bytes 8–11 the layer jump address (ntddcdvd.h DVD_DUAL_LAYER_MANUAL_LAYER_JUMP.ManualJumpLayerAddress).
+    /// </summary>
+    public static byte[] BuildManualLayerJumpParameters(int jumpAddress)
+    {
+        byte[] list = new byte[ManualLayerJumpLength];
+        list[1] = ManualLayerJumpLength - 2;
+        BinaryPrimitives.WriteInt32BigEndian(list.AsSpan(8, 4), jumpAddress);
+        return list;
+    }
+
+    /// <summary>Reads a format 23h reply: the layer jump address in bytes 8–11 (as an unsigned value, since drives
+    /// that have none set report large numbers there). Null when the reply is too short.</summary>
+    public static uint? ParseManualLayerJump(ReadOnlySpan<byte> reply)
+    {
+        if (reply.Length < ManualLayerJumpLength || BinaryPrimitives.ReadUInt16BigEndian(reply) < ManualLayerJumpLength - 2)
+        {
+            return null;
+        }
+        return BinaryPrimitives.ReadUInt32BigEndian(reply.Slice(8, 4));
+    }
+
     /// <summary>FORMAT UNIT format type 26h: DVD+RW full format, run by the drive in the background.</summary>
     public const byte FormatTypeDvdPlusRw = 0x26;
 

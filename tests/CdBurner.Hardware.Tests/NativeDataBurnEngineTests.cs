@@ -359,9 +359,9 @@ public sealed class NativeDataBurnEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task DualLayerDvd_IsHandedToTheWindowsWriter_WithTheReason()
+    public async Task DualLayerDvdMinusR_OnADriveWithoutLayerJump_IsHandedToTheWindowsWriter_WithTheReason()
     {
-        var (engine, drive) = Engine();
+        var (engine, drive) = Engine(configure: d => d.OffersLayerJump = false);
         using var medium = new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors);
         var recorder = Recorder(medium);
 
@@ -369,8 +369,9 @@ public sealed class NativeDataBurnEngineTests : IDisposable
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Verified);
-        Assert.Contains("dual-layer", engine.LastFallbackReason);
-        Assert.Null(drive()); // the direct writer never opened the drive
+        Assert.Contains("layer jump recording (feature 0x0033)", engine.LastFallbackReason);
+        Assert.Equal(0, drive()!.WriteCommandCount);
+        Assert.DoesNotContain(NativeWriteCommands.OpCodeModeSelect10, drive()!.CommandsReceived); // nothing set on the drive
     }
 
     [Fact]

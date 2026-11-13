@@ -386,15 +386,16 @@ public sealed class NativeDvdDataWriterTests : IDisposable
     [Theory]
     [InlineData(NativeTaoDataWriter.ProfileDvdMinusRDualLayer)]
     [InlineData(NativeTaoDataWriter.ProfileDvdMinusRDualLayerJump)]
-    public void DualLayerDisc_IsReportedAsNotCovered(ushort profile)
+    public void DualLayerDvdMinusR_OnADriveWithoutLayerJump_IsReportedAsNotCovered(ushort profile)
     {
         var drive = BlankDvd(profile);
+        drive.OffersLayerJump = false;
 
         var result = Write(drive, Image(320));
 
         Assert.True(result.UnsupportedDisc);
         Assert.True(result.StoppedBeforeWriting);
-        Assert.Contains("dual-layer", result.Message);
+        Assert.Contains("feature 0x0033", result.Message);
         Assert.Equal(0, drive.WriteCommandCount);
     }
 
@@ -481,7 +482,7 @@ public sealed class NativeDvdDataWriterTests : IDisposable
     }
 
     [Fact]
-    public async Task DualLayerDvdMinusR_IsHandedToTheWindowsWriter()
+    public async Task DualLayerDvdMinusR_OnADriveWithLayerJump_IsWrittenDirectly_OnLayer0WhenItFits()
     {
         var (engine, drive) = Engine();
         using var medium = new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors);
@@ -491,7 +492,8 @@ public sealed class NativeDvdDataWriterTests : IDisposable
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Verified);
-        Assert.Contains("dual-layer", engine.LastFallbackReason);
-        Assert.Null(drive());
+        Assert.Null(engine.LastFallbackReason);
+        Assert.Equal("layer jump (DVD-R DL)", engine.LastResult!.WriteMode);
+        Assert.Null(drive()!.LayerJumpAddressSent); // 320 sectors fit on layer 0: no jump needed
     }
 }

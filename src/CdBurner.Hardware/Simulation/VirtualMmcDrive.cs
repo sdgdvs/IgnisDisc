@@ -89,6 +89,31 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     private bool IsDvdPlusRDualLayer => Profile == NativeTaoDataWriter.ProfileDvdPlusRDualLayer;
 
+    // ---- DVD-R DL layer jump ----
+
+    /// <summary>
+    /// The drive offers Layer Jump Recording (feature 0x0033, current with a DVD-R DL in the drive). On by default: the
+    /// GP60NB50 lists it. False makes a drive without the feature, which reports no 0x0033 descriptor at all.
+    /// </summary>
+    public bool OffersLayerJump { get; set; } = true;
+
+    /// <summary>SEND DISC STRUCTURE 23h fails with 5/26/00 and the jump address is not taken.</summary>
+    public bool RejectsLayerJump { get; set; }
+
+    /// <summary>The manual layer jump address received with SEND DISC STRUCTURE 23h; null when none was sent.</summary>
+    public int? LayerJumpAddressSent { get; private set; }
+
+    /// <summary>Every WRITE (10) on a DVD-R DL as (LBA, sectors), to check where the host wrote after the jump.</summary>
+    public List<(int Lba, int Sectors)> DvdWrites { get; } = new();
+
+    private bool IsDvdMinusRDualLayer => Profile is NativeTaoDataWriter.ProfileDvdMinusRDualLayer or NativeTaoDataWriter.ProfileDvdMinusRDualLayerJump;
+
+    private bool LayerJumpModeSet => IsDvdMinusRDualLayer && _dvdModeSet && (_modePage05[2] & 0x0F) == WriteParametersPage.WriteTypeLayerJump;
+
+    private int? _layerJumpAddress; // last layer 0 LBA before the jump, as set with format 23h
+    private int _layer0Written;     // sectors written on layer 0 once the jump has been made; 0 before
+    private int _closedLayer0Sectors; // the same, kept from SYNCHRONIZE CACHE until the session is closed
+
     private int Layer0Capacity => Layer0CapacitySectors ?? Capacity / 2;
 
     /// <summary>DVD+R and BD-R: written in sequence with no mode page, then CLOSE TRACK and close or finalize.</summary>
@@ -695,9 +720,16 @@ public sealed class VirtualMmcDrive : IScsiTransport
             Add(MmcCommandBuilder.FeatureCdMastering, flags, cd);
         }
         Add(MmcCommandBuilder.FeatureBdWrite, 0, IsBluRay && OffersBdWrite && Profile != NativeTaoDataWriter.ProfileBdRom);
+        // DVD-R/-RW Write: BUF bit 6, RDL bit 3 (DVD-R DL), Test Write bit 2, DVD-RW bit 1 (MMC-5 feature 002Fh).
         Add(MmcCommandBuilder.FeatureDvdRecordableWrite,
-            (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | (OffersTestWrite ? 0x04 : 0) | (Profile == NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x02 : 0)),
+            (byte)((OffersBufferUnderrunFree ? 0x40 : 0) | 0x08 | (OffersTestWrite ? 0x04 : 0) | (Profile == NativeTaoDataWriter.ProfileDvdMinusRwSequential ? 0x02 : 0)),
             dvdMinus);
+        if (OffersLayerJump && (rt == 2 ? start == NativeTaoDataWriter.FeatureLayerJumpRecording : start <= NativeTaoDataWriter.FeatureLayerJumpRecording))
+        {
+            // Layer Jump Recording: bytes 4-6 reserved, byte 7 the number of link sizes, then one byte per link size,
+            // padded to a multiple of four (the same layout as the link sizes of feature 0021h).
+            descriptors.Add(new byte[] { 0x00, 0x33, (byte)(0x04 | (IsDvdMinusRDualLayer ? 0x01 : 0x00)), 8, 0, 0, 0, 1, WriteParametersPage.DvdPacketBlocks, 0, 0, 0 });
+        }
 
         int length = 8 + descriptors.Sum(d => d.Length);
         byte[] response = new byte[length];
@@ -794,7 +826,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
         byte[] page = list.Slice(offset, pageLength).ToArray();
         byte writeType = (byte)(page[2] & 0x0F);
         byte blockType = (byte)(page[4] & 0x0F);
-        if (writeType > 3 || blockType is > 3 and < 8 || (blockType == 3 && RejectsDataBlockType3))
+        bool layerJump = writeType == WriteParametersPage.WriteTypeLayerJump && IsDvdMinusRDualLayer && OffersLayerJump;
+        if ((writeType > 3 && !layerJump) || blockType is > 3 and < 8 || (blockType == 3 && RejectsDataBlockType3))
         {
             return Sense(0x05, 0x26, 0x00);
         }
@@ -813,7 +846,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
             // DVD-R/-RW: Disc-At-Once (2) or incremental (0), track mode 5, data block type 8; fixed packets of 16
             // blocks for incremental, none for Disc-At-Once (libburn's cookbook).
             bool dao = writeType == WriteParametersPage.WriteTypeSessionAtOnce;
-            bool incremental = writeType == WriteParametersPage.WriteTypeIncremental;
+            // Layer jump (4) on a DVD-R DL is checked like incremental: the writer's choice, not yet seen on a drive.
+            bool incremental = writeType == WriteParametersPage.WriteTypeIncremental || layerJump;
             bool fixedPackets = (page[3] & 0x20) != 0;
             int packetSize = BinaryPrimitives.ReadInt32BigEndian(page.AsSpan(10, 4));
             if (!(dao || incremental) || blockType != WriteParametersPage.DataBlockTypeMode1 || (page[3] & 0x0F) != WriteParametersPage.TrackModeDvd ||
@@ -1295,12 +1329,14 @@ public sealed class VirtualMmcDrive : IScsiTransport
             }
             else
             {
-                _taoClosedSectors = _taoNextLba - _taoStartLba;
+                _taoClosedSectors = OpenTrackSectors;
+                _closedLayer0Sectors = _layer0Written;
                 DiscStatus = 1; // an open session until it is closed
                 StoreSessionData(_taoStartLba, DataTrackWritten.ToArray()); // the recorded track reads back even before the close
             }
             ReservedSectors = 0;
             _taoNextLba = 0;
+            _layer0Written = 0;
             _taoArmed = false;
             return Good(0);
         }
@@ -1557,8 +1593,40 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x21, 0x00);
         }
-        return WriteTrackAtOnce(cdb, data);
+        if (!LayerJumpModeSet)
+        {
+            return WriteTrackAtOnce(cdb, data);
+        }
+
+        // DVD-R DL layer jump: the address space is fixed (layer 0 is LBA 0 to C - 1, layer 1 C to 2C - 1 from the outer
+        // edge in). Writing on layer 0 stops after the jump address (the end of layer 0 when none was set); the next
+        // writable address is then the layer 1 LBA at the same radius, 2C - 1 - jump, and a WRITE anywhere else is
+        // refused with 5/21/02 (invalid address for write).
+        int capacity0 = Layer0Capacity;
+        int jumpAddress = _layerJumpAddress ?? capacity0 - 1;
+        if (_layer0Written == 0 && lba <= jumpAddress && lba + count - 1 > jumpAddress)
+        {
+            return Sense(0x05, 0x21, 0x02); // one WRITE may not run across the jump
+        }
+        int before = _taoNextLba;
+        var result = WriteTrackAtOnce(cdb, data);
+        if (!result.IsSuccess)
+        {
+            return result;
+        }
+        DvdWrites.Add((lba, count));
+        if (_layer0Written == 0 && _taoNextLba == jumpAddress + 1 && before <= jumpAddress)
+        {
+            _layer0Written = jumpAddress + 1;
+            _taoNextLba = 2 * capacity0 - 1 - jumpAddress;
+        }
+        return result;
     }
+
+    /// <summary>Sectors in the open DVD track: across the jump on a DVD-R DL, the layer 0 part plus what followed on layer 1.</summary>
+    private int OpenTrackSectors => _layer0Written > 0
+        ? _layer0Written + (_taoNextLba - (2 * Layer0Capacity - _layer0Written))
+        : _taoNextLba - _taoStartLba;
 
     /// <summary>
     /// CLOSE TRACK/SESSION on a DVD: close the flushed track (001b), then close the session (010b; appendable on DVD+R,
@@ -1636,6 +1704,14 @@ public sealed class VirtualMmcDrive : IScsiTransport
         int status = finalize ? 2 : IsPlusRLike ? 1 : (_modePage05[3] >> 6) == 3 ? 1 : 2;
         RecordDataDisc(_taoClosedSectors, runOutSectors: 0, discStatus: status);
         _dvdTrackClosed = false;
+        if (_closedLayer0Sectors > 0)
+        {
+            // A DVD-R DL closed after a layer jump: the drive records the shorter layer 0, after which the disc reads in
+            // one run from LBA 0 and format 20h reports layer 0 as ending at the jump (a Plextor PX-760A did so, 2006).
+            Layer0CapacitySectors = _closedLayer0Sectors;
+            LayerBreakFixed = true;
+            _closedLayer0Sectors = 0;
+        }
         if ((cdb[1] & 0x01) != 0)
         {
             NotReadyResponses += CloseSessionBusyPolls;
@@ -1849,7 +1925,16 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>READ DISC STRUCTURE: only format 20h (DVD+R DL layer boundary) is simulated, the growisofs layout.</summary>
     private ScsiExecutionResult ReadDiscStructure(ReadOnlySpan<byte> cdb, Span<byte> data)
     {
-        if (cdb[7] != NativeWriteCommands.FormatLayerBoundary || !IsDvdPlusRDualLayer)
+        if (cdb[7] == NativeWriteCommands.FormatManualLayerJump && IsDvdMinusRDualLayer && OffersLayerJump)
+        {
+            // Format 23h: header, 4 reserved bytes, the jump address (ntddcdvd.h DVD_DUAL_LAYER_MANUAL_LAYER_JUMP). With
+            // none set the field is all ones here; drives differ (ImgBurn shows "Not Specified" for some).
+            byte[] jump = new byte[NativeWriteCommands.ManualLayerJumpLength];
+            BinaryPrimitives.WriteUInt16BigEndian(jump, NativeWriteCommands.ManualLayerJumpLength - 2);
+            BinaryPrimitives.WriteUInt32BigEndian(jump.AsSpan(8), _layerJumpAddress is int set ? (uint)set : uint.MaxValue);
+            return CopyOut(jump, data);
+        }
+        if (cdb[7] != NativeWriteCommands.FormatLayerBoundary || !(IsDvdPlusRDualLayer || IsDvdMinusRDualLayer))
         {
             return Sense(0x05, 0x24, 0x00);
         }
@@ -1867,6 +1952,11 @@ public sealed class VirtualMmcDrive : IScsiTransport
     private ScsiExecutionResult SendDiscStructure(ReadOnlySpan<byte> cdb, ReadOnlySpan<byte> list)
     {
         int length = BinaryPrimitives.ReadUInt16BigEndian(cdb.Slice(8, 2));
+        if (cdb[7] == NativeWriteCommands.FormatManualLayerJump)
+        {
+            return SendManualLayerJump(length, list);
+        }
+        // Format 20h is for DVD+R DL only; the Pioneer R11 reference: "The Format Code 20h does not work for DVD-R DL disc."
         if (cdb[7] != NativeWriteCommands.FormatLayerBoundary || !IsDvdPlusRDualLayer || length != NativeWriteCommands.LayerBoundaryLength ||
             list.Length < length || list[1] != NativeWriteCommands.LayerBoundaryLength - 2)
         {
@@ -1889,6 +1979,33 @@ public sealed class VirtualMmcDrive : IScsiTransport
         Layer0CapacitySectors = layer0;
         LayerBreakFixed = true;
         return RejectsLayerBreak ? Sense(0x05, 0x26, 0x00) : Good(0);
+    }
+
+    /// <summary>
+    /// SEND DISC STRUCTURE 23h on a blank DVD-R DL set to layer jump: the last layer 0 address before the jump, which
+    /// has to end a 16-sector ECC block inside layer 0. Formats 21h–24h need Layer Jump Recording and never apply to
+    /// DVD+R DL (Pioneer R11 reference, table 35 and its notes).
+    /// </summary>
+    private ScsiExecutionResult SendManualLayerJump(int length, ReadOnlySpan<byte> list)
+    {
+        if (!IsDvdMinusRDualLayer || !OffersLayerJump || length != NativeWriteCommands.ManualLayerJumpLength ||
+            list.Length < length || list[1] != NativeWriteCommands.ManualLayerJumpLength - 2)
+        {
+            return Sense(0x05, 0x24, 0x00);
+        }
+        if (!LayerJumpModeSet || DiscStatus != 0 || _taoNextLba != 0)
+        {
+            return Sense(0x05, 0x2C, 0x00); // command sequence error: not in layer jump mode, or writing has begun
+        }
+        int address = BinaryPrimitives.ReadInt32BigEndian(list.Slice(8, 4));
+        if (address < WriteParametersPage.DvdPacketBlocks - 1 || (address + 1) % WriteParametersPage.DvdPacketBlocks != 0 ||
+            address >= Layer0Capacity || RejectsLayerJump)
+        {
+            return Sense(0x05, 0x26, 0x00);
+        }
+        _layerJumpAddress = address;
+        LayerJumpAddressSent = address;
+        return Good(0);
     }
 
     /// <summary>RESERVE TRACK (ARSV 0, RMZ 0) on a blank DVD-R/-RW set to Disc-At-Once: the size in CDB bytes 5–8.</summary>

@@ -344,12 +344,14 @@ public sealed partial class NativeTaoDataWriter
 
     /// <param name="minimumSectorsPerWrite">When larger than this, a WRITE the adapter refuses as too large (Win32 error
     /// 87, before it reaches the drive) is sent again in halves, down to this size.</param>
+    /// <param name="imageBytesAlreadyWritten">Image bytes an earlier part of the same track took (a DVD-R DL track goes on
+    /// after its layer jump); the image stream is already past them.</param>
     private void WriteTrack(NativeDataWriteRequest request, int startLba, int trackSectors, int sectorsPerWrite, RunState state,
-        ProgressReporter reporter, CancellationToken ct, int? minimumSectorsPerWrite = null)
+        ProgressReporter reporter, CancellationToken ct, int? minimumSectorsPerWrite = null, long imageBytesAlreadyWritten = 0)
     {
         int minimum = minimumSectorsPerWrite ?? sectorsPerWrite;
         byte[] buffer = new byte[sectorsPerWrite * SectorSize];
-        long remainingImage = request.ImageBytes;
+        long remainingImage = request.ImageBytes - imageBytesAlreadyWritten;
         int lba = startLba;
         int end = startLba + trackSectors;
         while (lba < end)

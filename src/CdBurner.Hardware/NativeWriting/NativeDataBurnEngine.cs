@@ -68,9 +68,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
         bool appending = !status.IsBlank && !status.IsOverwriteOnly && status.IsAppendable && status.NextWritableLba > 0;
         string? reason = !imageStream.CanSeek
             ? "the image is not a seekable file"
-            : status.MediaType is DiscMediaType.DvdMinusRDualLayer
-                ? "direct writing covers dual-layer DVD+R but not dual-layer DVD-R yet"
-                : status.MediaType is DiscMediaType.BdRDualLayer or DiscMediaType.BdReDualLayer or DiscMediaType.BdxlRTripleLayer
+            : status.MediaType is DiscMediaType.BdRDualLayer or DiscMediaType.BdReDualLayer or DiscMediaType.BdxlRTripleLayer
                     or DiscMediaType.BdxlRQuadLayer or DiscMediaType.BdxlReTripleLayer
                 ? "direct writing covers single-layer Blu-ray discs so far"
                 : !IsCovered(status.MediaType)
@@ -147,7 +145,7 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
 
         using var log = new LoggingScsiTransport(device, ownsInner: true);
         string kind = request.TestWrite ? "test write only" : TestWriteFirst ? "test write, then real write" : "real write";
-        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R, DVD+R DL, DVD+RW, DVD-RW overwrite, DVD-RAM, BD-R, BD-RE), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
+        log.Note($"IgnisDisc native data writer (CD Track-at-Once, DVD-R/-RW Disc-At-Once or incremental, DVD+R, DVD+R DL, DVD-R DL layer jump, DVD+RW, DVD-RW overwrite, DVD-RAM, BD-R, BD-RE), {kind}. Drive: {recorder.VendorId} {recorder.ProductId} {recorder.ProductRevision} ({(recorder.IsVirtual ? "virtual" : "physical")}).");
         log.Note($"Image: {request.ImageBytes:N0} bytes, close disc {request.CloseDisc}, speed asked {(request.WriteSpeedKiloBytesPerSecond?.ToString() ?? "fastest listed")}" +
                  (request.AppendsSession ? $", new session laid out from sector {request.SessionStartLba}." : "."));
 
@@ -265,10 +263,12 @@ public sealed class NativeDataBurnEngine : IBurnEngineBackend
     private static bool AddsSessionsTo(DiscMediaType type) =>
         type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR;
 
-    /// <summary>Discs the direct writer handles (blank, single layer).</summary>
+    /// <summary>Discs the direct writer handles when blank. A DVD-R DL goes back to the Windows writer, with the reason,
+    /// when the drive does not offer layer jump recording for it (feature 0x0033) or the disc is to be left open.</summary>
     private static bool IsCovered(DiscMediaType type) =>
         type is DiscMediaType.CdR or DiscMediaType.CdRw or DiscMediaType.DvdMinusR or DiscMediaType.DvdMinusRw or DiscMediaType.DvdPlusR
-            or DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam or DiscMediaType.BdR or DiscMediaType.BdRe or DiscMediaType.DvdPlusRDualLayer;
+            or DiscMediaType.DvdPlusRw or DiscMediaType.DvdRam or DiscMediaType.BdR or DiscMediaType.BdRe or DiscMediaType.DvdPlusRDualLayer
+            or DiscMediaType.DvdMinusRDualLayer;
 
     private static NativeDataWriteResult Stopped(string message) =>
         new() { Success = false, StoppedBeforeWriting = true, Message = message };

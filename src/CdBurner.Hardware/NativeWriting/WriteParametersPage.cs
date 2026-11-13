@@ -141,6 +141,23 @@ public sealed class WriteParametersPage
         return new WriteParametersPage(p);
     }
 
+    /// <summary>Write type 4: Layer Jump Recording on DVD-R DL (Pioneer BDR-203 and R11 command references, Write Type
+    /// field table: 0 packet/incremental, 1 TAO, 2 SAO, 3 raw, 4 layer jump).</summary>
+    public const byte WriteTypeLayerJump = 0x04;
+
+    /// <summary>
+    /// A copy set up for a DVD-R DL written with Layer Jump Recording (write type 4), closed when the session is closed
+    /// (multi-session 00b). The rest is as for incremental writing (LS_V 1 with link size 16, FP 1, packet size 16,
+    /// track mode 5, data block type 8): feature 0x0033 lists link sizes the way the incremental feature 0x0021 does.
+    /// Not yet confirmed on a real drive; the writer reads the page back and stops if the drive changed it.
+    /// </summary>
+    public WriteParametersPage ForDvdLayerJump(bool testWrite, bool bufferUnderrunFree, byte trackMode)
+    {
+        var p = ForDvdIncremental(testWrite, bufferUnderrunFree, closeDisc: true, trackMode)._page;
+        p[2] = (byte)((p[2] & 0xF0) | WriteTypeLayerJump);
+        return new WriteParametersPage(p);
+    }
+
     /// <summary>The same settings with data block type 0, for drives that reject block type 3 (cdrdao's fallback).</summary>
     public WriteParametersPage WithRawDataBlockType()
     {
