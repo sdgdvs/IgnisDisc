@@ -232,6 +232,8 @@ public sealed class NativeSessionAppendTests : IDisposable
 
         Assert.True((await BurnSessionAsync(recorder, engine, SessionFiles(1), closeDisc: false)).Success);
         int next = recorder.QueryMediaStatus().NextWritableLba;
+        // GP60NB50, DVD+R (2026-11-13): no minimum first session, next session 2,048 sectors after the track ends.
+        Assert.Equal(medium.Sessions[0].StartLba + medium.Sessions[0].SectorCount + 2_048, next);
         var second = await BurnSessionAsync(recorder, engine, SessionFiles(2), closeDisc: true);
 
         Assert.True(second.Success, second.ErrorMessage);

@@ -297,6 +297,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
     public const int DvdLaterSessionGapSectors = 6_160;
 
     /// <summary>
+    /// DVD+R on the GP60NB50: no minimum session length, and every next session starts 2,048 sectors after the last one
+    /// ends (three direct sessions at 0, 17,472 and 34,928 after tracks of 15,424 and 15,408 sectors, 2026-11-13).
+    /// </summary>
+    public const int DvdPlusRSessionGapSectors = 2_048;
+
+    /// <summary>
     /// Loads a disc that already holds data sessions (from a virtual disc): each one track of 2,048-byte sectors.
     /// <paramref name="nextSessionAddress"/> leaves the disc open with the next session starting there; null closes it.
     /// </summary>
@@ -369,7 +375,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
 
     /// <summary>Where the session after one ending (lead-out included) at <paramref name="endLba"/> starts.</summary>
     private int NextSessionStart(int sessionNumber, int endLba) =>
-        WritesLikeDvd
+        IsDvdPlusR ? endLba + DvdPlusRSessionGapSectors
+        : WritesLikeDvd
             ? endLba + (sessionNumber == 1 ? DvdFirstSessionGapSectors : DvdLaterSessionGapSectors)
             : endLba + (sessionNumber == 1 ? CdFirstSessionGapSectors : CdLaterSessionGapSectors);
 
@@ -1572,7 +1579,8 @@ public sealed class VirtualMmcDrive : IScsiTransport
         int end = start + sectors + runOutSectors; // CD Track-at-Once ends with two run-out blocks; DVD with none
         int sessionNumber = _dataSessions.Count + 1;
         // A DVD-R session left open with less on it than the drive's minimum still reports its lead-out there.
-        int leadOut = discStatus == 1 && sessionNumber == 1 && IsDvd ? Math.Max(end, DvdFirstSessionMinimumEndLba) : end;
+        // A DVD+R has no such minimum (measured 2026-11-13).
+        int leadOut = discStatus == 1 && sessionNumber == 1 && IsDvd && !IsDvdPlusR ? Math.Max(end, DvdFirstSessionMinimumEndLba) : end;
         _dataSessions.Add(new DataSession(start, sectors, leadOut));
         Recorded = true;
         _recordedTracks.Add(((byte)sessionNumber, start, 0x40));
