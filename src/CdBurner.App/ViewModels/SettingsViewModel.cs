@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.Net.Http;
 using CdBurner.App.Mvvm;
@@ -35,7 +36,7 @@ public class SettingsViewModel : ObservableObject
     private IDiscRecorderBackend? _selectedRecorder;
     private string _statusMessage = "Ready";
     private bool _checkForUpdatesOnStartup;
-    private string _updateStatusMessage = "Update check has not been run.";
+    private string _updateStatusMessage = Strings.StatusSettingsUpdateCheckHasNotBeenRun;
     private bool _isCheckingForUpdates;
     private bool _isInstallingTool;
     private bool _isFfmpegInstalled;
@@ -367,7 +368,7 @@ public class SettingsViewModel : ObservableObject
         VerifyAccurateRipByDefault = settings.VerifyAccurateRipByDefault;
         CheckForUpdatesOnStartup = settings.CheckForUpdatesOnStartup;
         RefreshToolStatuses();
-        StatusMessage = "Settings loaded.";
+        StatusMessage = Strings.StatusSettingsSettingsLoaded;
     }
 
     /// <summary>
@@ -399,7 +400,7 @@ public class SettingsViewModel : ObservableObject
             _mainViewModel.SelectedRecorder = SelectedRecorder;
         }
         RefreshToolStatuses();
-        StatusMessage = "Settings saved successfully.";
+        StatusMessage = Strings.StatusSettingsSettingsSavedSuccessfully;
         SettingsSaved?.Invoke(this, EventArgs.Empty);
     }
 
@@ -410,7 +411,7 @@ public class SettingsViewModel : ObservableObject
     {
         _settingsService.ResetToDefaults();
         LoadSettings();
-        StatusMessage = "Settings reset to default values.";
+        StatusMessage = Strings.StatusSettingsSettingsResetToDefaultValues;
         SettingsSaved?.Invoke(this, EventArgs.Empty);
     }
 
@@ -540,7 +541,7 @@ public class SettingsViewModel : ObservableObject
     {
         _isCheckingForUpdates = true;
         CheckForUpdatesCommand.RaiseCanExecuteChanged();
-        UpdateStatusMessage = "Checking GitHub Releases for updates...";
+        UpdateStatusMessage = Strings.StatusSettingsCheckingGithubReleasesForUpdates;
 
         try
         {

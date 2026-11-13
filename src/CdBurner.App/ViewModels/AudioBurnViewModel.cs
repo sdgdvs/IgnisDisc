@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Net.Http;
@@ -1254,16 +1255,13 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 fileList += $"\n  ...and {drmProtectedFiles.Count - 6} more file(s)";
             }
 
-            string warning = $"The following {drmProtectedFiles.Count} file(s) are encrypted with Apple FairPlay DRM (.m4p) and cannot be added or burned to an Audio CD:\n\n" +
-                             $"{fileList}\n\n" +
-                             "Why: Apple Music subscription downloads are encrypted by Apple to prevent copying to physical media.\n\n" +
-                             "To burn an Audio CD, please use DRM-free audio formats such as WAV, MP3, FLAC, M4A, OGG, or WMA (including DRM-free purchases from iTunes Store).";
+            string warning = Strings.Format(nameof(Strings.DialogDrmSkippedBody), drmProtectedFiles.Count, fileList);
 
             if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
                 System.Windows.MessageBox.Show(
                     warning,
-                    "DRM-Protected Audio Files Skipped — IgnisDisc",
+                    Strings.DialogDrmSkippedTitle,
                     System.Windows.MessageBoxButton.OK,
                     System.Windows.MessageBoxImage.Warning);
             }
@@ -1278,13 +1276,13 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             }
 
             string addedNote = addedCount > 0 ? $"{addedCount} track(s) were added. " : string.Empty;
-            string errorMsg = $"{addedNote}The following {unreadableFiles.Count} file(s) could not be read or are unsupported:\n\n{failList}";
+            string errorMsg = Strings.Format(nameof(Strings.DialogUnsupportedFilesBody), addedNote, unreadableFiles.Count, failList);
 
             if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
                 System.Windows.MessageBox.Show(
                     errorMsg,
-                    "Unsupported Audio Files — IgnisDisc",
+                    Strings.DialogUnsupportedFilesTitle,
                     System.Windows.MessageBoxButton.OK,
                     System.Windows.MessageBoxImage.Error);
             }
@@ -1319,7 +1317,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         RemoveTrackCommand.RaiseCanExecuteChanged();
         ClearAllTracksCommand.RaiseCanExecuteChanged();
         StartAudioBurnCommand.RaiseCanExecuteChanged();
-        StatusMessage = "Cleared all tracks from compilation.";
+        StatusMessage = Strings.StatusAudioBurnClearedAllTracksFromCompilation;
     }
 
     /// <summary>
@@ -1594,7 +1592,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         {
             IsPreviewPlaying = false;
             PreviewStatusText = "Preview stopped.";
-            StatusMessage = "Audio preview stopped.";
+            StatusMessage = Strings.StatusAudioBurnAudioPreviewStopped;
         }
     }
 
@@ -1690,7 +1688,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     {
         if (Tracks.Count == 0)
         {
-            StatusMessage = "Add at least one track before exporting a printable CD cover.";
+            StatusMessage = Strings.StatusAudioBurnAddAtLeastOneTrackBefore;
             return null;
         }
 
@@ -1775,7 +1773,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     {
         if (Tracks.Count == 0)
         {
-            StatusMessage = "No audio tracks in compilation to burn.";
+            StatusMessage = Strings.StatusAudioBurnNoAudioTracksInCompilationTo;
             var fail = BurnOperationResult.Failed(StatusMessage);
             LastBurnResult = fail;
             return fail;
@@ -1791,7 +1789,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
             if (confirmed == null)
             {
-                StatusMessage = "Audio CD burn cancelled by user.";
+                StatusMessage = Strings.StatusAudioBurnAudioCdBurnCancelledByUser;
                 var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
                 LastBurnResult = cancelled;
                 return cancelled;
@@ -1803,7 +1801,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder selected or available.";
+            StatusMessage = Strings.StatusAudioBurnNoOpticalRecorderSelectedOrAvailable;
             var fail = BurnOperationResult.Failed(StatusMessage);
             LastBurnResult = fail;
             return fail;
@@ -1861,8 +1859,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             {
                 if (!recorder.GetCapabilities().SupportsNativeSao)
                 {
-                    StatusMessage = "Burn failed: this drive does not report Session-at-Once writing, so direct drive commands cannot be used with it. "
-                                  + "Switch off \"Direct drive commands\" to burn with the Windows writer.";
+                    StatusMessage = Strings.StatusBurnFailedNoSessionAtOnce;
                     var unsupported = BurnOperationResult.Failed(StatusMessage);
                     LastBurnResult = unsupported;
                     return unsupported;
@@ -1888,8 +1885,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             if (burnResult.DamagedAudioFiles is { Count: > 0 } && CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
                 var answer = System.Windows.MessageBox.Show(
-                    $"{burnResult.ErrorMessage}\n\nBurn anyway? The damaged parts will be silence or missing on the disc.",
-                    "Damaged audio file — IgnisDisc",
+                    Strings.Format(nameof(Strings.DialogDamagedAudioBody), burnResult.ErrorMessage),
+                    Strings.DialogDamagedAudioTitle,
                     System.Windows.MessageBoxButton.YesNo,
                     System.Windows.MessageBoxImage.Warning,
                     System.Windows.MessageBoxResult.No);
@@ -1924,8 +1921,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                     if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
                     {
                         System.Windows.MessageBox.Show(
-                            $"The disc holds the right audio, but part of it was hard to read back.\n\n{readWarning}",
-                            "Burned, hard to read in places — IgnisDisc",
+                            Strings.Format(nameof(Strings.DialogHardToReadBody), readWarning),
+                            Strings.DialogHardToReadTitle,
                             System.Windows.MessageBoxButton.OK,
                             System.Windows.MessageBoxImage.Warning);
                     }
@@ -1949,13 +1946,13 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 if (direct && directEngine?.LastResult is { StoppedBeforeWriting: true } && !TestWriteFirst)
                 {
                     // Stopped before the laser came on: the same disc can still be burned the standard way.
-                    StatusMessage += " The disc is unchanged; switch off \"Direct drive commands\" to burn it with the Windows writer.";
+                    StatusMessage += Strings.StatusDiscUnchangedSwitchOffDirect;
                 }
                 if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
                 {
                     System.Windows.MessageBox.Show(
-                        $"Audio CD burn could not be completed:\n\n{burnResult.ErrorMessage}",
-                        "Burn Failed — IgnisDisc",
+                        Strings.Format(nameof(Strings.DialogBurnFailedBody), burnResult.ErrorMessage),
+                        Strings.DialogBurnFailedTitle,
                         System.Windows.MessageBoxButton.OK,
                         System.Windows.MessageBoxImage.Error);
                 }
@@ -1965,7 +1962,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Audio CD burn cancelled by user.";
+            StatusMessage = Strings.StatusAudioBurnAudioCdBurnCancelledByUser;
             var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
             LastBurnResult = cancelled;
             return cancelled;
@@ -1978,8 +1975,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             if (CdBurner.App.Views.BurnTargetDialog.IsInteractiveSession)
             {
                 System.Windows.MessageBox.Show(
-                    $"An error occurred during Audio CD burning:\n\n{ex.Message}",
-                    "Burn Error — IgnisDisc",
+                    Strings.Format(nameof(Strings.DialogBurnErrorBody), ex.Message),
+                    Strings.DialogBurnErrorTitle,
                     System.Windows.MessageBoxButton.OK,
                     System.Windows.MessageBoxImage.Error);
             }
@@ -2001,7 +1998,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     {
         if (_activeBurnCts != null && !_activeBurnCts.IsCancellationRequested)
         {
-            StatusMessage = "Cancelling Audio CD burn...";
+            StatusMessage = Strings.StatusAudioBurnCancellingAudioCdBurn;
             try
             {
                 _activeBurnCts.Cancel();
@@ -2067,7 +2064,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         var recorder = ResolveRecorder();
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder selected or available.";
+            StatusMessage = Strings.StatusAudioBurnNoOpticalRecorderSelectedOrAvailable;
             RipReport = "MusicBrainz lookup failed: No optical recorder selected or available.";
             return null;
         }
@@ -2081,7 +2078,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             var ids = DiscIdCalculator.CalculateForRecorder(recorder);
             if (ids == null)
             {
-                StatusMessage = "No audio tracks found on inserted disc.";
+                StatusMessage = Strings.StatusAudioBurnNoAudioTracksFoundOnInserted;
                 RipReport = "MusicBrainz lookup failed: No audio tracks found on the inserted disc.";
                 return null;
             }
@@ -2161,7 +2158,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         var recorder = ResolveRecorder();
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder selected or available.";
+            StatusMessage = Strings.StatusAudioBurnNoOpticalRecorderSelectedOrAvailable;
             RipReport = "Offset detection failed: No optical recorder selected or available.";
             return;
         }
@@ -2177,7 +2174,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             var ids = DiscIdCalculator.CalculateForRecorder(recorder);
             if (ids == null || tracks.Count == 0)
             {
-                StatusMessage = "No audio tracks found on inserted disc.";
+                StatusMessage = Strings.StatusAudioBurnNoAudioTracksFoundOnInserted;
                 RipReport = "Offset detection failed: No audio tracks found. Insert an audio CD to detect the drive's read offset.";
                 return;
             }
@@ -2190,7 +2187,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
             if (pressings.Count == 0)
             {
-                StatusMessage = "Disc not found in AccurateRip database.";
+                StatusMessage = Strings.StatusAudioBurnDiscNotFoundInAccurateripDatabase;
                 RipReport = "Offset detection failed: This disc is not in the AccurateRip database, so it cannot be used to detect the offset. Try a well-known commercial CD.";
                 return;
             }
@@ -2219,7 +2216,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Offset detection cancelled.";
+            StatusMessage = Strings.StatusAudioBurnOffsetDetectionCancelled;
             RipReport = "Offset detection cancelled by user.";
         }
         catch (Exception ex)
@@ -2248,7 +2245,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder selected or available.";
+            StatusMessage = Strings.StatusAudioBurnNoOpticalRecorderSelectedOrAvailable;
             var fail = AudioCdRipResult.Failed(StatusMessage);
             LastRipResult = fail;
             RipReport = $"Rip failed: {StatusMessage}";
@@ -2532,7 +2529,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Audio CD rip cancelled by user.";
+            StatusMessage = Strings.StatusAudioBurnAudioCdRipCancelledByUser;
             var cancelled = AudioCdRipResult.Failed(StatusMessage);
             LastRipResult = cancelled;
             RipReport = "Audio CD rip cancelled by user.";

@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Fixtures/UiStringsOriginal.tsv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\CdBurner.Core\CdBurner.Core.csproj" />
     <ProjectReference Include="..\..\src\CdBurner.Hardware\CdBurner.Hardware.csproj" />
     <ProjectReference Include="..\..\src\CdBurner.Cli\CdBurner.Cli.csproj" />

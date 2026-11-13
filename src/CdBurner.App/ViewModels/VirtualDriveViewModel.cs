@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.IO;
 using CdBurner.App.Mvvm;
@@ -218,7 +219,7 @@ public class VirtualDriveViewModel : ObservableObject
         var vrec = CurrentVirtualRecorder;
         if (vrec == null)
         {
-            StatusMessage = "No virtual optical drive is currently available.";
+            StatusMessage = Strings.StatusVirtualDriveNoVirtualOpticalDriveIsCurrently;
             return;
         }
 
@@ -267,7 +268,7 @@ public class VirtualDriveViewModel : ObservableObject
         var vrec = CurrentVirtualRecorder;
         if (vrec == null)
         {
-            StatusMessage = "No virtual optical drive is available.";
+            StatusMessage = Strings.StatusVirtualDriveNoVirtualOpticalDriveIsAvailable;
             return;
         }
 
@@ -293,7 +294,7 @@ public class VirtualDriveViewModel : ObservableObject
         var vrec = CurrentVirtualRecorder;
         if (vrec?.CurrentMedium == null)
         {
-            StatusMessage = "Cannot inject bad LBA: No media is mounted in the virtual drive.";
+            StatusMessage = Strings.StatusVirtualDriveCannotInjectBadLbaNoMedia;
             return;
         }
 
@@ -327,7 +328,7 @@ public class VirtualDriveViewModel : ObservableObject
         var vrec = CurrentVirtualRecorder;
         vrec?.CurrentMedium?.SimulatedBadLbas.Clear();
         SimulatedBadLbas.Clear();
-        StatusMessage = "Cleared all simulated bad LBAs.";
+        StatusMessage = Strings.StatusVirtualDriveClearedAllSimulatedBadLbas;
         RaiseCommandCanExecute();
     }
 
@@ -338,7 +339,7 @@ public class VirtualDriveViewModel : ObservableObject
     {
         CurrentVirtualRecorder?.EjectMedia();
         RefreshMediaState();
-        StatusMessage = "Virtual drive tray opened.";
+        StatusMessage = Strings.StatusVirtualDriveVirtualDriveTrayOpened;
     }
 
     /// <summary>
@@ -348,7 +349,7 @@ public class VirtualDriveViewModel : ObservableObject
     {
         CurrentVirtualRecorder?.CloseTray();
         RefreshMediaState();
-        StatusMessage = "Virtual drive tray closed.";
+        StatusMessage = Strings.StatusVirtualDriveVirtualDriveTrayClosed;
     }
 
     /// <summary>

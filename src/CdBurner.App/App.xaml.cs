@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Windows;
 using CdBurner.App.Themes;
 using CdBurner.App.ViewModels;
@@ -185,8 +186,8 @@ public partial class App : Application
         }
 
         MessageBox.Show(
-            $"An unexpected error occurred:\n\n{e.Exception.Message}",
-            "IgnisDisc Optical Studio",
+            Strings.Format(nameof(Strings.DialogUnexpectedErrorBody), e.Exception.Message),
+            Strings.DialogAppTitle,
             MessageBoxButton.OK,
             MessageBoxImage.Error);
         e.Handled = true;

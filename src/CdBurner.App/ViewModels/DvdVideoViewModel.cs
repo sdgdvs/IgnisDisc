@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Input;
@@ -544,7 +545,7 @@ public class DvdVideoViewModel : ObservableObject
     {
         IsBusy = true;
         BurnProgress = 0;
-        StatusMessage = "Downloading FFmpeg (LGPL)...";
+        StatusMessage = Strings.StatusDvdVideoDownloadingFfmpegLgpl;
 
         try
         {
@@ -860,7 +861,7 @@ public class DvdVideoViewModel : ObservableObject
     {
         if (_activeCts != null && !_activeCts.IsCancellationRequested)
         {
-            StatusMessage = "Cancelling DVD-Video operation...";
+            StatusMessage = Strings.StatusDvdVideoCancellingDvdVideoOperation;
             try
             {
                 _activeCts.Cancel();
@@ -929,7 +930,7 @@ public class DvdVideoViewModel : ObservableObject
         {
             IsBusy = true;
             BurnProgress = 1.0;
-            StatusMessage = "Preparing DVD-Video authoring pipeline...";
+            StatusMessage = Strings.StatusDvdVideoPreparingDvdVideoAuthoringPipeline;
         }
 
         try
@@ -1021,7 +1022,7 @@ public class DvdVideoViewModel : ObservableObject
                 }
             }
 
-            StatusMessage = "Authoring DVD-Video ISO image...";
+            StatusMessage = Strings.StatusDvdVideoAuthoringDvdVideoIsoImage;
             string actualVideoTsPath = !string.IsNullOrEmpty(LastAuthoredVideoTsPath) && Directory.Exists(LastAuthoredVideoTsPath)
                 ? LastAuthoredVideoTsPath
                 : ResolveVideoTsPath(VideoTsFolderPath);
@@ -1046,7 +1047,7 @@ public class DvdVideoViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "DVD-Video ISO build cancelled.";
+            StatusMessage = Strings.StatusDvdVideoDvdVideoIsoBuildCancelled;
             return string.Empty;
         }
         catch (Exception ex)
@@ -1098,7 +1099,7 @@ public class DvdVideoViewModel : ObservableObject
 
             if (confirmed == null)
             {
-                StatusMessage = "DVD-Video burn cancelled by user.";
+                StatusMessage = Strings.StatusDvdVideoDvdVideoBurnCancelledByUser;
                 return DataBurnResult.Failed(StatusMessage);
             }
 
@@ -1139,7 +1140,7 @@ public class DvdVideoViewModel : ObservableObject
         {
             if (RequiresAutoAuthoring && (string.IsNullOrEmpty(LastAuthoredVideoTsPath) || !Directory.Exists(LastAuthoredVideoTsPath)))
             {
-                StatusMessage = "Transcoding & authoring DVD-Video structure...";
+                StatusMessage = Strings.StatusDvdVideoTranscodingAuthoringDvdVideoStructure;
                 var authResult = await EnsureAuthoredAsync(cts.Token);
                 if (!authResult.Success)
                 {
@@ -1220,7 +1221,7 @@ public class DvdVideoViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "DVD-Video burn cancelled.";
+            StatusMessage = Strings.StatusDvdVideoDvdVideoBurnCancelled;
             return DataBurnResult.Cancelled(StatusMessage);
         }
         catch (Exception ex)
@@ -1367,7 +1368,7 @@ public class DvdVideoViewModel : ObservableObject
         string tempImage = Path.Combine(Path.GetTempPath(), $"ignisdisc_dvd9_{Guid.NewGuid():N}.iso");
         await using var image = new FileStream(tempImage, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 65536,
             FileOptions.DeleteOnClose | FileOptions.Asynchronous);
-        StatusMessage = "Building the disc image to place the layer break...";
+        StatusMessage = Strings.StatusDvdVideoBuildingTheDiscImageToPlace;
         await IsoUdfImageBuilder.BuildAsync(root, image, buildOptions, null, cancellationToken, 0);
         int totalSectors = OpticalConstants.BytesToSectors(image.Length, OpticalConstants.DataSectorSize);
 

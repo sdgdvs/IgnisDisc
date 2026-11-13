@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Security.Cryptography;
@@ -889,7 +890,7 @@ public class ImageStudioViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(SourceImagePath) || !File.Exists(SourceImagePath))
         {
-            StatusMessage = "Source disc image file does not exist.";
+            StatusMessage = Strings.StatusImageStudioSourceDiscImageFileDoesNot;
             return null;
         }
 
@@ -1123,14 +1124,14 @@ public class ImageStudioViewModel : ObservableObject
     {
         if (BurnQueueItems.Count == 0)
         {
-            StatusMessage = "Burn queue is empty.";
+            StatusMessage = Strings.StatusImageStudioBurnQueueIsEmpty;
             return new BurnQueueResult { Success = false, ErrorMessage = StatusMessage };
         }
 
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder drive selected or available.";
+            StatusMessage = Strings.StatusImageStudioNoOpticalRecorderDriveSelectedOr;
             return new BurnQueueResult { Success = false, ErrorMessage = StatusMessage };
         }
 
@@ -1164,7 +1165,7 @@ public class ImageStudioViewModel : ObservableObject
                 {
                     AppendLog($"Prompting for disc swap before queue item #{index + 1} ('{Path.GetFileName(nextItem.ImagePath)}')...");
                     var res = await ShowMessageOnUiThreadAsync(
-                        $"Burn queue: disc {index + 1} of {BurnQueueItems.Count}.\n\nInsert a blank disc for '{Path.GetFileName(nextItem.ImagePath)}' and click OK.",
+                        Strings.Format(nameof(Strings.DialogQueueInsertDiscBody), index + 1, BurnQueueItems.Count, Path.GetFileName(nextItem.ImagePath)),
                         System.Windows.MessageBoxButton.OKCancel,
                         System.Windows.MessageBoxImage.Information);
                     return res == System.Windows.MessageBoxResult.OK;
@@ -1206,7 +1207,7 @@ public class ImageStudioViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Burn queue cancelled by user.";
+            StatusMessage = Strings.StatusImageStudioBurnQueueCancelledByUser;
             AppendLog(StatusMessage);
             return new BurnQueueResult { Success = false, ErrorMessage = StatusMessage, Items = BurnQueueItems.ToList() };
         }
@@ -1235,7 +1236,7 @@ public class ImageStudioViewModel : ObservableObject
     {
         if (_activeCts != null && !_activeCts.IsCancellationRequested)
         {
-            StatusMessage = "Cancelling operation...";
+            StatusMessage = Strings.StatusImageStudioCancellingOperation;
             try
             {
                 _activeCts.Cancel();
@@ -1253,7 +1254,7 @@ public class ImageStudioViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(SourceImagePath) || !File.Exists(SourceImagePath))
         {
-            StatusMessage = "Source disc image file does not exist.";
+            StatusMessage = Strings.StatusImageStudioSourceDiscImageFileDoesNot;
             var fail = BurnOperationResult.Failed(StatusMessage);
             LastBurnResult = fail;
             return fail;
@@ -1270,7 +1271,7 @@ public class ImageStudioViewModel : ObservableObject
 
             if (confirmed == null)
             {
-                StatusMessage = "Image burn cancelled by user.";
+                StatusMessage = Strings.StatusImageStudioImageBurnCancelledByUser;
                 var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
                 LastBurnResult = cancelled;
                 return cancelled;
@@ -1283,7 +1284,7 @@ public class ImageStudioViewModel : ObservableObject
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder drive selected or available.";
+            StatusMessage = Strings.StatusImageStudioNoOpticalRecorderDriveSelectedOr;
             var fail = BurnOperationResult.Failed(StatusMessage);
             LastBurnResult = fail;
             return fail;
@@ -1390,7 +1391,7 @@ public class ImageStudioViewModel : ObservableObject
                 // Automatic verification; a direct burn is always read back.
                 if (VerifyAfterBurn || directEngine?.LastResult is { DiscRecorded: true })
                 {
-                    StatusMessage = "Burn complete. Verifying disc bit-for-bit against image...";
+                    StatusMessage = Strings.StatusImageStudioBurnCompleteVerifyingDiscBitFor;
                     await VerifyDiscAgainstImageAsync(recorder.UniqueId, linkedToken);
                     StatusMessage = VerificationStatusText + how;
                 }
@@ -1407,7 +1408,7 @@ public class ImageStudioViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Image burn cancelled by user.";
+            StatusMessage = Strings.StatusImageStudioImageBurnCancelledByUser;
             var cancelled = BurnOperationResult.CancelledResult(StatusMessage);
             LastBurnResult = cancelled;
             return cancelled;
@@ -1556,7 +1557,7 @@ public class ImageStudioViewModel : ObservableObject
         var recorder = ResolveRecorder(driveId);
         if (recorder == null)
         {
-            StatusMessage = "No optical recorder drive selected or available.";
+            StatusMessage = Strings.StatusImageStudioNoOpticalRecorderDriveSelectedOr;
             var fail = RipOperationResult.Failed(StatusMessage);
             LastRipResult = fail;
             return fail;
@@ -1608,7 +1609,7 @@ public class ImageStudioViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Disc rip cancelled by user.";
+            StatusMessage = Strings.StatusImageStudioDiscRipCancelledByUser;
             var fail = RipOperationResult.Failed(StatusMessage);
             LastRipResult = fail;
             return fail;
@@ -1863,7 +1864,7 @@ public class ImageStudioViewModel : ObservableObject
 
         if (sourceRec == null || targetRec == null)
         {
-            StatusMessage = "Source or target optical drive is not available.";
+            StatusMessage = Strings.StatusImageStudioSourceOrTargetOpticalDriveIs;
             var fail = DiscCopyResult.Failed(StatusMessage, CopyCount);
             LastCopyResult = fail;
             return fail;
@@ -1938,7 +1939,7 @@ public class ImageStudioViewModel : ObservableObject
                             AppendLog(problem);
                             var answer = await ShowMessageOnUiThreadAsync(
                                 problem + Environment.NewLine + Environment.NewLine
-                                    + "Copy anyway? The copy will have those errors. Choose No to stop: nothing has been written yet.",
+                                    + Strings.DialogCopySuspectAudioQuestion,
                                 System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
                             return answer == System.Windows.MessageBoxResult.Yes;
                         }
@@ -1968,7 +1969,7 @@ public class ImageStudioViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Disc Copy cancelled by user.";
+            StatusMessage = Strings.StatusImageStudioDiscCopyCancelledByUser;
             AppendLog(StatusMessage);
             var cancelled = DiscCopyResult.Failed(StatusMessage, CopyCount);
             LastCopyResult = cancelled;
@@ -2030,7 +2031,7 @@ public class ImageStudioViewModel : ObservableObject
         string reason = singleDrive && copyIndex == 1
             ? "The source disc has been read and ejected."
             : $"Copy #{copyIndex - 1} is finished and has been ejected.";
-        string message = $"{reason}\n\nInsert a blank disc into {targetRec.VolumePath} for copy {copyIndex} of {copyCount}, close the tray, then click OK.";
+        string message = Strings.Format(nameof(Strings.DialogInsertBlankForCopyBody), reason, targetRec.VolumePath, copyIndex, copyCount);
 
         while (true)
         {
@@ -2053,7 +2054,7 @@ public class ImageStudioViewModel : ObservableObject
                 await Task.Delay(1000, ct).ConfigureAwait(false);
             }
 
-            message = $"No blank disc was detected in {targetRec.VolumePath}.\n\nInsert a blank (or rewritable) disc for copy {copyIndex} of {copyCount}, then click OK — or Cancel to stop the batch.";
+            message = Strings.Format(nameof(Strings.DialogNoBlankDetectedBody), targetRec.VolumePath, copyIndex, copyCount);
         }
     }
 
@@ -2064,7 +2065,7 @@ public class ImageStudioViewModel : ObservableObject
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         System.Windows.MessageBoxResult Show() =>
-            System.Windows.MessageBox.Show(message, "Disc Copy — IgnisDisc", buttons, icon);
+            System.Windows.MessageBox.Show(message, Strings.DialogDiscCopyTitle, buttons, icon);
 
         if (dispatcher == null || dispatcher.CheckAccess())
         {

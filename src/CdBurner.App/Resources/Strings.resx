@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="DialogAboutBody" xml:space="preserve"><value>Official Website: https://ignisdisc.tetherworks.dev
+Source Code: https://github.com/tether-works/IgnisDisc
+
+IgnisDisc Optical Studio is free and open-source software released under the GNU General Public License v3 or later.</value></data>
+  <data name="DialogAboutTitle" xml:space="preserve"><value>About IgnisDisc Optical Studio</value></data>
+  <data name="DialogAppTitle" xml:space="preserve"><value>IgnisDisc Optical Studio</value></data>
+  <data name="DialogBurnErrorBody" xml:space="preserve"><value>An error occurred during Audio CD burning:
+
+{0}</value></data>
+  <data name="DialogBurnErrorTitle" xml:space="preserve"><value>Burn Error — IgnisDisc</value></data>
+  <data name="DialogBurnFailedBody" xml:space="preserve"><value>Audio CD burn could not be completed:
+
+{0}</value></data>
+  <data name="DialogBurnFailedTitle" xml:space="preserve"><value>Burn Failed — IgnisDisc</value></data>
+  <data name="DialogCopySuspectAudioQuestion" xml:space="preserve"><value>Copy anyway? The copy will have those errors. Choose No to stop: nothing has been written yet.</value></data>
+  <data name="DialogDamagedAudioBody" xml:space="preserve"><value>{0}
+
+Burn anyway? The damaged parts will be silence or missing on the disc.</value></data>
+  <data name="DialogDamagedAudioTitle" xml:space="preserve"><value>Damaged audio file — IgnisDisc</value></data>
+  <data name="DialogDiscCopyTitle" xml:space="preserve"><value>Disc Copy — IgnisDisc</value></data>
+  <data name="DialogDrmSkippedBody" xml:space="preserve"><value>The following {0} file(s) are encrypted with Apple FairPlay DRM (.m4p) and cannot be added or burned to an Audio CD:
+
+{1}
+
+Why: Apple Music subscription downloads are encrypted by Apple to prevent copying to physical media.
+
+To burn an Audio CD, please use DRM-free audio formats such as WAV, MP3, FLAC, M4A, OGG, or WMA (including DRM-free purchases from iTunes Store).</value></data>
+  <data name="DialogDrmSkippedTitle" xml:space="preserve"><value>DRM-Protected Audio Files Skipped — IgnisDisc</value></data>
+  <data name="DialogExitDuringBurnBody" xml:space="preserve"><value>An optical disc operation is currently in progress.
+
+Are you sure you want to abort the burn and exit? The drive motor will be stopped immediately.</value></data>
+  <data name="DialogHardToReadBody" xml:space="preserve"><value>The disc holds the right audio, but part of it was hard to read back.
+
+{0}</value></data>
+  <data name="DialogHardToReadTitle" xml:space="preserve"><value>Burned, hard to read in places — IgnisDisc</value></data>
+  <data name="DialogInsertBlankForCopyBody" xml:space="preserve"><value>{0}
+
+Insert a blank disc into {1} for copy {2} of {3}, close the tray, then click OK.</value></data>
+  <data name="DialogNoBlankDetectedBody" xml:space="preserve"><value>No blank disc was detected in {0}.
+
+Insert a blank (or rewritable) disc for copy {1} of {2}, then click OK — or Cancel to stop the batch.</value></data>
+  <data name="DialogQueueInsertDiscBody" xml:space="preserve"><value>Burn queue: disc {0} of {1}.
+
+Insert a blank disc for '{2}' and click OK.</value></data>
+  <data name="DialogReplaceDiscBody" xml:space="preserve"><value>The {0} in {1} already has files on it.
+
+Burning will replace everything on the disc. Continue?</value></data>
+  <data name="DialogReplaceDiscTitle" xml:space="preserve"><value>Replace the files on this disc?</value></data>
+  <data name="DialogUnexpectedErrorBody" xml:space="preserve"><value>An unexpected error occurred:
+
+{0}</value></data>
+  <data name="DialogUnsupportedFilesBody" xml:space="preserve"><value>{0}The following {1} file(s) could not be read or are unsupported:
+
+{2}</value></data>
+  <data name="DialogUnsupportedFilesTitle" xml:space="preserve"><value>Unsupported Audio Files — IgnisDisc</value></data>
+  <data name="StatusArchiveBurnCancelled" xml:space="preserve"><value>Burn cancelled.</value></data>
+  <data name="StatusArchiveCancellingArchiveOperation" xml:space="preserve"><value>Cancelling archive operation...</value></data>
+  <data name="StatusArchiveDownloadingPar2cmdlinePar2Exe" xml:space="preserve"><value>Downloading par2cmdline (par2.exe)...</value></data>
+  <data name="StatusArchiveNoOpticalRecorderSelected" xml:space="preserve"><value>No optical recorder selected.</value></data>
+  <data name="StatusArchivePar2ExecutableNotFound" xml:space="preserve"><value>par2 executable not found.</value></data>
+  <data name="StatusArchivePar2RecoveryDataRequiresPar2cmdlinePar2" xml:space="preserve"><value>PAR2 recovery data requires par2cmdline (par2.exe). Install it or set redundancy to 0.</value></data>
+  <data name="StatusArchivePlanningArchiveSpanning" xml:space="preserve"><value>Planning archive spanning...</value></data>
+  <data name="StatusArchiveRepairCancelled" xml:space="preserve"><value>Repair cancelled.</value></data>
+  <data name="StatusArchiveRepairIsNotAvailableForThe" xml:space="preserve"><value>Repair is not available for the current verification.</value></data>
+  <data name="StatusArchiveSourceFolderIsNotSpecified" xml:space="preserve"><value>Source folder is not specified.</value></data>
+  <data name="StatusArchiveStagingCancelled" xml:space="preserve"><value>Staging cancelled.</value></data>
+  <data name="StatusArchiveStagingFolderIsNotSpecified" xml:space="preserve"><value>Staging folder is not specified.</value></data>
+  <data name="StatusArchiveVerificationCancelled" xml:space="preserve"><value>Verification cancelled.</value></data>
+  <data name="StatusArchiveVerifyPathIsEmpty" xml:space="preserve"><value>Verify path is empty.</value></data>
+  <data name="StatusAudioBurnAddAtLeastOneTrackBefore" xml:space="preserve"><value>Add at least one track before exporting a printable CD cover.</value></data>
+  <data name="StatusAudioBurnAudioCdBurnCancelledByUser" xml:space="preserve"><value>Audio CD burn cancelled by user.</value></data>
+  <data name="StatusAudioBurnAudioCdRipCancelledByUser" xml:space="preserve"><value>Audio CD rip cancelled by user.</value></data>
+  <data name="StatusAudioBurnAudioPreviewStopped" xml:space="preserve"><value>Audio preview stopped.</value></data>
+  <data name="StatusAudioBurnCancellingAudioCdBurn" xml:space="preserve"><value>Cancelling Audio CD burn...</value></data>
+  <data name="StatusAudioBurnClearedAllTracksFromCompilation" xml:space="preserve"><value>Cleared all tracks from compilation.</value></data>
+  <data name="StatusAudioBurnDiscNotFoundInAccurateripDatabase" xml:space="preserve"><value>Disc not found in AccurateRip database.</value></data>
+  <data name="StatusAudioBurnNoAudioTracksFoundOnInserted" xml:space="preserve"><value>No audio tracks found on inserted disc.</value></data>
+  <data name="StatusAudioBurnNoAudioTracksInCompilationTo" xml:space="preserve"><value>No audio tracks in compilation to burn.</value></data>
+  <data name="StatusAudioBurnNoOpticalRecorderSelectedOrAvailable" xml:space="preserve"><value>No optical recorder selected or available.</value></data>
+  <data name="StatusAudioBurnOffsetDetectionCancelled" xml:space="preserve"><value>Offset detection cancelled.</value></data>
+  <data name="StatusBurnFailedNoSessionAtOnce" xml:space="preserve"><value>Burn failed: this drive does not report Session-at-Once writing, so direct drive commands cannot be used with it. Switch off "Direct drive commands" to burn with the Windows writer.</value></data>
+  <data name="StatusDataBurnCancellingDataDiscBurn" xml:space="preserve"><value>Cancelling data disc burn...</value></data>
+  <data name="StatusDataBurnCompilingOpticalDiscImage" xml:space="preserve"><value>Compiling optical disc image...</value></data>
+  <data name="StatusDataBurnDataDiscBurnCancelled" xml:space="preserve"><value>Data disc burn cancelled.</value></data>
+  <data name="StatusDataBurnDataDiscBurnCancelledByUser" xml:space="preserve"><value>Data disc burn cancelled by user.</value></data>
+  <data name="StatusDataBurnIsoExportCancelled" xml:space="preserve"><value>ISO export cancelled.</value></data>
+  <data name="StatusDataBurnPreviousSessionImportedSuccessfully" xml:space="preserve"><value>Previous session imported successfully.</value></data>
+  <data name="StatusDataBurnSessionImportCancelled" xml:space="preserve"><value>Session import cancelled.</value></data>
+  <data name="StatusDiscUnchangedSwitchOffDirect" xml:space="preserve"><value> The disc is unchanged; switch off "Direct drive commands" to burn it with the Windows writer.</value></data>
+  <data name="StatusDriveUtilitiesCancellingHardwareOperation" xml:space="preserve"><value>Cancelling hardware operation...</value></data>
+  <data name="StatusDriveUtilitiesCheckingTheDiscReadingEverySector" xml:space="preserve"><value>Checking the disc: reading every sector once, as a player would...</value></data>
+  <data name="StatusDriveUtilitiesDiscCheckCancelled" xml:space="preserve"><value>Disc check cancelled.</value></data>
+  <data name="StatusDriveUtilitiesDriveCompatibilityReportGeneratedAndReady" xml:space="preserve"><value>Drive compatibility report generated and ready to copy.</value></data>
+  <data name="StatusDriveUtilitiesEraseOperationCancelledByUser" xml:space="preserve"><value>Erase operation cancelled by user.</value></data>
+  <data name="StatusDriveUtilitiesNoDriveSelectedForTheDisc" xml:space="preserve"><value>No drive selected for the disc check.</value></data>
+  <data name="StatusDriveUtilitiesNoOpticalRecorderDriveSelected" xml:space="preserve"><value>No optical recorder drive selected.</value></data>
+  <data name="StatusDriveUtilitiesNoOpticalRecorderSelectedForBitsetting" xml:space="preserve"><value>No optical recorder selected for bitsetting.</value></data>
+  <data name="StatusDriveUtilitiesNoOpticalRecorderSelectedForErase" xml:space="preserve"><value>No optical recorder selected for erase.</value></data>
+  <data name="StatusDriveUtilitiesNoOpticalRecorderSelectedForSurface" xml:space="preserve"><value>No optical recorder selected for surface scan.</value></data>
+  <data name="StatusDriveUtilitiesRunASurfaceScanBeforeExporting" xml:space="preserve"><value>Run a surface scan before exporting CSV data.</value></data>
+  <data name="StatusDriveUtilitiesSurfaceScanCancelledByUser" xml:space="preserve"><value>Surface scan cancelled by user.</value></data>
+  <data name="StatusDvdVideoAuthoringDvdVideoIsoImage" xml:space="preserve"><value>Authoring DVD-Video ISO image...</value></data>
+  <data name="StatusDvdVideoBuildingTheDiscImageToPlace" xml:space="preserve"><value>Building the disc image to place the layer break...</value></data>
+  <data name="StatusDvdVideoCancellingDvdVideoOperation" xml:space="preserve"><value>Cancelling DVD-Video operation...</value></data>
+  <data name="StatusDvdVideoDownloadingFfmpegLgpl" xml:space="preserve"><value>Downloading FFmpeg (LGPL)...</value></data>
+  <data name="StatusDvdVideoDvdVideoBurnCancelled" xml:space="preserve"><value>DVD-Video burn cancelled.</value></data>
+  <data name="StatusDvdVideoDvdVideoBurnCancelledByUser" xml:space="preserve"><value>DVD-Video burn cancelled by user.</value></data>
+  <data name="StatusDvdVideoDvdVideoIsoBuildCancelled" xml:space="preserve"><value>DVD-Video ISO build cancelled.</value></data>
+  <data name="StatusDvdVideoPreparingDvdVideoAuthoringPipeline" xml:space="preserve"><value>Preparing DVD-Video authoring pipeline...</value></data>
+  <data name="StatusDvdVideoTranscodingAuthoringDvdVideoStructure" xml:space="preserve"><value>Transcoding &amp; authoring DVD-Video structure...</value></data>
+  <data name="StatusImageStudioBurnCompleteVerifyingDiscBitFor" xml:space="preserve"><value>Burn complete. Verifying disc bit-for-bit against image...</value></data>
+  <data name="StatusImageStudioBurnQueueCancelledByUser" xml:space="preserve"><value>Burn queue cancelled by user.</value></data>
+  <data name="StatusImageStudioBurnQueueIsEmpty" xml:space="preserve"><value>Burn queue is empty.</value></data>
+  <data name="StatusImageStudioCancellingOperation" xml:space="preserve"><value>Cancelling operation...</value></data>
+  <data name="StatusImageStudioDiscCopyCancelledByUser" xml:space="preserve"><value>Disc Copy cancelled by user.</value></data>
+  <data name="StatusImageStudioDiscRipCancelledByUser" xml:space="preserve"><value>Disc rip cancelled by user.</value></data>
+  <data name="StatusImageStudioImageBurnCancelledByUser" xml:space="preserve"><value>Image burn cancelled by user.</value></data>
+  <data name="StatusImageStudioNoOpticalRecorderDriveSelectedOr" xml:space="preserve"><value>No optical recorder drive selected or available.</value></data>
+  <data name="StatusImageStudioSourceDiscImageFileDoesNot" xml:space="preserve"><value>Source disc image file does not exist.</value></data>
+  <data name="StatusImageStudioSourceOrTargetOpticalDriveIs" xml:space="preserve"><value>Source or target optical drive is not available.</value></data>
+  <data name="StatusSettingsCheckingGithubReleasesForUpdates" xml:space="preserve"><value>Checking GitHub Releases for updates...</value></data>
+  <data name="StatusSettingsSettingsLoaded" xml:space="preserve"><value>Settings loaded.</value></data>
+  <data name="StatusSettingsSettingsResetToDefaultValues" xml:space="preserve"><value>Settings reset to default values.</value></data>
+  <data name="StatusSettingsSettingsSavedSuccessfully" xml:space="preserve"><value>Settings saved successfully.</value></data>
+  <data name="StatusSettingsUpdateCheckHasNotBeenRun" xml:space="preserve"><value>Update check has not been run.</value></data>
+  <data name="StatusVirtualDriveCannotInjectBadLbaNoMedia" xml:space="preserve"><value>Cannot inject bad LBA: No media is mounted in the virtual drive.</value></data>
+  <data name="StatusVirtualDriveClearedAllSimulatedBadLbas" xml:space="preserve"><value>Cleared all simulated bad LBAs.</value></data>
+  <data name="StatusVirtualDriveNoVirtualOpticalDriveIsAvailable" xml:space="preserve"><value>No virtual optical drive is available.</value></data>
+  <data name="StatusVirtualDriveNoVirtualOpticalDriveIsCurrently" xml:space="preserve"><value>No virtual optical drive is currently available.</value></data>
+  <data name="StatusVirtualDriveVirtualDriveTrayClosed" xml:space="preserve"><value>Virtual drive tray closed.</value></data>
+  <data name="StatusVirtualDriveVirtualDriveTrayOpened" xml:space="preserve"><value>Virtual drive tray opened.</value></data>
+</root>

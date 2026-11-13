@@ -1,0 +1,100 @@
+DialogAboutBody	Official Website: https://ignisdisc.tetherworks.dev\nSource Code: https://github.com/tether-works/IgnisDisc\n\nIgnisDisc Optical Studio is free and open-source software released under the GNU General Public License v3 or later.
+DialogAboutTitle	About IgnisDisc Optical Studio
+DialogAppTitle	IgnisDisc Optical Studio
+DialogBurnErrorBody	An error occurred during Audio CD burning:\n\n{0}
+DialogBurnErrorTitle	Burn Error — IgnisDisc
+DialogBurnFailedBody	Audio CD burn could not be completed:\n\n{0}
+DialogBurnFailedTitle	Burn Failed — IgnisDisc
+DialogCopySuspectAudioQuestion	Copy anyway? The copy will have those errors. Choose No to stop: nothing has been written yet.
+DialogDamagedAudioBody	{0}\n\nBurn anyway? The damaged parts will be silence or missing on the disc.
+DialogDamagedAudioTitle	Damaged audio file — IgnisDisc
+DialogDiscCopyTitle	Disc Copy — IgnisDisc
+DialogDrmSkippedBody	The following {0} file(s) are encrypted with Apple FairPlay DRM (.m4p) and cannot be added or burned to an Audio CD:\n\n{1}\n\nWhy: Apple Music subscription downloads are encrypted by Apple to prevent copying to physical media.\n\nTo burn an Audio CD, please use DRM-free audio formats such as WAV, MP3, FLAC, M4A, OGG, or WMA (including DRM-free purchases from iTunes Store).
+DialogDrmSkippedTitle	DRM-Protected Audio Files Skipped — IgnisDisc
+DialogExitDuringBurnBody	An optical disc operation is currently in progress.\n\nAre you sure you want to abort the burn and exit? The drive motor will be stopped immediately.
+DialogHardToReadBody	The disc holds the right audio, but part of it was hard to read back.\n\n{0}
+DialogHardToReadTitle	Burned, hard to read in places — IgnisDisc
+DialogInsertBlankForCopyBody	{0}\n\nInsert a blank disc into {1} for copy {2} of {3}, close the tray, then click OK.
+DialogNoBlankDetectedBody	No blank disc was detected in {0}.\n\nInsert a blank (or rewritable) disc for copy {1} of {2}, then click OK — or Cancel to stop the batch.
+DialogQueueInsertDiscBody	Burn queue: disc {0} of {1}.\n\nInsert a blank disc for '{2}' and click OK.
+DialogReplaceDiscBody	The {0} in {1} already has files on it.\n\nBurning will replace everything on the disc. Continue?
+DialogReplaceDiscTitle	Replace the files on this disc?
+DialogUnexpectedErrorBody	An unexpected error occurred:\n\n{0}
+DialogUnsupportedFilesBody	{0}The following {1} file(s) could not be read or are unsupported:\n\n{2}
+DialogUnsupportedFilesTitle	Unsupported Audio Files — IgnisDisc
+StatusArchiveBurnCancelled	Burn cancelled.
+StatusArchiveCancellingArchiveOperation	Cancelling archive operation...
+StatusArchiveDownloadingPar2cmdlinePar2Exe	Downloading par2cmdline (par2.exe)...
+StatusArchiveNoOpticalRecorderSelected	No optical recorder selected.
+StatusArchivePar2ExecutableNotFound	par2 executable not found.
+StatusArchivePar2RecoveryDataRequiresPar2cmdlinePar2	PAR2 recovery data requires par2cmdline (par2.exe). Install it or set redundancy to 0.
+StatusArchivePlanningArchiveSpanning	Planning archive spanning...
+StatusArchiveRepairCancelled	Repair cancelled.
+StatusArchiveRepairIsNotAvailableForThe	Repair is not available for the current verification.
+StatusArchiveSourceFolderIsNotSpecified	Source folder is not specified.
+StatusArchiveStagingCancelled	Staging cancelled.
+StatusArchiveStagingFolderIsNotSpecified	Staging folder is not specified.
+StatusArchiveVerificationCancelled	Verification cancelled.
+StatusArchiveVerifyPathIsEmpty	Verify path is empty.
+StatusAudioBurnAddAtLeastOneTrackBefore	Add at least one track before exporting a printable CD cover.
+StatusAudioBurnAudioCdBurnCancelledByUser	Audio CD burn cancelled by user.
+StatusAudioBurnAudioCdRipCancelledByUser	Audio CD rip cancelled by user.
+StatusAudioBurnAudioPreviewStopped	Audio preview stopped.
+StatusAudioBurnCancellingAudioCdBurn	Cancelling Audio CD burn...
+StatusAudioBurnClearedAllTracksFromCompilation	Cleared all tracks from compilation.
+StatusAudioBurnDiscNotFoundInAccurateripDatabase	Disc not found in AccurateRip database.
+StatusAudioBurnNoAudioTracksFoundOnInserted	No audio tracks found on inserted disc.
+StatusAudioBurnNoAudioTracksInCompilationTo	No audio tracks in compilation to burn.
+StatusAudioBurnNoOpticalRecorderSelectedOrAvailable	No optical recorder selected or available.
+StatusAudioBurnOffsetDetectionCancelled	Offset detection cancelled.
+StatusBurnFailedNoSessionAtOnce	Burn failed: this drive does not report Session-at-Once writing, so direct drive commands cannot be used with it. Switch off "Direct drive commands" to burn with the Windows writer.
+StatusDataBurnCancellingDataDiscBurn	Cancelling data disc burn...
+StatusDataBurnCompilingOpticalDiscImage	Compiling optical disc image...
+StatusDataBurnDataDiscBurnCancelled	Data disc burn cancelled.
+StatusDataBurnDataDiscBurnCancelledByUser	Data disc burn cancelled by user.
+StatusDataBurnIsoExportCancelled	ISO export cancelled.
+StatusDataBurnPreviousSessionImportedSuccessfully	Previous session imported successfully.
+StatusDataBurnSessionImportCancelled	Session import cancelled.
+StatusDiscUnchangedSwitchOffDirect	 The disc is unchanged; switch off "Direct drive commands" to burn it with the Windows writer.
+StatusDriveUtilitiesCancellingHardwareOperation	Cancelling hardware operation...
+StatusDriveUtilitiesCheckingTheDiscReadingEverySector	Checking the disc: reading every sector once, as a player would...
+StatusDriveUtilitiesDiscCheckCancelled	Disc check cancelled.
+StatusDriveUtilitiesDriveCompatibilityReportGeneratedAndReady	Drive compatibility report generated and ready to copy.
+StatusDriveUtilitiesEraseOperationCancelledByUser	Erase operation cancelled by user.
+StatusDriveUtilitiesNoDriveSelectedForTheDisc	No drive selected for the disc check.
+StatusDriveUtilitiesNoOpticalRecorderDriveSelected	No optical recorder drive selected.
+StatusDriveUtilitiesNoOpticalRecorderSelectedForBitsetting	No optical recorder selected for bitsetting.
+StatusDriveUtilitiesNoOpticalRecorderSelectedForErase	No optical recorder selected for erase.
+StatusDriveUtilitiesNoOpticalRecorderSelectedForSurface	No optical recorder selected for surface scan.
+StatusDriveUtilitiesRunASurfaceScanBeforeExporting	Run a surface scan before exporting CSV data.
+StatusDriveUtilitiesSurfaceScanCancelledByUser	Surface scan cancelled by user.
+StatusDvdVideoAuthoringDvdVideoIsoImage	Authoring DVD-Video ISO image...
+StatusDvdVideoBuildingTheDiscImageToPlace	Building the disc image to place the layer break...
+StatusDvdVideoCancellingDvdVideoOperation	Cancelling DVD-Video operation...
+StatusDvdVideoDownloadingFfmpegLgpl	Downloading FFmpeg (LGPL)...
+StatusDvdVideoDvdVideoBurnCancelled	DVD-Video burn cancelled.
+StatusDvdVideoDvdVideoBurnCancelledByUser	DVD-Video burn cancelled by user.
+StatusDvdVideoDvdVideoIsoBuildCancelled	DVD-Video ISO build cancelled.
+StatusDvdVideoPreparingDvdVideoAuthoringPipeline	Preparing DVD-Video authoring pipeline...
+StatusDvdVideoTranscodingAuthoringDvdVideoStructure	Transcoding & authoring DVD-Video structure...
+StatusImageStudioBurnCompleteVerifyingDiscBitFor	Burn complete. Verifying disc bit-for-bit against image...
+StatusImageStudioBurnQueueCancelledByUser	Burn queue cancelled by user.
+StatusImageStudioBurnQueueIsEmpty	Burn queue is empty.
+StatusImageStudioCancellingOperation	Cancelling operation...
+StatusImageStudioDiscCopyCancelledByUser	Disc Copy cancelled by user.
+StatusImageStudioDiscRipCancelledByUser	Disc rip cancelled by user.
+StatusImageStudioImageBurnCancelledByUser	Image burn cancelled by user.
+StatusImageStudioNoOpticalRecorderDriveSelectedOr	No optical recorder drive selected or available.
+StatusImageStudioSourceDiscImageFileDoesNot	Source disc image file does not exist.
+StatusImageStudioSourceOrTargetOpticalDriveIs	Source or target optical drive is not available.
+StatusSettingsCheckingGithubReleasesForUpdates	Checking GitHub Releases for updates...
+StatusSettingsSettingsLoaded	Settings loaded.
+StatusSettingsSettingsResetToDefaultValues	Settings reset to default values.
+StatusSettingsSettingsSavedSuccessfully	Settings saved successfully.
+StatusSettingsUpdateCheckHasNotBeenRun	Update check has not been run.
+StatusVirtualDriveCannotInjectBadLbaNoMedia	Cannot inject bad LBA: No media is mounted in the virtual drive.
+StatusVirtualDriveClearedAllSimulatedBadLbas	Cleared all simulated bad LBAs.
+StatusVirtualDriveNoVirtualOpticalDriveIsAvailable	No virtual optical drive is available.
+StatusVirtualDriveNoVirtualOpticalDriveIsCurrently	No virtual optical drive is currently available.
+StatusVirtualDriveVirtualDriveTrayClosed	Virtual drive tray closed.
+StatusVirtualDriveVirtualDriveTrayOpened	Virtual drive tray opened.

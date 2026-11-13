@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Net.Http;
@@ -551,7 +552,7 @@ public class ArchiveViewModel : ObservableObject
     {
         IsBusy = true;
         Progress = 0;
-        StatusMessage = "Downloading par2cmdline (par2.exe)...";
+        StatusMessage = Strings.StatusArchiveDownloadingPar2cmdlinePar2Exe;
 
         try
         {
@@ -595,7 +596,7 @@ public class ArchiveViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(SourceFolder))
         {
-            StatusMessage = "Source folder is not specified.";
+            StatusMessage = Strings.StatusArchiveSourceFolderIsNotSpecified;
             return null;
         }
 
@@ -609,7 +610,7 @@ public class ArchiveViewModel : ObservableObject
         _activeCts = new CancellationTokenSource();
         IsBusy = true;
         Progress = 0;
-        StatusMessage = "Planning archive spanning...";
+        StatusMessage = Strings.StatusArchivePlanningArchiveSpanning;
 
         try
         {
@@ -673,7 +674,7 @@ public class ArchiveViewModel : ObservableObject
 
         if (string.IsNullOrWhiteSpace(StagingFolder))
         {
-            StatusMessage = "Staging folder is not specified.";
+            StatusMessage = Strings.StatusArchiveStagingFolderIsNotSpecified;
             return false;
         }
 
@@ -694,7 +695,7 @@ public class ArchiveViewModel : ObservableObject
             string? par2Path = Par2Runner.FindPar2Executable(_customPar2Path);
             if (plan.RedundancyPercent > 0 && par2Path == null)
             {
-                StatusMessage = "PAR2 recovery data requires par2cmdline (par2.exe). Install it or set redundancy to 0.";
+                StatusMessage = Strings.StatusArchivePar2RecoveryDataRequiresPar2cmdlinePar2;
                 return false;
             }
 
@@ -730,7 +731,7 @@ public class ArchiveViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Staging cancelled.";
+            StatusMessage = Strings.StatusArchiveStagingCancelled;
             return false;
         }
         catch (Exception ex)
@@ -765,7 +766,7 @@ public class ArchiveViewModel : ObservableObject
 
         if (SelectedRecorder == null)
         {
-            StatusMessage = "No optical recorder selected.";
+            StatusMessage = Strings.StatusArchiveNoOpticalRecorderSelected;
             row.Status = "Failed: No recorder selected";
             return DataBurnResult.Failed(StatusMessage);
         }
@@ -885,7 +886,7 @@ public class ArchiveViewModel : ObservableObject
         catch (OperationCanceledException)
         {
             row.Status = "Failed: Cancelled";
-            StatusMessage = "Burn cancelled.";
+            StatusMessage = Strings.StatusArchiveBurnCancelled;
             return DataBurnResult.Cancelled("Burn cancelled.");
         }
         catch (Exception ex)
@@ -912,7 +913,7 @@ public class ArchiveViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(path))
         {
-            StatusMessage = "Verify path is empty.";
+            StatusMessage = Strings.StatusArchiveVerifyPathIsEmpty;
             return null;
         }
 
@@ -991,7 +992,7 @@ public class ArchiveViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Verification cancelled.";
+            StatusMessage = Strings.StatusArchiveVerificationCancelled;
             UpdateCanRepair();
             return null;
         }
@@ -1020,14 +1021,14 @@ public class ArchiveViewModel : ObservableObject
     {
         if (!CanRepair)
         {
-            StatusMessage = "Repair is not available for the current verification.";
+            StatusMessage = Strings.StatusArchiveRepairIsNotAvailableForThe;
             return false;
         }
 
         string? par2Path = Par2Runner.FindPar2Executable(_customPar2Path);
         if (string.IsNullOrEmpty(par2Path))
         {
-            StatusMessage = "par2 executable not found.";
+            StatusMessage = Strings.StatusArchivePar2ExecutableNotFound;
             return false;
         }
 
@@ -1076,7 +1077,7 @@ public class ArchiveViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Repair cancelled.";
+            StatusMessage = Strings.StatusArchiveRepairCancelled;
             return false;
         }
         catch (Exception ex)
@@ -1099,7 +1100,7 @@ public class ArchiveViewModel : ObservableObject
     {
         if (_activeCts != null && !_activeCts.IsCancellationRequested)
         {
-            StatusMessage = "Cancelling archive operation...";
+            StatusMessage = Strings.StatusArchiveCancellingArchiveOperation;
             try
             {
                 _activeCts.Cancel();

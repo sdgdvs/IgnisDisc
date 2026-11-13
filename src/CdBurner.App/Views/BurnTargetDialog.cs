@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Windows.Automation;
 using System.Windows;
 using System.Windows.Controls;
@@ -445,9 +446,8 @@ public sealed class BurnTargetDialog : Window
 
         var answer = MessageBox.Show(
             Application.Current.MainWindow,
-            $"The {status.MediaType.GetDisplayName()} in {recorder.VolumePath} already has files on it.\n\n" +
-            "Burning will replace everything on the disc. Continue?",
-            "Replace the files on this disc?",
+            Strings.Format(nameof(Strings.DialogReplaceDiscBody), status.MediaType.GetDisplayName(), recorder.VolumePath),
+            Strings.DialogReplaceDiscTitle,
             MessageBoxButton.OKCancel,
             MessageBoxImage.Warning,
             MessageBoxResult.Cancel);

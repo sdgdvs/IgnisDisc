@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using CdBurner.App.Mvvm;
 using CdBurner.Core.Abstractions;
@@ -350,7 +351,7 @@ public class DriveUtilitiesViewModel : ObservableObject
     {
         if (_activeCts != null && !_activeCts.IsCancellationRequested)
         {
-            StatusMessage = "Cancelling hardware operation...";
+            StatusMessage = Strings.StatusDriveUtilitiesCancellingHardwareOperation;
             try
             {
                 _activeCts.Cancel();
@@ -404,7 +405,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         var targetRecorder = ResolveTargetRecorder(parameter);
         if (targetRecorder == null)
         {
-            StatusMessage = "No optical recorder selected for erase.";
+            StatusMessage = Strings.StatusDriveUtilitiesNoOpticalRecorderSelectedForErase;
             return BurnOperationResult.Failed(StatusMessage);
         }
 
@@ -436,7 +437,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Erase operation cancelled by user.";
+            StatusMessage = Strings.StatusDriveUtilitiesEraseOperationCancelledByUser;
             return BurnOperationResult.CancelledResult(StatusMessage);
         }
         catch (Exception ex)
@@ -460,7 +461,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         var targetRecorder = ResolveTargetRecorder(parameter);
         if (targetRecorder == null)
         {
-            StatusMessage = "No optical recorder selected for bitsetting.";
+            StatusMessage = Strings.StatusDriveUtilitiesNoOpticalRecorderSelectedForBitsetting;
             return BurnOperationResult.Failed(StatusMessage);
         }
 
@@ -495,7 +496,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         var targetRecorder = ResolveTargetRecorder(parameter);
         if (targetRecorder == null)
         {
-            StatusMessage = "No optical recorder selected for surface scan.";
+            StatusMessage = Strings.StatusDriveUtilitiesNoOpticalRecorderSelectedForSurface;
             return new SurfaceScanReport(0, 0, 0, 0, 0, 0, 0, Array.Empty<SurfaceScanBlockResult>());
         }
 
@@ -541,7 +542,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Surface scan cancelled by user.";
+            StatusMessage = Strings.StatusDriveUtilitiesSurfaceScanCancelledByUser;
             var fallbackReport = new SurfaceScanReport(0, 0, 0, 0, 0, 0, 0, Array.Empty<SurfaceScanBlockResult>());
             LatestScanReport = fallbackReport;
             return fallbackReport;
@@ -570,7 +571,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         var targetRecorder = ResolveTargetRecorder(parameter);
         if (targetRecorder == null)
         {
-            StatusMessage = "No drive selected for the disc check.";
+            StatusMessage = Strings.StatusDriveUtilitiesNoDriveSelectedForTheDisc;
             return null;
         }
 
@@ -583,7 +584,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         IsBusy = true;
         LastDiscHealth = null;
         OperationProgress = 0.0;
-        StatusMessage = "Checking the disc: reading every sector once, as a player would...";
+        StatusMessage = Strings.StatusDriveUtilitiesCheckingTheDiscReadingEverySector;
         try
         {
             var progress = new Progress<double>(percent =>
@@ -611,7 +612,7 @@ public class DriveUtilitiesViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Disc check cancelled.";
+            StatusMessage = Strings.StatusDriveUtilitiesDiscCheckCancelled;
             return null;
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.IO.IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -645,7 +646,7 @@ public class DriveUtilitiesViewModel : ObservableObject
     {
         if (SelectedRecorder == null)
         {
-            StatusMessage = "No optical recorder drive selected.";
+            StatusMessage = Strings.StatusDriveUtilitiesNoOpticalRecorderDriveSelected;
             return null;
         }
 
@@ -655,7 +656,7 @@ public class DriveUtilitiesViewModel : ObservableObject
             MediaDetails);
 
         LastCompatibilityReport = report;
-        StatusMessage = "Drive compatibility report generated and ready to copy.";
+        StatusMessage = Strings.StatusDriveUtilitiesDriveCompatibilityReportGeneratedAndReady;
         return report;
     }
 
@@ -666,7 +667,7 @@ public class DriveUtilitiesViewModel : ObservableObject
     {
         if (LatestScanReport == null || LatestScanReport.Blocks.Count == 0)
         {
-            StatusMessage = "Run a surface scan before exporting CSV data.";
+            StatusMessage = Strings.StatusDriveUtilitiesRunASurfaceScanBeforeExporting;
             return null;
         }
 

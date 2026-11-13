@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Input;
@@ -732,7 +733,7 @@ public class DataBurnViewModel : ObservableObject
         var linkedToken = _activeBurnCts.Token;
 
         IsBusy = true;
-        StatusMessage = "Compiling optical disc image...";
+        StatusMessage = Strings.StatusDataBurnCompilingOpticalDiscImage;
         try
         {
             var buildOptions = CreateIsoBuildOptions();
@@ -743,7 +744,7 @@ public class DataBurnViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "ISO export cancelled.";
+            StatusMessage = Strings.StatusDataBurnIsoExportCancelled;
             return string.Empty;
         }
         catch (Exception ex)
@@ -786,7 +787,7 @@ public class DataBurnViewModel : ObservableObject
 
             if (confirmed == null)
             {
-                StatusMessage = "Data disc burn cancelled by user.";
+                StatusMessage = Strings.StatusDataBurnDataDiscBurnCancelledByUser;
                 return DataBurnResult.Failed(StatusMessage);
             }
 
@@ -895,7 +896,7 @@ public class DataBurnViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Data disc burn cancelled.";
+            StatusMessage = Strings.StatusDataBurnDataDiscBurnCancelled;
             return DataBurnResult.Cancelled(StatusMessage);
         }
         catch (Exception ex)
@@ -920,7 +921,7 @@ public class DataBurnViewModel : ObservableObject
     {
         if (_activeBurnCts != null && !_activeBurnCts.IsCancellationRequested)
         {
-            StatusMessage = "Cancelling data disc burn...";
+            StatusMessage = Strings.StatusDataBurnCancellingDataDiscBurn;
             try
             {
                 _activeBurnCts.Cancel();
@@ -967,14 +968,14 @@ public class DataBurnViewModel : ObservableObject
 
                 RefreshCurrentItems();
                 RecalculateCapacity();
-                StatusMessage = "Previous session imported successfully.";
+                StatusMessage = Strings.StatusDataBurnPreviousSessionImportedSuccessfully;
                 return true;
             }
             return false;
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Session import cancelled.";
+            StatusMessage = Strings.StatusDataBurnSessionImportCancelled;
             return false;
         }
         catch (Exception ex)

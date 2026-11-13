@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using CdBurner.App.Mvvm;
@@ -1123,10 +1124,8 @@ public class MainViewModel : ObservableObject, IDisposable
     {
         System.Windows.MessageBox.Show(
             $"{LegalBanner.VersionNotice}\n\n" +
-            "Official Website: https://ignisdisc.tetherworks.dev\n" +
-            "Source Code: https://github.com/tether-works/IgnisDisc\n\n" +
-            "IgnisDisc Optical Studio is free and open-source software released under the GNU General Public License v3 or later.",
-            "About IgnisDisc Optical Studio",
+            Strings.DialogAboutBody,
+            Strings.DialogAboutTitle,
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Information);
     }

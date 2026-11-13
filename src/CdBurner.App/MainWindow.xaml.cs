@@ -1,3 +1,4 @@
+using CdBurner.App.Resources;
 using System.Windows;
 using System.Windows.Interop;
 using CdBurner.App.Themes;
@@ -62,8 +63,8 @@ public partial class MainWindow : Window
         if (DataContext is MainViewModel mainVm && mainVm.IsAnyBurnActive)
         {
             var res = MessageBox.Show(
-                "An optical disc operation is currently in progress.\n\nAre you sure you want to abort the burn and exit? The drive motor will be stopped immediately.",
-                "IgnisDisc Optical Studio",
+                Strings.DialogExitDuringBurnBody,
+                Strings.DialogAppTitle,
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
 
