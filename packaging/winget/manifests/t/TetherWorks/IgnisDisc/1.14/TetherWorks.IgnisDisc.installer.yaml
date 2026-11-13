@@ -25,7 +25,7 @@ AppsAndFeaturesEntries:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/tether-works/IgnisDisc/releases/download/v1.14/IgnisDisc-Setup.exe
-    InstallerSha256: A30069BDB50E615FA07E00A7B2F0C2F51C49118CC754D2F46A23A84212B158AC
+    InstallerSha256: 86BD991430116370AECCAAEE4C49BF5FB3D6F966E13029B1003A1CE741473C37
 ManifestType: installer
 ManifestVersion: 1.6.0
 
