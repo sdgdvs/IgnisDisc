@@ -109,6 +109,7 @@ public class ArchiveViewModel : ObservableObject
 
     private IDiscRecorderBackend? _selectedRecorder;
     private bool _verifyAfterBurn = true;
+    private bool _useDirectDriveCommands;
 
     private string _verifyPath = string.Empty;
     private ArchiveVerificationResult? _lastVerification;
@@ -259,6 +260,23 @@ public class ArchiveViewModel : ObservableObject
         get => _verifyAfterBurn;
         set => SetProperty(ref _verifyAfterBurn, value);
     }
+
+    /// <summary>
+    /// Burn each archive disc with IgnisDisc's own drive commands instead of the Windows writer, as on the Data Disc
+    /// screen. Off by default, chosen per burn. Discs the direct writer does not cover yet are burned by the Windows
+    /// writer, and the status line says why. A direct burn is always read back sector by sector afterwards.
+    /// </summary>
+    public bool UseDirectDriveCommands
+    {
+        get => _useDirectDriveCommands;
+        set => SetProperty(ref _useDirectDriveCommands, value);
+    }
+
+    /// <summary>Folder for the command logs of direct burns; null for the default under %LOCALAPPDATA%.</summary>
+    public string? DirectBurnLogDirectory { get; set; }
+
+    /// <summary>Which writer burned the last disc made with <see cref="UseDirectDriveCommands"/>, and its log.</summary>
+    public CdBurner.Hardware.NativeWriting.NativeDataBurnEngine? LastDirectBurnEngine { get; private set; }
 
     #endregion
 
@@ -786,12 +804,7 @@ public class ArchiveViewModel : ObservableObject
 
         try
         {
-            string setId = CurrentPlan?.SetId ?? "ARCHIV";
-            if (setId.Length > 6)
-            {
-                setId = setId[..6];
-            }
-            string label = $"ARC{setId}_{row.DiscNumber:D2}".ToUpperInvariant();
+            string label = ArchiveManifest.VolumeLabel(CurrentPlan?.SetId, row.DiscNumber);
 
             var root = CompilationFolderImporter.ImportAsRoot(row.StagedPath, strict: true);
 
@@ -806,12 +819,18 @@ public class ArchiveViewModel : ObservableObject
             {
                 VolumeLabel = label,
                 CloseDisc = true,
-                VerifyAfterBurn = VerifyAfterBurn,
+                VerifyAfterBurn = VerifyAfterBurn || UseDirectDriveCommands, // a direct burn is always read back
                 EjectAfterBurn = false,
                 OverwriteExistingData = replaceAllowed
             };
 
-            var burnService = new DataBurnService(_burnEngine);
+            // Same rule as the Data Disc screen: the direct writer takes the discs it covers and hands any other to
+            // the Windows writer, recording why (LastFallbackReason).
+            var directEngine = UseDirectDriveCommands
+                ? new CdBurner.Hardware.NativeWriting.NativeDataBurnEngine(_burnEngine, DirectBurnLogDirectory)
+                : null;
+            LastDirectBurnEngine = directEngine;
+            var burnService = new DataBurnService(directEngine ?? _burnEngine);
             var progressHandler = new Progress<BurnProgressSnapshot>(snap =>
             {
                 if (!_isBusy) return;
@@ -836,7 +855,8 @@ public class ArchiveViewModel : ObservableObject
             {
                 Progress = 100.0;
                 row.Status = "Burned";
-                StatusMessage = $"Disc {row.DiscNumber} burned successfully.";
+                string writer = directEngine?.LastSummary is { } how ? " " + how : "";
+                StatusMessage = $"Disc {row.DiscNumber} burned successfully.{writer}";
 
                 if (VerifyAfterBurn && !SelectedRecorder.IsVirtual && !string.IsNullOrWhiteSpace(SelectedRecorder.VolumePath))
                 {
@@ -850,12 +870,14 @@ public class ArchiveViewModel : ObservableObject
                     {
                         row.Status = "Burned - verification found problems";
                     }
+                    StatusMessage += writer; // the manifest check replaced the status line; keep which writer burned it
                 }
             }
             else
             {
                 row.Status = $"Failed: {result.ErrorMessage}";
-                StatusMessage = $"Burn failed: {result.ErrorMessage}";
+                StatusMessage = $"Burn failed: {result.ErrorMessage}"
+                    + (directEngine?.LastFallbackReason is { } why ? " " + why : "");
             }
 
             return result;

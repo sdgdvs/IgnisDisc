@@ -1550,6 +1550,94 @@ public sealed class CliIntegrationTests : IDisposable
         }
     }
 
+    /// <summary>Stages a one-disc CD archive without recovery data (no par2 needed) and returns disc01's folder and set ID.</summary>
+    private async Task<(string DiscFolder, string SetId)> StageOneArchiveDiscAsync(string name)
+    {
+        string inputDir = Path.Combine(_tempDir, name + "_in");
+        Directory.CreateDirectory(inputDir);
+        byte[] data = new byte[200_000];
+        new Random(2026_11_13).NextBytes(data);
+        await File.WriteAllBytesAsync(Path.Combine(inputDir, "photos.bin"), data);
+
+        var (stageOut, stageErr) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-stage", "--input", inputDir, "--staging", Path.Combine(_tempDir, name + "_staged"), "--media", "cd", "--redundancy", "0", "--json" },
+            stageOut, stageErr, _deviceService, _burnEngine);
+        Assert.True(code == 0, stageErr.ToString());
+        using var doc = ParseJsonOutput(stageOut);
+        return (doc.RootElement.GetProperty("discs")[0].GetProperty("path").GetString()!, doc.RootElement.GetProperty("setId").GetString()!);
+    }
+
+    [Fact]
+    public async Task ArchiveBurn_Native_WritesTheStagedDiscDirectly_AndReadsItBack()
+    {
+        var (discFolder, setId) = await StageOneArchiveDiscAsync("archive_native");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-burn", "--drive", "VDRV-01", "--disc", discFolder, "--native", "--no-verify", "--log-dir", Path.Combine(_tempDir, "archive-logs"), "--json" },
+            outText, errText, _deviceService, _burnEngine);
+
+        Assert.True(code == 0, errText.ToString());
+        using var doc = ParseJsonOutput(outText);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.True(root.GetProperty("verified").GetBoolean()); // a direct burn is always read back, even with --no-verify
+        var direct = root.GetProperty("directWrite");
+        Assert.Equal("direct", direct.GetProperty("writer").GetString());
+        Assert.True(File.Exists(direct.GetProperty("commandLog").GetString()));
+        Assert.True(medium.IsFinalized);
+
+        // The label the Archive screen uses: ARC + first six characters of the set ID + _01. Read it from the disc's
+        // ISO 9660 Primary Volume Descriptor (ECMA-119 8.4: sector 16, type 1, "CD001", volume identifier at bytes 40-71).
+        string expectedLabel = ("ARC" + setId[..6] + "_01").ToUpperInvariant();
+        Assert.Equal(expectedLabel, root.GetProperty("volumeLabel").GetString());
+        byte[] pvd = medium.ReadSector(16, 2048);
+        Assert.Equal(1, pvd[0]);
+        Assert.Equal("CD001", System.Text.Encoding.ASCII.GetString(pvd, 1, 5));
+        Assert.Equal(expectedLabel, System.Text.Encoding.ASCII.GetString(pvd, 40, 32).TrimEnd(' '));
+    }
+
+    [Fact]
+    public async Task ArchiveBurn_Native_HandsADualLayerDvdMinusRToTheWindowsWriter_AndSaysWhy()
+    {
+        var (discFolder, _) = await StageOneArchiveDiscAsync("archive_fallback");
+        using var medium = new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors);
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-burn", "--drive", "VDRV-01", "--disc", discFolder, "--native", "--log-dir", Path.Combine(_tempDir, "fallback-logs") },
+            outText, errText, _deviceService, _burnEngine);
+
+        Assert.True(code == 0, errText.ToString());
+        string text = outText.ToString();
+        Assert.Contains("Writer:         Written with Windows' writer:", text);
+        Assert.Contains("dual-layer DVD-R", text);
+        Assert.Contains("Verified:       Passed", text);
+        Assert.False(medium.IsBlank);
+        Assert.False(Directory.Exists(Path.Combine(_tempDir, "fallback-logs"))); // no drive commands were sent
+    }
+
+    [Fact]
+    public async Task ArchiveBurn_RefusesAFolderThatIsNotAStagedArchiveDisc()
+    {
+        string plain = CreateSampleDataFolder("NotAnArchive");
+        using var medium = VirtualDiscMedium.CreateBlankCdR700();
+        _recorder.InsertMedia(medium);
+
+        var (outText, errText) = CreateStringWriters();
+        int code = await CliCommandRunner.RunAsync(
+            new[] { "archive-burn", "--drive", "VDRV-01", "--disc", plain, "--native" },
+            outText, errText, _deviceService, _burnEngine);
+
+        Assert.NotEqual(0, code);
+        Assert.Contains("not a staged archive disc", errText.ToString());
+        Assert.True(medium.IsBlank);
+    }
+
     private sealed class OptionsCapturingEngine : IBurnEngineBackend
     {
         public DataBurnOptions? Options { get; private set; }

@@ -224,6 +224,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="260" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
@@ -261,6 +262,14 @@
                                   Content="Verify after burning"
                                   AutomationProperties.Name="Verify after burning"
                                   IsChecked="{Binding VerifyAfterBurn}"
+                                  VerticalAlignment="Center"
+                                  Margin="16,0,0,0" />
+
+                        <CheckBox Grid.Column="4"
+                                  Content="Direct drive commands (experimental)"
+                                  AutomationProperties.Name="Direct drive commands (experimental)"
+                                  IsChecked="{Binding UseDirectDriveCommands}"
+                                  ToolTip="Burn each disc with IgnisDisc's own drive commands instead of the Windows writer, at a speed taken from the drive's own list for the disc, then read the disc back to check it. Covers blank CD-R, CD-RW, DVD-R, DVD-RW, DVD+R (single and dual layer), DVD+RW, DVD-RAM, and single-layer BD-R and BD-RE so far; other discs are burned by the Windows writer as before."
                                   VerticalAlignment="Center"
                                   Margin="16,0,0,0" />
                     </Grid>

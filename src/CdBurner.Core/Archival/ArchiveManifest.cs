@@ -40,6 +40,20 @@ public static class ArchiveManifest
     public const string RecoveryReadmeFileName = "README-RECOVERY.TXT";
 
     /// <summary>
+    /// Volume label an archive disc is burned with: "ARC", the first six characters of the set ID and the two-digit
+    /// disc number (ARC1A2B3C_01), upper case. 12 characters, well inside the 16 a Joliet volume label allows.
+    /// </summary>
+    public static string VolumeLabel(string? setId, int discNumber)
+    {
+        string id = string.IsNullOrWhiteSpace(setId) ? "ARCHIV" : setId.Trim();
+        if (id.Length > 6)
+        {
+            id = id[..6];
+        }
+        return $"ARC{id}_{discNumber:D2}".ToUpperInvariant();
+    }
+
+    /// <summary>
     /// Opens a file for hashing with a 1 MB sequential read buffer. The default 4 KB buffer turns a large file into
     /// hundreds of thousands of small reads, which is slow on optical drives (3.4 MB/s measured on a DVD).
     /// </summary>

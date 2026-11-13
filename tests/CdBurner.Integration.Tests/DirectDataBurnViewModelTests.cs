@@ -53,6 +53,7 @@ public sealed class DirectDataBurnViewModelTests : IDisposable
     {
         Assert.False(new DataBurnViewModel(_deviceManager, _burnEngine).UseDirectDriveCommands);
         Assert.False(new ImageStudioViewModel(_deviceManager, _burnEngine).UseDirectDriveCommands);
+        Assert.False(new ArchiveViewModel(_deviceManager, _burnEngine).UseDirectDriveCommands);
     }
 
     [Fact]

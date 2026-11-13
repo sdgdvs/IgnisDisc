@@ -98,6 +98,8 @@ ignisdisc-cli <command> [options]
   check-disc --drive <id>                      Read a CD once with C2 error pointers: where it is weak (may skip)
   archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql]
              [--redundancy <min %>] [--no-fill]      Recovery data fills each disc; --no-fill keeps exactly that %
+  archive-burn --drive <id> --disc <staged disc folder> [--native [--test-write | --test-first] [--log-dir <folder>]]
+                                               Burn one staged archive disc; --native uses direct drive commands
   archive-verify --path <folder|drive>         Check an archive disc against its SHA-256 manifest
   recover (--drive <id>|--image <file.iso>) --out <folder>
                                                Copy a damaged archive disc's files out, rebuild them from its
@@ -195,6 +197,7 @@ ignisdisc-cli rip --drive D: --output C:\Backup\disc.iso
 ignisdisc-cli copy-disc --source D: --native
 ignisdisc-cli rip-audio --drive D: --output C:\Music\Album --format flac --lookup --verify-accuraterip
 ignisdisc-cli archive-stage --input "C:\Photos" --staging C:\temp\archive --media dvd --redundancy 10
+ignisdisc-cli archive-burn --drive D: --disc C:\temp\archive\disc01 --native
 ignisdisc-cli recover --drive D: --out C:\Rescued\disc01
 ignisdisc-cli erase --drive D:
 ```

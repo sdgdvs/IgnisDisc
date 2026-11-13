@@ -202,6 +202,7 @@ public static class CliCommandRunner
             "check-disc" or "checkdisc" => HandleCheckDisc(cmd, stdout, deviceService),
             "copy-disc" or "copydisc" or "copy" => await HandleCopyDiscAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "archive-stage" or "archivestage" => await HandleArchiveStageAsync(cmd, stdout).ConfigureAwait(false),
+            "archive-burn" or "archiveburn" => await HandleArchiveBurnAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "archive-verify" or "archiveverify" => await HandleArchiveVerifyAsync(cmd, stdout).ConfigureAwait(false),
             "recover" or "archive-recover" => await HandleRecoverAsync(cmd, stdout, deviceService, burnEngine).ConfigureAwait(false),
             "verify" or "verify-disc" => await HandleVerifyAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
@@ -2214,10 +2215,130 @@ public static class CliCommandRunner
         }
         if (!planOnly && stagedDiscs.Count > 0)
         {
-            stdout.WriteLine($"  Burn each disc with: burn-data --drive <id> --input \"{stagedDiscs[0]}\" --udf --verify");
+            stdout.WriteLine($"  Burn each disc with: archive-burn --drive <id> --disc \"{stagedDiscs[0]}\" [--native]");
             stdout.WriteLine("  Check a burned disc later with: archive-verify --path <drive letter>");
         }
         return 0;
+    }
+
+    /// <summary>
+    /// archive-burn --drive &lt;id&gt; --disc &lt;staged disc folder&gt; [--speed] [--no-verify | --strict-verify] [--overwrite]
+    /// [--native [--test-write | --test-first] [--log-dir]] [--json]: burns one disc staged by archive-stage the way the
+    /// Archive screen's Burn button does (ISO 9660 + Joliet + UDF, label from the disc's index, disc closed). One disc
+    /// per run, because each archive disc needs its own blank in the drive. The read-back rules are those of burn-data:
+    /// read back unless --no-verify, always with --native, never for a test write.
+    /// </summary>
+    private static async Task<int> HandleArchiveBurnAsync(
+        CommandLineArgs cmd,
+        TextWriter stdout,
+        TextWriter stderr,
+        IDiscDeviceService deviceService,
+        IBurnEngineBackend burnEngine)
+    {
+        string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        string discFolder = cmd.GetRequiredOption("disc", "--disc <staged disc folder>");
+        var (nativeEngine, testWrite) = ResolveNativeDataEngine(cmd, burnEngine);
+        bool strictVerify = cmd.HasFlag("strict-verify"); // every read forced from the disc; implies a read-back
+        bool verify = strictVerify || (!testWrite && (!cmd.HasFlag("no-verify") || nativeEngine != null));
+        bool overwrite = cmd.HasFlag("overwrite");
+
+        if (!Directory.Exists(discFolder))
+        {
+            throw new DirectoryNotFoundException($"Staged disc folder does not exist: {discFolder}");
+        }
+        string indexPath = Path.Combine(discFolder, ArchiveManifest.IndexFileName);
+        if (!File.Exists(indexPath))
+        {
+            throw new CommandLineException(
+                $"'{discFolder}' is not a staged archive disc (no {ArchiveManifest.IndexFileName}). Stage it with archive-stage first, or burn a plain folder with burn-data.");
+        }
+        ArchiveIndex? index;
+        try
+        {
+            index = JsonSerializer.Deserialize<ArchiveIndex>(await File.ReadAllTextAsync(indexPath).ConfigureAwait(false),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (JsonException ex)
+        {
+            throw new CommandLineException($"{ArchiveManifest.IndexFileName} in '{discFolder}' is unreadable: {ex.Message}");
+        }
+        if (index == null || string.IsNullOrWhiteSpace(index.SetId) || index.DiscNumber < 1)
+        {
+            throw new CommandLineException($"{ArchiveManifest.IndexFileName} in '{discFolder}' has no set ID or disc number.");
+        }
+
+        string label = ArchiveManifest.VolumeLabel(index.SetId, index.DiscNumber);
+        var recorder = FindRecorder(deviceService, driveId);
+        var mediaStatus = recorder.QueryMediaStatus();
+        var speedDesc = ParseSpeed(cmd.GetOption("speed"), recorder, mediaStatus.MediaType);
+        var root = CompilationFolderImporter.ImportAsRoot(discFolder, strict: true);
+
+        var burnOptions = new DataBurnOptions
+        {
+            VolumeLabel = label,
+            Speed = speedDesc,
+            Simulate = testWrite,
+            VerifyAfterBurn = verify,
+            StrictVerify = strictVerify,
+            CloseDisc = true,
+            OverwriteExistingData = overwrite
+        };
+        var buildOptions = new IsoBuildOptions(
+            VolumeLabel: label,
+            IncludeIso9660: true,
+            IncludeJoliet: true,
+            IncludeUdf: true,
+            BootConfiguration: null);
+
+        var phases = new PhaseTimingProgress(cmd.IsJson ? null : stdout);
+        var burnService = new DataBurnService(nativeEngine ?? burnEngine);
+        var result = await burnService.BurnCompilationAsync(recorder, root, burnOptions, buildOptions, phases).ConfigureAwait(false);
+        phases.Complete();
+
+        if (cmd.IsJson)
+        {
+            WriteJsonResult(stdout, new
+            {
+                success = result.Success,
+                driveId = recorder.UniqueId,
+                discFolder = Path.GetFullPath(discFolder),
+                setId = index.SetId,
+                discNumber = index.DiscNumber,
+                discCount = index.DiscCount,
+                volumeLabel = label,
+                sectorsWritten = result.SectorsWritten,
+                totalTimeSeconds = result.TotalTime.TotalSeconds,
+                verified = result.Verified,
+                verificationNote = result.VerificationNote,
+                warning = result.Warning,
+                directWrite = NativeDataJson(nativeEngine),
+                error = result.ErrorMessage
+            });
+            return result.Success ? 0 : 1;
+        }
+
+        if (result.Success)
+        {
+            stdout.WriteLine($"Archive disc {index.DiscNumber} of {index.DiscCount} burned:");
+            stdout.WriteLine($"  Drive:          {recorder.UniqueId}");
+            stdout.WriteLine($"  Volume Label:   {label}");
+            stdout.WriteLine($"  Sectors Burned: {result.SectorsWritten:N0}");
+            stdout.WriteLine($"  Verified:       {(result.Verified ? "Passed" : "No")}");
+            if (result.VerificationNote != null) stdout.WriteLine($"  Verify Note:    {result.VerificationNote}");
+            if (result.Warning != null) stdout.WriteLine($"  Warning:        {result.Warning}");
+            WriteNativeDataSummary(stdout, nativeEngine);
+            phases.WriteSummary(stdout);
+            if (index.DiscNumber < index.DiscCount)
+            {
+                stdout.WriteLine($"  Next: insert a blank disc and burn disc{index.DiscNumber + 1:D2} the same way.");
+            }
+            return 0;
+        }
+
+        stderr.WriteLine($"Archive disc {index.DiscNumber} burn failed: {result.ErrorMessage}");
+        WriteNativeDataSummary(stderr, nativeEngine);
+        phases.WriteSummary(stderr);
+        return 1;
     }
 
     /// <summary>
@@ -2824,6 +2945,8 @@ public static class CliCommandRunner
         stdout.WriteLine("      Finds the drive's audio read offset using an inserted CD that is in the AccurateRip database.");
         stdout.WriteLine("  archive-stage --input <folder> (--staging <folder> | --plan-only) [--media cd|dvd|dvd-dl|bd|bd-dl|bdxl|bdxl-ql] [--redundancy <min %>] [--no-fill] [--json]");
         stdout.WriteLine("      Splits a folder across discs and stages disc01..discNN with SHA-256 manifests and PAR2 recovery data (fills free space unless --no-fill).");
+        stdout.WriteLine("  archive-burn --drive <id> --disc <staged disc folder> [--speed <X|max>] [--no-verify | --strict-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
+        stdout.WriteLine("      Burns one staged archive disc (ISO 9660 + Joliet + UDF, closed). With --native, discs the direct writer does not cover go to the Windows writer, and the output says why.");
         stdout.WriteLine("  archive-verify --path <folder|drive> [--json]");
         stdout.WriteLine("  recover (--drive <id> | --image <file.iso>) --out <folder> [--retries N] [--keep-image] [--json]");
         stdout.WriteLine("      Checks an archive disc against its SHA-256 manifest.");

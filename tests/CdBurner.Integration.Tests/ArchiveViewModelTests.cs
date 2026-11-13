@@ -164,6 +164,67 @@ public sealed class ArchiveViewModelTests : IDisposable
 
         Assert.True(burnResult.Success, $"Burn failed: {burnResult.ErrorMessage}");
         Assert.StartsWith("Burned", vm.Discs[0].Status);
+        Assert.False(vm.UseDirectDriveCommands); // off unless chosen
+        Assert.Null(vm.LastDirectBurnEngine);
+        Assert.DoesNotContain("drive commands", vm.StatusMessage);
+    }
+
+    private async Task<(ArchiveViewModel Vm, VirtualDiscRecorder Recorder)> StageOneDiscWithDirectWritingAsync(string name)
+    {
+        var vm = new ArchiveViewModel(_deviceManager, _burnEngine)
+        {
+            SourceFolder = CreateSampleFolder(name + "Source", 2),
+            StagingFolder = Path.Combine(_tempDir, name + "Staging"),
+            SelectedMedia = new ArchiveMediaOption("CD-R (700 MB)", DiscMediaType.CdR),
+            RedundancyPercent = 0,
+            VerifyAfterBurn = false,
+            DirectBurnLogDirectory = Path.Combine(_tempDir, name + "Logs")
+        };
+        Assert.True(await vm.StageAsync());
+        vm.UseDirectDriveCommands = true;
+        var vrec = vm.AvailableRecorders.OfType<VirtualDiscRecorder>().First(r => r.UniqueId == "VDRV-01");
+        vm.SelectedRecorder = vrec;
+        return (vm, vrec);
+    }
+
+    [Fact]
+    public async Task Burn_WithDirectDriveCommands_WritesTheBlankCdDirectlyAndReadsItBack()
+    {
+        var (vm, vrec) = await StageOneDiscWithDirectWritingAsync("Direct");
+        var medium = VirtualDiscMedium.CreateBlankCdR700();
+        vrec.InsertMedia(medium);
+
+        var result = await vm.BurnDiscAsync(vm.Discs[0]);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified); // read back although "Verify after burning" is off, as on the Data Disc screen
+        Assert.Contains("Written with direct drive commands", vm.StatusMessage);
+        Assert.Null(vm.LastDirectBurnEngine!.LastFallbackReason);
+        Assert.True(vm.LastDirectBurnEngine.LastResult!.DiscRecorded);
+        Assert.True(File.Exists(vm.LastDirectBurnEngine.LastLogPath));
+        Assert.True(medium.IsFinalized);
+        Assert.False(medium.IsBlank);
+    }
+
+    [Fact]
+    public async Task Burn_WithDirectDriveCommands_HandsADualLayerDvdMinusRToTheWindowsWriterAndSaysWhy()
+    {
+        var (vm, vrec) = await StageOneDiscWithDirectWritingAsync("Fallback");
+        var medium = new VirtualDiscMedium(DiscMediaType.DvdMinusRDualLayer, OpticalConstants.DvdPlusR9Sectors);
+        vrec.InsertMedia(medium);
+
+        var result = await vm.BurnDiscAsync(vm.Discs[0]);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.True(result.Verified);
+        string? reason = vm.LastDirectBurnEngine!.LastFallbackReason;
+        Assert.NotNull(reason);
+        Assert.StartsWith("Written with Windows' writer:", reason);
+        Assert.Contains("dual-layer DVD-R", reason);
+        Assert.Contains(reason, vm.StatusMessage);
+        Assert.Null(vm.LastDirectBurnEngine.LastResult); // the direct writer sent no command to the drive
+        Assert.Null(vm.LastDirectBurnEngine.LastLogPath);
+        Assert.False(medium.IsBlank); // the Windows writer burned it instead
     }
 
     [Fact]
