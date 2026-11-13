@@ -182,7 +182,8 @@ speed in kB over 1,000 ms), then `SET CD SPEED` if the drive refuses that.
 - *DVD+R.* No mode page (the cookbook: none is sent for DVD+R) and no test write → `WRITE (10)` → `SYNCHRONIZE
   CACHE` → `CLOSE TRACK` (001b) → finalize (101b, "minimal radius") for a closed disc, or `CLOSE SESSION` (010b) to
   leave it appendable. The cookbook reports drives that refuse 101b; then the session is closed with 010b and the
-  result says the disc is still appendable.
+  result says the disc is still appendable. The GP60NB50 accepts 101b on a single-layer Verbatim DVD+R
+  (2026-11-13): GOOD at once, then 2/04/07 for 79 s while it finalizes.
 - A drive that answers 2/04/xx to a close command is waited out and asked again (up to three times), as growisofs
   does for some drives.
 - *DVD+RW* (built 2026-11-11, simulator only so far; `NativeTaoDataWriter.DvdPlusRw.cs`). No mode page, no test
@@ -312,7 +313,7 @@ BURN-Free / buffer-underrun protection (BUFE bit in page 0x05) when the drive su
 - Virtual drive: each command is implemented in `VirtualDiscBackend`, including failure injection (sense codes at
   chosen LBAs), so the error paths are tested.
 - Real hardware, in order: test write on CD-RW (done), real write on CD-RW (done), then CD-R (done); DVD after CD:
-  a DVD-R test write, then a real DVD-R, DVD+R and DVD-RW (not run yet).
+  a DVD-R test write, then a real DVD-R (done 2026-11-11), DVD+R (done 2026-11-13) and DVD-RW (not run yet).
 
 ## Test hardware
 
@@ -354,6 +355,7 @@ Results:
 | 2026-11-11 (night) | GP60NB50 | the copy just made by `copy-disc` | `verify --drive H: --cue mixed.cue` (new: the direct writer's read-back check against a `.cue`, nothing written) | Failed in 3 s on CD-Text pack 4: the copy had given track 1's CD-Text the performer "Various Artists" where the source has "IgnisDisc" (the data track was added before the album text was read). With `--no-cd-text`: passed in 46 s, the data track's 1,493 sectors and 20,825,196 audio samples identical. Fixed the same night: a copy takes track 1's CD-Text from the source disc. |
 | 2026-11-11 (night) | GP60NB50 | the mixed-mode CD-RW (burned about an hour before), then a blank CD-R (FORNET batch) | `verify --cue` of the CD-RW; then erase, burn from `mixed.cue`, `copy-disc --native` to the CD-R and `verify --cue` of the copy, CD-Text on (4704267) | CD-RW an hour after its burn: track table and CD-Text matched, then 96 sectors needed re-reads and 22 never read right (track 3), 0 written wrong; check failed in 65 s. Burned again (read-back passed), copied at once (236 s, read-back passed). The copy checked against the original `.cue`: passed in 48 s with CD-Text, the data track's 1,493 sectors and 20,825,196 audio samples identical. The copy's CD-Text now matches the source's. |
 | 2026-11-11 (night) | GP60NB50 | the mixed-mode CD-R copy (CD-Text checked) | `rip --raw` of the disc, then `verify --cue` of the disc against the ripped cue (read-only) | First rip: 37,058 sectors in 60 s, all identical to the source `.bin` (Mode 1 sectors with the drive's EDC/ECC, gaps, audio), but 2 sectors short: it stopped at Windows' used size, not the lead-out at 37,060, and cut the end of track 3. Its cue had no album TITLE/PERFORMER and no INDEX 00 for track 2. Fixed: a raw rip runs to the lead-out in the table of contents, the cue gets the album text, and the cue import gives track 2's pre-gap (audio sectors at the end of track 1's range) back to track 2. Second rip: 37,060 sectors, byte-identical to the source `.bin`; `verify --cue` against it passed (CD-Text, the data track's 1,493 sectors, 20,825,196 samples), so `burn-audio --native` takes the rip back as the same disc. |
+| 2026-11-13 | GP60NB50 | blank Verbatim DVD+R (2,295,104 sectors free) | Data, real write, closed disc, 198 MB (102,523 sectors + 5 padding, 479 files), 8x setting | No mode page, no test write. GET PERFORMANCE offered 8x and 4x; SET STREAMING 8x accepted. The first WRITE took 23 s (the drive's start-up), then 3,204 WRITEs of 64 KiB, about 13.7 ms each (2.2x average over the data). SYNCHRONIZE CACHE 2.1 s; CLOSE TRACK (001b) accepted; **finalize 101b (`5B 01 05`) accepted**, then 2/04/07 for 79 s; no 010b fallback was sent. TOC: one data track, lead-out at 102,528; READ DISC INFORMATION status 2 (complete). Read-back of every sector 45 s: passed. Independent check: Windows mounted it as UDF and all 479 files were SHA-256 identical to the source. 153 s for the writer. |
 
 Media on hand: CD-RW, CD-R, DVD-R and DVD+RW (Verbatim). Ordered: DVD+R, DVD+R DL, BD-R, BD-RE and M-DISC BD-R, a Blu-ray writer (LG BP50NB40) and a second DVD writer (Lite-On iHAS124). No DVD-RW, DVD-RAM, BD-R DL or BDXL yet.
 

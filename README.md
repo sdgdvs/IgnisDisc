@@ -38,7 +38,7 @@ pipeline can be tested without hardware or blank media.
 | Bootable discs (El Torito BIOS + UEFI) | ✅ | ✅ | Hybrid BIOS + UEFI Boot Catalog verified via physical burn, readback, and rip; boot behaviour depends on your loaders |
 | DVD-Video authoring | ⚠️ | ✅ | Requires `ffmpeg.exe`; test on a standalone player before relying on it |
 | Blu-ray (BD-R / BD-RE) | ❌ | — | Not yet: Blu-ray discs are recognised (type, size, layers) and archive sets can be planned for them, and the experimental direct writer handles single-layer BD-R and BD-RE in the drive simulator, but burning one has never been tried on a real drive |
-| Burn CDs with direct drive commands (experimental, off by default) | ⚠️ | ✅ | Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or "Direct drive commands" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Mixed-mode CDs (a Mode 1 data track, then audio) from a `.cue` file too: one CD-RW so far, where Windows read the data track's files back identical. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way. A further session on a CD-R, CD-RW, DVD-R, DVD-RW or DVD+R left open is added the same way, so far only in the built-in drive simulator. On real hardware so far two DVD-Rs on the same drive (Verbatim): one closed in one pass (372 MB), one left open, after which Windows' own writer added a second session; every file of each session identical when read through Windows. Two DVD+RWs too (Verbatim, 372 MB each, every file identical): a used one written over with leave to replace its data, and a new one, formatted first by the drive. DVD+R (single and dual layer, with the layer break set by IgnisDisc), dual-layer DVD-R (layer jump recording, on drives that offer it), DVD-RW (sequential or in overwrite mode), DVD-RAM and single-layer BD-R and BD-RE have run only in the built-in drive simulator. Dual-layer DVD-R on a drive without layer jump recording, and multi-layer Blu-ray discs, still use the Windows writer |
+| Burn CDs with direct drive commands (experimental, off by default) | ⚠️ | ✅ | Audio CDs Session-at-Once and data CDs Track-at-Once without the Windows writer (`--native`, or "Direct drive commands" in the app); the disc is always read back and compared. Run on real hardware on one drive so far (LG GP60NB50), on CD-R and CD-RW. Mixed-mode CDs (a Mode 1 data track, then audio) from a `.cue` file too: one CD-RW so far, where Windows read the data track's files back identical. Blank single-layer DVD-R, DVD-RW and DVD+R can also be written this way. A further session on a CD-R, CD-RW, DVD-R, DVD-RW or DVD+R left open is added the same way, so far only in the built-in drive simulator. On real hardware so far two DVD-Rs on the same drive (Verbatim): one closed in one pass (372 MB), one left open, after which Windows' own writer added a second session; every file of each session identical when read through Windows. Two DVD+RWs too (Verbatim, 372 MB each, every file identical): a used one written over with leave to replace its data, and a new one, formatted first by the drive. A single-layer DVD+R too (Verbatim, 198 MB, finalized by the drive, every file identical). Dual-layer DVD+R (with the layer break set by IgnisDisc), dual-layer DVD-R (layer jump recording, on drives that offer it), DVD-RW (sequential or in overwrite mode), DVD-RAM and single-layer BD-R and BD-RE have run only in the built-in drive simulator. Dual-layer DVD-R on a drive without layer jump recording, and multi-layer Blu-ray discs, still use the Windows writer |
 | CD-Text / ISRC on burned audio CDs | ⚠️ | ✅ | The Windows writer (the default) cannot write lead-in CD-Text. The experimental direct writer (`--native`, or "Direct drive commands" in the app) writes CD-Text, ISRC and catalog codes, then reads the disc back and compares it. Run on real hardware on one drive so far (LG GP60NB50): a CD-RW and a CD-R, where CD-Text, ISRC and catalog codes and the audio all read back correctly |
 | DVD+R book type (bitsetting) | ❌ | ✅ | Needs drive-vendor-specific commands; reports "not supported" instead of pretending |
 | Test-write / simulation | ⚠️ | ✅ | With the experimental direct writer (`--native --test-write`): the whole burn with the laser off. Run on one drive (LG GP60NB50) on CD-R and CD-RW. DVD-R has passed a test write on the same drive (a Verbatim DVD-R, still blank after a reload); DVD-RW only in the drive simulator so far; DVD+R discs have none. The Windows writer has no test write |
@@ -165,10 +165,11 @@ Image screens) writes the image to a blank CD-R or CD-RW with IgnisDisc's own dr
 Track-at-Once, at a speed picked from the drive's own list for that disc (by default its fastest constant-velocity speed up to 16x, or the `--speed` given,
 rounded down to one the drive offers), never left to Windows. The disc is always read back sector by sector from the
 disc itself afterwards, even with `--no-verify`. A blank single-layer DVD-R or DVD-RW is written Disc-At-Once (or in
-packets when `--no-close` leaves it open) and a DVD+R in sequence, then closed or finalized; this DVD path has only
-run on real DVD-Rs on one drive: a test write, a 372 MB burn closed in one pass, and a disc left open to which
-Windows' own writer then added a second session, every file of both sessions reading back identical. DVD+R and
-DVD-RW have run only in the built-in drive simulator. A CD-R, CD-RW, DVD-R, DVD-RW or DVD+R left open gets its next
+packets when `--no-close` leaves it open) and a DVD+R in sequence, then closed or finalized; this DVD path has
+run on one drive so far. On DVD-Rs: a test write, a 372 MB burn closed in one pass, and a disc left open to which
+Windows' own writer then added a second session, every file of both sessions reading back identical. On a DVD+R: a
+198 MB burn finalized by the drive, every file reading back identical. DVD-RW has run only in the built-in drive
+simulator. A CD-R, CD-RW, DVD-R, DVD-RW or DVD+R left open gets its next
 session the same way, laid out from the disc's next writable address with the earlier files kept (simulator only so
 far). A dual-layer DVD-R is written with layer jump recording when the drive offers it (simulator only so far). Any
 other disc (dual-layer DVD-R on a drive without layer jump, multi-layer Blu-ray, a Blu-ray or dual-layer disc left
@@ -183,8 +184,8 @@ writing: an image that fits on the first layer stays there, a larger one is spli
 smaller than the second); simulator only so far. On the DVD-Video screen, "Direct drive commands" puts the break of a
 dual-layer DVD+R on a cell boundary instead, read from the title sets' IFO files, where players expect the layer
 change. `--test-write` and
-`--test-first` work as for audio (DVD+R has no test write). On real hardware it has run on one drive and one CD-RW
-so far; CD-R, DVDs and other drives are still to be tried.
+`--test-first` work as for audio (DVD+R has no test write). On real hardware it has run on one drive so far; other
+drives are still to be tried.
 
 Examples:
 
@@ -249,8 +250,8 @@ pwsh scripts/Build-Installer.ps1 -FfmpegPath C:\tools\ffmpeg\bin\ffmpeg.exe -Ffm
 
 ## Roadmap
 
-- Direct drive-command writing tried on real DVD-R, DVD-RW and DVD+R discs (built and tested in the drive simulator),
-  then DVD+RW, DVD-RAM, Blu-ray and DVD±R DL layer-break control (audio CDs and data CDs can already be written this
+- Direct drive-command writing tried on real DVD-RW discs (DVD-R, DVD+R and DVD+RW have run on real discs), then
+  DVD-RAM, Blu-ray and DVD±R DL layer-break control (audio CDs and data CDs can already be written this
   way as an experimental option)
 - More drives and disc types tried with the direct writer, so it can leave experimental status
 - Blu-ray burning, tested on real drives
