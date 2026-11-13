@@ -133,6 +133,7 @@ writes at a constant linear velocity for the inserted disc, up to 16x for CD and
 own speed list. CAV and partial-CAV speeds rise towards the outer edge, so the drive keeps adjusting the laser; the
 slowest speed is not automatically the best either. On a slim USB writer that offers CD-R at 10x CLV, 16x and 24x CAV,
 this is 10x.
+A small built-in table of media IDs caps that default for discs known to read weakly: the FORNET CD-R (ATIP 97m26s0x) from the batch that failed the read-back check on an LG GP60NB50 (see the status section below). The app reads the media ID when a disc changes and shows the reason next to the speed picker. The cap is tested with unit tests only, and the burn commands on the command line do not apply it yet.
 `media-info` shows the choice and why; `--speed <X>`, `--speed slowest` and `--speed max` override it.
 
 `--overwrite`: a used DVD+RW or DVD-RAM is rewritten from the start, so a burn replaces every file on it. Burns refuse
