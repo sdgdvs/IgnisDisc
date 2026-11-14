@@ -70,6 +70,12 @@ public class AudioRipOptions
     /// Optional MIME type of the cover art image (e.g. "image/jpeg", "image/png"). Default is "image/jpeg".
     /// </summary>
     public string? CoverArtMimeType { get; init; }
+
+    /// <summary>
+    /// When true and the disc carries a session-2 PAR2 recovery volume (Enhanced CD / CD-Extra), verifies each
+    /// ripped track against session 2 and rebuilds any damaged samples from PAR2.
+    /// </summary>
+    public bool RepairFromRecoverySession { get; set; } = false;
 }
 
 /// <summary>
@@ -142,6 +148,9 @@ public class AudioCdRipResult
     /// <summary>Calculated album peak amplitude (0.0 to 1.0), if requested.</summary>
     public double? ReplayGainAlbumPeak { get; init; }
 
+    /// <summary>Result of verifying and repairing tracks from session 2 PAR2 data, when requested.</summary>
+    public AudioRecoveryRepairResult? RecoveryRepair { get; init; }
+
     public static AudioCdRipResult Succeeded(
         IReadOnlyList<string> filePaths,
         int totalSectors,
@@ -152,7 +161,8 @@ public class AudioCdRipResult
         IReadOnlyList<int>? badSectorLbas = null,
         bool secureModeUsed = false,
         double? replayGainAlbumGain = null,
-        double? replayGainAlbumPeak = null) => new()
+        double? replayGainAlbumPeak = null,
+        AudioRecoveryRepairResult? recoveryRepair = null) => new()
     {
         SecureModeUsed = secureModeUsed,
         Success = true,
@@ -165,7 +175,8 @@ public class AudioCdRipResult
         TrackInfos = trackInfos ?? Array.Empty<AudioTrackRipInfo>(),
         BadSectorLbas = badSectorLbas ?? Array.Empty<int>(),
         ReplayGainAlbumGain = replayGainAlbumGain,
-        ReplayGainAlbumPeak = replayGainAlbumPeak
+        ReplayGainAlbumPeak = replayGainAlbumPeak,
+        RecoveryRepair = recoveryRepair
     };
 
     public static AudioCdRipResult Failed(string error, Exception? ex = null) => new()
@@ -464,6 +475,9 @@ public class AudioCdRipperService
             options.SecureMode && engine is ISecureAudioReader candidate && candidate.SupportsC2ErrorPointers(recorder, audioOrder[0].StartLba)
                 ? candidate
                 : null;
+        bool hasRecoverySession = options.RepairFromRecoverySession
+            && AudioRecoverySessionService.FindRecoverySessionLocation(recorder) != null;
+        bool continueOnUnreadable = options.ContinueOnUnreadableSector || hasRecoverySession;
 
         foreach (var track in tracksToRip)
         {
@@ -547,7 +561,7 @@ public class AudioCdRipperService
                     {
                         badSectorLbas.Add(lba);
                         trackBadSectors++;
-                        if (!options.ContinueOnUnreadableSector)
+                        if (!continueOnUnreadable)
                         {
                             return false;
                         }
@@ -661,6 +675,45 @@ public class AudioCdRipperService
             totalSectorsRead += track.SectorCount;
         }
 
+        AudioRecoveryRepairResult? recoveryRepair = null;
+        if (options.RepairFromRecoverySession)
+        {
+            progress?.Report(new BurnProgressSnapshot
+            {
+                ElapsedTime = sw.Elapsed,
+                CurrentLba = (int)Math.Min(int.MaxValue, totalSectorsToRip),
+                TotalLba = (int)Math.Min(int.MaxValue, totalSectorsToRip),
+                BufferLevelPercent = 100.0,
+                CurrentActionDescription = "Repairing damaged tracks from session 2 recovery data..."
+            });
+            recoveryRepair = await AudioRecoverySessionService.RepairRippedTracksFromDiscAsync(
+                recorder,
+                engine,
+                allTracks,
+                trackInfos,
+                options,
+                cancellationToken).ConfigureAwait(false);
+
+            if (recoveryRepair.RepairedTracks.Count > 0 && options.CalculateReplayGain)
+            {
+                replayGainResults.Clear();
+                foreach (var info in trackInfos)
+                {
+                    if (File.Exists(info.FilePath))
+                    {
+                        try
+                        {
+                            using var s = new FileStream(info.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                            replayGainResults.Add(ReplayGainCalculator.CalculateTrackReplayGain(s));
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+            }
+        }
+
         // Calculate album ReplayGain across all ripped tracks
         double? albumGain = null;
         double? albumPeak = null;
@@ -723,6 +776,7 @@ public class AudioCdRipperService
             badSectorLbas,
             secureReader != null,
             albumGain,
-            albumPeak);
+            albumPeak,
+            recoveryRepair);
     }
 }

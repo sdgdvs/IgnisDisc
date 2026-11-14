@@ -1043,9 +1043,14 @@ public static class CliCommandRunner
         bool native = cmd.HasFlag("native");
         bool testWrite = cmd.HasFlag("test-write");
         bool testFirst = cmd.HasFlag("test-first");
+        bool recoverySession = cmd.HasFlag("recovery-session");
         if (testFirst && (!native || testWrite))
         {
             throw new CommandLineException("--test-first only applies to a real --native burn (without --test-write).");
+        }
+        if (recoverySession && !native)
+        {
+            throw new CommandLineException("--recovery-session requires --native (direct drive commands); Windows IMAPIv2 cannot leave an SAO audio session open for a second data session.");
         }
 
         var recorder = FindRecorder(deviceService, driveId);
@@ -1071,8 +1076,10 @@ public static class CliCommandRunner
         }
 
         using var mfDecoder = OperatingSystem.IsWindows() ? new MediaFoundationAudioDecoder() : null;
-        var nativeEngine = native ? new NativeAudioBurnEngine(cmd.GetOption("log-dir")) { TestWriteFirst = testFirst } : null;
-        var audioBurnService = new AudioCdBurnService(nativeEngine ?? burnEngine, mfDecoder);
+        string? logDir = cmd.GetOption("log-dir");
+        var nativeEngine = native ? new NativeAudioBurnEngine(logDir) { TestWriteFirst = testFirst } : null;
+        var nativeDataEngine = native ? new NativeDataBurnEngine(burnEngine, logDir) : null;
+        var audioBurnService = new AudioCdBurnService(nativeEngine ?? burnEngine, mfDecoder, nativeDataEngine);
 
         var compilation = new AudioCdCompilation
         {
@@ -1167,10 +1174,12 @@ public static class CliCommandRunner
                 Simulate = testWrite,
                 KeepIndexMarks = native, // only the direct writer can place INDEX 00 marks and hidden audio
                 AllowDamagedAudio = cmd.HasFlag("allow-damaged"),
-                WriteOffsetSamples = ParseWriteOffset(cmd.GetOption("write-offset"), native)
+                WriteOffsetSamples = ParseWriteOffset(cmd.GetOption("write-offset"), native),
+                IncludeRecoverySession = recoverySession
             }).ConfigureAwait(false);
 
         var verification = nativeEngine?.LastResult?.Verification;
+        var recoveryManifest = audioBurnService.LastRecoveryManifest;
 
         if (cmd.IsJson)
         {
@@ -1179,6 +1188,17 @@ public static class CliCommandRunner
                 success = result.Success,
                 testWrite,
                 native,
+                recoverySession,
+                recoverySessionWritten = recoveryManifest != null,
+                recoverySessionDetails = recoveryManifest == null ? null : new
+                {
+                    pcmBytes = recoveryManifest.TotalPcmBytes,
+                    pcmSectors = recoveryManifest.TotalPcmSectors,
+                    par2BlockSizeBytes = recoveryManifest.Par2BlockSizeBytes,
+                    par2RecoveryBlocks = recoveryManifest.Par2RecoveryBlocks,
+                    tolerance = recoveryManifest.ToleranceSummary,
+                    warning = AudioRecoverySessionService.CarHeadUnitWarning
+                },
                 commandLog = nativeEngine?.LastLogPath,
                 discStillBlank = nativeEngine?.LastResult?.DiscStillBlankAfterTestWrite,
                 testWritePassedFirst = nativeEngine?.LastTestWritePassed,
@@ -1250,6 +1270,12 @@ public static class CliCommandRunner
                 if (verification?.Warning is { } readWarning)
                 {
                     stderr.WriteLine($"Warning: {readWarning}");
+                }
+                if (recoveryManifest != null)
+                {
+                    stdout.WriteLine($"  Recovery Session: session 2 written ({recoveryManifest.Par2RecoveryBlocks:N0} PAR2 blocks, {recoveryManifest.Par2BlockSizeBytes / 1024} KiB block size)");
+                    stdout.WriteLine($"  Tolerance:      {recoveryManifest.ToleranceSummary}");
+                    stderr.WriteLine($"Note: {AudioRecoverySessionService.CarHeadUnitWarning}");
                 }
                 if (nativeEngine.LastLogPath != null)
                 {
@@ -1888,6 +1914,7 @@ public static class CliCommandRunner
             }
         }
 
+        bool repairFromRecovery = cmd.HasFlag("repair") || cmd.HasFlag("repair-from-recovery");
         var options = new AudioRipOptions
         {
             ContinueOnUnreadableSector = cmd.HasFlag("continue-on-error"),
@@ -1897,7 +1924,8 @@ public static class CliCommandRunner
             SecureMode = !cmd.HasFlag("no-secure"), // on by default; a drive without C2 pointers falls back to a plain read
             CalculateReplayGain = !cmd.HasFlag("no-replaygain"),
             CoverArtBytes = coverBytes,
-            CoverArtMimeType = coverMime
+            CoverArtMimeType = coverMime,
+            RepairFromRecoverySession = repairFromRecovery
         };
 
         var ripper = new AudioCdRipperService();
@@ -2001,9 +2029,13 @@ public static class CliCommandRunner
 
         // A rip with sectors that may be wrong is finished but not clean: exit code 2 (as `recover` uses for lost files),
         // so a script does not take it for a perfect copy.
+        bool repairedAll = result.RecoveryRepair is { RecoverySessionFound: true, AllTracksVerified: true };
         int suspectTotal = result.TrackInfos.Sum(t => t.SuspectSectors);
-        int unreadableTotal = Math.Max(result.TrackInfos.Sum(t => t.UnreadableSectors), result.BadSectorLbas.Count);
-        bool complete = suspectTotal + unreadableTotal == 0;
+        int unreadableTotal = repairedAll
+            ? result.TrackInfos.Sum(t => t.UnreadableSectors)
+            : Math.Max(result.TrackInfos.Sum(t => t.UnreadableSectors), result.BadSectorLbas.Count);
+        bool repairFailed = repairFromRecovery && result.RecoveryRepair is { RecoverySessionFound: true, AllTracksVerified: false };
+        bool complete = !repairFailed && suspectTotal + unreadableTotal == 0;
         int exitCode = complete ? 0 : 2;
 
         if (cmd.IsJson)
@@ -2014,6 +2046,17 @@ public static class CliCommandRunner
                 complete,
                 suspectSectors = suspectTotal,
                 unreadableSectors = unreadableTotal,
+                recoveryRepair = result.RecoveryRepair == null ? null : new
+                {
+                    recoverySessionFound = result.RecoveryRepair.RecoverySessionFound,
+                    repairAttempted = result.RecoveryRepair.RepairAttempted,
+                    allTracksVerified = result.RecoveryRepair.AllTracksVerified,
+                    tracksChecked = result.RecoveryRepair.TracksChecked,
+                    damagedTracks = result.RecoveryRepair.DamagedTracks,
+                    repairedTracks = result.RecoveryRepair.RepairedTracks,
+                    failedTracks = result.RecoveryRepair.FailedTracks,
+                    summary = result.RecoveryRepair.Summary
+                },
                 driveId = recorder.UniqueId,
                 outputFolder = Path.GetFullPath(outputFolder),
                 format = formatLabel,
@@ -2087,6 +2130,10 @@ public static class CliCommandRunner
         if (result.BadSectorLbas.Count > 0)
         {
             stdout.WriteLine($"  Bad Sectors:      {result.BadSectorLbas.Count} (zero-filled)");
+        }
+        if (result.RecoveryRepair is { } repair)
+        {
+            stdout.WriteLine($"  Recovery Session: {repair.Summary}");
         }
         if (accurateRipStatus != null)
         {
@@ -3083,13 +3130,13 @@ public static class CliCommandRunner
         stdout.WriteLine("      Burns an ISO image directly to the target optical drive.");
         stdout.WriteLine("  burn-data --drive <id> --input <folder> [--label <vol>] [--speed <X|max>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Compiles a folder and burns it to optical media.");
-        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--allow-damaged] [--native [--test-write | --test-first] [--write-offset <samples|auto>] [--log-dir <folder>]] [--json]");
-        stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks.");
+        stdout.WriteLine("  burn-audio --drive <id> --tracks <file1,file2,...> [--title <album>] [--artist <name>] [--speed <X|max>] [--dao] [--allow-damaged] [--native [--test-write | --test-first] [--recovery-session] [--write-offset <samples|auto>] [--log-dir <folder>]] [--json]");
+        stdout.WriteLine("      Burns Red Book Audio CD from WAV, FLAC, MP3, AAC/M4A, or WMA tracks (--recovery-session adds session-2 PAR2 recovery; off by default).");
         stdout.WriteLine("  burn-dvd --drive <id> --video-ts <folder|movie> [--label <vol>] [--speed <X|max>] [--no-verify] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
         stdout.WriteLine("      Validates, normalizes/authors, aligns, and burns a DVD-Video compliant disc from VIDEO_TS or movie files.");
         stdout.WriteLine("  rip --drive <id> --output <file.iso|file.bin> [--raw] [--json]");
         stdout.WriteLine("      Rips optical disc to an ISO or raw BIN+CUE image.");
-        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--json]");
+        stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--repair] [--json]");
         stdout.WriteLine("      Rips Red Book Audio CD to WAV, FLAC, MP3, Opus or AAC (FLAC, MP3, Opus need the optional ffmpeg; AAC uses the Windows encoder) with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
         stdout.WriteLine("  copy-disc --source <id> [--target <id>] [--copies <n>] [--speed <X|max>] [--raw] [--native [--log-dir <folder>]] [--allow-suspect] [--keep-image <folder>] [--wait-minutes <n>] [--json]");
         stdout.WriteLine("      Copies a disc, with one drive or two. With one drive (or for each further copy) the tray opens and the copy waits for a blank disc.");
@@ -3162,8 +3209,9 @@ public static class CliCommandRunner
         {
             stdout.WriteLine(LegalBanner.VersionNotice);
             stdout.WriteLine();
-            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--cover <image>] [--no-replaygain] [--json]");
+            stdout.WriteLine("  rip-audio --drive <id> --output <folder> [--format wav|flac|mp3|opus|aac] [--bitrate <kbps>] [--tracks 1,3,5] [--lookup] [--keep-wav] [--continue-on-error] [--read-offset <samples>] [--verify-accuraterip] [--no-secure] [--repair] [--cover <image>] [--no-replaygain] [--json]");
             stdout.WriteLine("      Rips Red Book Audio CD to WAV, FLAC, MP3, Opus or AAC (FLAC, MP3, Opus need the optional ffmpeg; AAC uses the Windows encoder) with CD-Text and optional MusicBrainz lookup. Exit code 2 when sectors may be wrong (still suspect or unreadable).");
+            stdout.WriteLine("      --repair checks and repairs damaged samples from session 2 PAR2 recovery data on Enhanced CDs.");
             stdout.WriteLine("      FLAC files get ReplayGain 2.0 tags (unless --no-replaygain) and, with --cover, embedded front cover art.");
             return;
         }

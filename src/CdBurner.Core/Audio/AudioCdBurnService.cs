@@ -1,4 +1,5 @@
 using CdBurner.Core.Abstractions;
+using CdBurner.Core.Archival;
 using CdBurner.Core.Primitives;
 
 namespace CdBurner.Core.Audio;
@@ -11,6 +12,7 @@ public class AudioCdBurnService
 {
     private readonly IBurnEngineBackend _burnEngine;
     private readonly IAudioDecoder _audioDecoder;
+    private readonly IBurnEngineBackend? _recoveryDataEngine;
 
     /// <summary>
     /// Gets the burning engine backend.
@@ -23,14 +25,24 @@ public class AudioCdBurnService
     public IAudioDecoder AudioDecoder => _audioDecoder;
 
     /// <summary>
+    /// Manifest written to session 2 on the most recent Enhanced CD recovery burn, or null if none ran.
+    /// </summary>
+    public AudioRecoveryManifest? LastRecoveryManifest { get; private set; }
+
+    /// <summary>
     /// Initializes a new instance of <see cref="AudioCdBurnService"/>.
     /// </summary>
     /// <param name="burnEngine">The optical burning engine backend.</param>
     /// <param name="audioDecoder">Optional audio decoder instance. If null, a built-in RIFF WAVE decoder is used.</param>
-    public AudioCdBurnService(IBurnEngineBackend burnEngine, IAudioDecoder? audioDecoder = null)
+    /// <param name="recoveryDataEngine">Optional data burn engine used to append session 2 when <see cref="AudioBurnOptions.IncludeRecoverySession"/> is enabled.</param>
+    public AudioCdBurnService(
+        IBurnEngineBackend burnEngine,
+        IAudioDecoder? audioDecoder = null,
+        IBurnEngineBackend? recoveryDataEngine = null)
     {
         _burnEngine = burnEngine ?? throw new ArgumentNullException(nameof(burnEngine));
         _audioDecoder = audioDecoder ?? new CoreWavAudioDecoder();
+        _recoveryDataEngine = recoveryDataEngine;
     }
 
     /// <summary>
@@ -201,6 +213,25 @@ public class AudioCdBurnService
             if (mediaStatus.IsOverwriteOnly || mediaStatus.MediaType.IsDvd())
             {
                 return BurnOperationResult.Failed("Audio CDs require blank CD-R or CD-RW media.");
+            }
+        }
+
+        LastRecoveryManifest = null;
+        string? par2Path = null;
+        if (options.IncludeRecoverySession && !checkOnly)
+        {
+            if (_recoveryDataEngine == null)
+            {
+                return BurnOperationResult.Failed("Audio CD recovery sessions require direct drive commands (--native).");
+            }
+            if (compilation.Tracks.Any(t => t.IsDataTrack))
+            {
+                return BurnOperationResult.Failed("Audio CD recovery sessions cannot be combined with a track-based data track in the audio compilation.");
+            }
+            par2Path = Par2Runner.FindPar2Executable();
+            if (string.IsNullOrEmpty(par2Path))
+            {
+                return BurnOperationResult.Failed("Audio CD recovery sessions require par2.exe, which was not found on PATH or next to the application.");
             }
         }
 
@@ -462,15 +493,29 @@ public class AudioCdBurnService
                     $"Compilation requires {totalRequiredFrames} frames, exceeding media free capacity of {mediaStatus.FreeSectors} frames.");
             }
 
+            long discCapacitySectors = mediaStatus.TotalSectors > 0
+                ? mediaStatus.TotalSectors
+                : RecoverySessionBudget.MeasuredCapacitySectors;
+            if (options.IncludeRecoverySession && !checkOnly)
+            {
+                long audioOnlySectors = audioTrackSources.Sum(t => (t.TotalPcmBytes + OpticalConstants.RawSectorSize - 1) / OpticalConstants.RawSectorSize);
+                var recoveryEstimate = AudioRecoverySessionService.EstimateCapacity(audioOnlySectors, discCapacitySectors);
+                if (!recoveryEstimate.Fits)
+                {
+                    return BurnOperationResult.Failed($"Cannot fit recovery session: {recoveryEstimate.ToleranceSummary}");
+                }
+            }
+
             // 5. Generate CD-Text payload if requested
             bool includeCdText = compilation.IncludeCdText || options.WriteCdText;
             byte[]? cdTextPayload = includeCdText ? compilation.BuildCdTextPacks() : null;
 
+            bool leaveOpenForRecovery = options.IncludeRecoverySession && !checkOnly;
             var effectiveOptions = new AudioBurnOptions
             {
                 Speed = options.Speed,
                 Simulate = options.Simulate,
-                EjectWhenDone = options.EjectWhenDone,
+                EjectWhenDone = options.EjectWhenDone && !leaveOpenForRecovery,
                 PerformNormalization = false, // Already performed
                 WriteCdText = includeCdText,
                 UseDiscAtOnce = compilation.RecordingMode == AudioRecordingMode.DiscAtOnceGapless,
@@ -478,7 +523,9 @@ public class AudioCdBurnService
                 CdTextBytes = cdTextPayload,
                 MediaCatalogNumber = options.MediaCatalogNumber ?? compilation.UpcEan,
                 KeepIndexMarks = options.KeepIndexMarks,
-                WriteOffsetSamples = options.WriteOffsetSamples
+                WriteOffsetSamples = options.WriteOffsetSamples,
+                LeaveSessionOpen = options.LeaveSessionOpen || leaveOpenForRecovery,
+                IncludeRecoverySession = options.IncludeRecoverySession
             };
 
             // 6. Execute burn through backend (or, for a check, read the disc back against the prepared tracks)
@@ -487,12 +534,84 @@ public class AudioCdBurnService
                 return await verifier.VerifyAudioTracksAsync(recorder, audioTrackSources, effectiveOptions, progress, cancellationToken)
                     .ConfigureAwait(false);
             }
-            return await _burnEngine.BurnAudioTracksAsync(
+
+            var session1Result = await _burnEngine.BurnAudioTracksAsync(
                 recorder,
                 audioTrackSources,
                 effectiveOptions,
                 progress,
                 cancellationToken).ConfigureAwait(false);
+
+            if (!session1Result.Success || !leaveOpenForRecovery || options.Simulate)
+            {
+                return session1Result;
+            }
+
+            // 7. Build and write session 2 (PAR2 over PCM) at the next writable LBA and close the disc.
+            var postAudioStatus = recorder.QueryMediaStatus();
+            if (!postAudioStatus.IsAppendable || postAudioStatus.NextWritableLba <= 0)
+            {
+                return BurnOperationResult.Failed(
+                    "Session 1 audio finished, but the drive did not leave the disc open for session 2.",
+                    session1Result.Exception);
+            }
+
+            progress?.Report(new BurnProgressSnapshot
+            {
+                CurrentActionDescription = "Building PAR2 recovery session...",
+                CurrentLba = 0,
+                TotalLba = 100,
+                BufferLevelPercent = 100.0
+            });
+
+            var textProgress = progress == null
+                ? null
+                : new Progress<string>(msg => progress.Report(new BurnProgressSnapshot
+                {
+                    CurrentActionDescription = msg,
+                    CurrentLba = 0,
+                    TotalLba = 100,
+                    BufferLevelPercent = 100.0
+                }));
+
+            using var stagedIso = await AudioRecoverySessionService.BuildRecoverySessionIsoAsync(
+                audioTrackSources,
+                compilation,
+                postAudioStatus.NextWritableLba,
+                discCapacitySectors,
+                par2Path!,
+                textProgress,
+                cancellationToken).ConfigureAwait(false);
+
+            LastRecoveryManifest = stagedIso.Manifest;
+            var session2Options = new DataBurnOptions
+            {
+                Speed = options.Speed,
+                Simulate = false,
+                CloseDisc = true,
+                EjectWhenDone = options.EjectWhenDone,
+                VerifyAfterBurn = false,
+                VolumeLabel = AudioRecoveryManifest.VolumeLabel
+            };
+
+            var session2Result = await _recoveryDataEngine!.BurnDataStreamAsync(
+                recorder,
+                stagedIso.IsoStream,
+                session2Options,
+                progress,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!session2Result.Success)
+            {
+                return BurnOperationResult.Failed(
+                    $"Session 1 audio completed, but session 2 recovery write failed: {session2Result.ErrorMessage}",
+                    session2Result.Exception);
+            }
+
+            return BurnOperationResult.Succeeded(
+                session1Result.SectorsWritten + session2Result.SectorsWritten,
+                session1Result.TotalTime + session2Result.TotalTime,
+                session1Result.AverageSpeedMultiplier > 0 ? session1Result.AverageSpeedMultiplier : session2Result.AverageSpeedMultiplier);
         }
         finally
         {

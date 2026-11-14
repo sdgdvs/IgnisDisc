@@ -195,6 +195,13 @@
                                           VerticalAlignment="Center"
                                           Margin="0,0,12,0" />
 
+                                <CheckBox Content="Recovery session (CD-Extra)"
+                                          AutomationProperties.Name="Recovery session (CD-Extra)"
+                                          IsChecked="{Binding IncludeRecoverySession}"
+                                          ToolTip="Burn audio as session 1 and PAR2 recovery data over the disc's PCM as session 2. Off by default: requires direct drive commands and uses ~2.5 min of disc capacity; some car head units refuse Enhanced CDs."
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0" />
+
                                 <TextBlock Text="Crossfade (s):"
                                            VerticalAlignment="Center"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -224,6 +231,7 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <Grid Grid.Row="0" Margin="0,0,0,4">
@@ -250,6 +258,19 @@
                                          Maximum="100"
                                          Value="{Binding DiscUsagePercent, Mode=OneWay}"
                                          Foreground="{DynamicResource AccentBrush}" />
+
+                            <StackPanel Grid.Row="2" Margin="0,4,0,0">
+                                <TextBlock AutomationProperties.Name="Recovery session capacity"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Text="{Binding RecoverySessionCapacityText, Mode=OneWay}" />
+                                <TextBlock AutomationProperties.Name="Recovery session compatibility warning"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextMutedBrush}"
+                                           TextWrapping="Wrap"
+                                           Text="{Binding RecoverySessionWarningText, Mode=OneTime}" />
+                            </StackPanel>
                         </Grid>
                     </Border>
 
@@ -667,8 +688,14 @@
                                           AutomationProperties.Name="Continue past unreadable sectors"
                                           IsChecked="{Binding ContinueOnUnreadable}"
                                           Foreground="{DynamicResource TextPrimaryBrush}"
-                                          Margin="0,2,0,2"
+                                          Margin="0,2,20,2"
                                           ToolTip="Zero-fill unreadable sectors with silence instead of aborting the rip." />
+                                <CheckBox Content="Repair from recovery session"
+                                          AutomationProperties.Name="Repair from recovery session"
+                                          IsChecked="{Binding RepairFromRecoverySession}"
+                                          Foreground="{DynamicResource TextPrimaryBrush}"
+                                          Margin="0,2,0,2"
+                                          ToolTip="Verify ripped audio tracks against session 2 PAR2 recovery data on Enhanced CDs and rebuild any damaged samples." />
                             </WrapPanel>
                         </StackPanel>
                     </Border>

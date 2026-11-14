@@ -124,6 +124,16 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
                 }).ToList();
                 drive.LoadDataSessions(sessions, medium.IsFinalized ? null : medium.NextWritableLba);
             }
+            else if (sequential && !medium.IsBlank && !medium.IsFinalized && medium.Sessions.Count == 1
+                && medium.Sessions[0].Tracks.Count > 0 && medium.Sessions[0].Tracks.Any(t => t.IsAudio))
+            {
+                var session = medium.Sessions[0];
+                var audioTracks = session.Tracks
+                    .Select(t => ((byte)t.TrackNumber, t.StartLba, (byte)(t.IsAudio ? 0x00 : 0x40)))
+                    .ToList();
+                int leadOutLba = session.StartLba + session.SectorCount;
+                drive.LoadOpenAudioSession(audioTracks, leadOutLba, medium.NextWritableLba);
+            }
             if (medium.MediaType.IsCd())
             {
                 drive.LastLeadOutStart = Msf.FromLba(Math.Max(0, medium.TotalCapacitySectors - 1));
@@ -307,7 +317,10 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
             options.WriteCdText && options.CdTextBytes is { Length: > 0 } ? options.CdTextBytes : null,
             options.MediaCatalogNumber,
             TestWrite: options.Simulate,
-            WriteSpeedKiloBytesPerSecond: speed);
+            WriteSpeedKiloBytesPerSecond: speed)
+        {
+            LeaveSessionOpen = options.LeaveSessionOpen
+        };
     }
 
     private async Task<BurnOperationResult> BurnWithWriteOffsetAsync(IDiscRecorderBackend recorder, IReadOnlyList<AudioTrackSource> tracks,
@@ -568,7 +581,10 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
 
         medium.Sessions.Add(session);
         medium.CdTextBytes = request.CdTextPacks?.ToArray();
-        medium.IsFinalized = true;
+        medium.IsBlank = false;
+        medium.UsedSectors = Math.Max(medium.UsedSectors, sectors);
+        medium.IsFinalized = drive.DiscStatus != 1;
+        medium.NextWritableLba = drive.DiscStatus == 1 && drive.NextSessionAddress is int next ? next : sectors;
     }
 
     /// <summary>

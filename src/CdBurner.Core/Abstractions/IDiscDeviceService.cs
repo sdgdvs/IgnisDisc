@@ -399,6 +399,18 @@ public class AudioBurnOptions
     /// rip gives the source back sample for sample; 0 writes the audio unshifted.
     /// </summary>
     public int? WriteOffsetSamples { get; init; }
+
+    /// <summary>
+    /// Direct drive-command writer only: leave the audio disc open (multi-session 11b) so a second data session
+    /// can be appended after burning (Enhanced CD / CD-Extra).
+    /// </summary>
+    public bool LeaveSessionOpen { get; init; }
+
+    /// <summary>
+    /// Direct drive-command writer only: append a second Mode 1 ISO 9660/Joliet session containing PAR2 recovery
+    /// data over the disc's PCM (Enhanced CD / CD-Extra). Off by default.
+    /// </summary>
+    public bool IncludeRecoverySession { get; init; }
 }
 
 /// <summary>

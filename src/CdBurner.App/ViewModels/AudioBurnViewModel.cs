@@ -81,6 +81,10 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
     private bool _lookupMetadata = true;
     private bool _verifyAccurateRip = true;
     private bool _continueOnUnreadable;
+    private bool _includeRecoverySession; // off by default: some car head units refuse Enhanced CDs
+    private bool _repairFromRecoverySession = true;
+    private string _recoverySessionCapacityText = string.Empty;
+    private AudioRecoveryEstimate? _recoveryEstimate;
     private string _ripReport = string.Empty;
     private AudioRipFormat _selectedRipFormat = AudioRipFormat.Wav;
     private string _ripBitrateKbps = string.Empty;
@@ -314,6 +318,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _useDirectDriveCommands, value) && !value)
             {
                 TestWriteFirst = false;
+                IncludeRecoverySession = false;
             }
         }
     }
@@ -327,6 +332,55 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         get => _testWriteFirst;
         set => SetProperty(ref _testWriteFirst, value && _useDirectDriveCommands);
     }
+
+    /// <summary>
+    /// Off-by-default option to write PAR2 recovery data over the disc's PCM as a second data session (Enhanced CD /
+    /// CD-Extra). Requires direct drive commands; some car head units refuse Enhanced CDs.
+    /// </summary>
+    public bool IncludeRecoverySession
+    {
+        get => _includeRecoverySession;
+        set
+        {
+            if (SetProperty(ref _includeRecoverySession, value))
+            {
+                if (value && !_useDirectDriveCommands)
+                {
+                    UseDirectDriveCommands = true;
+                }
+                RecalculateTotals();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the Audio CD ripper checks for a session-2 PAR2 recovery volume and repairs damaged samples.
+    /// </summary>
+    public bool RepairFromRecoverySession
+    {
+        get => _repairFromRecoverySession;
+        set => SetProperty(ref _repairFromRecoverySession, value);
+    }
+
+    /// <summary>Latest capacity and damage-tolerance estimate for a session-2 recovery session.</summary>
+    public AudioRecoveryEstimate? RecoveryEstimate => _recoveryEstimate;
+
+    /// <summary>Plain-language session-2 overhead (~2.5 min / 11,400 sectors) and PAR2 repair tolerance line.</summary>
+    public string RecoverySessionCapacityText
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_recoverySessionCapacityText))
+            {
+                UpdateRecoveryEstimate(Tracks.Sum(t => t.DurationFrames), OpticalConstants.Cd700MbSectors);
+            }
+            return _recoverySessionCapacityText;
+        }
+        private set => SetProperty(ref _recoverySessionCapacityText, value);
+    }
+
+    /// <summary>Car head-unit compatibility warning shown alongside the recovery session option.</summary>
+    public string RecoverySessionWarningText => AudioRecoverySessionService.CarHeadUnitWarning;
 
     /// <summary>Folder for the command logs of direct burns; null for the default under %LOCALAPPDATA%.</summary>
     public string? DirectBurnLogDirectory { get; set; }
@@ -1411,11 +1465,22 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
         }
 
         DiscUsagePercent = maxFrames > 0 ? ((double)totalFrames / maxFrames * 100.0) : 0.0;
+        UpdateRecoveryEstimate(totalFrames, maxFrames);
 
         OnPropertyChanged(nameof(TotalDurationText));
         OnPropertyChanged(nameof(DiscUsageText));
         OnPropertyChanged(nameof(TotalTracksText));
         OnPropertyChanged(nameof(HasTracks));
+    }
+
+    private void UpdateRecoveryEstimate(long audioFrames, long capacityFrames)
+    {
+        var est = AudioRecoverySessionService.EstimateCapacity(audioFrames, capacityFrames);
+        _recoveryEstimate = est;
+        OnPropertyChanged(nameof(RecoveryEstimate));
+        RecoverySessionCapacityText = audioFrames <= 0
+            ? "Session 2 overhead: ~2.5 min (11,400 sectors). Add tracks to calculate PAR2 recovery budget."
+            : $"Session 2 overhead: ~2.5 min ({est.OverheadSectors:N0} sectors). {est.ToleranceSummary}";
     }
 
     private void BrowseAndAddFiles()
@@ -1844,8 +1909,9 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
             });
 
             // Direct drive commands are opt-in per burn and only for drives whose probe shows Session-at-Once.
-            bool direct = UseDirectDriveCommands;
+            bool direct = UseDirectDriveCommands || IncludeRecoverySession;
             CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine? directEngine = null;
+            CdBurner.Hardware.NativeWriting.NativeDataBurnEngine? directDataEngine = null;
             LastDirectBurnResult = null;
             LastDirectBurnLogPath = null;
             if (direct && CodeProblem() is { } codeProblem)
@@ -1865,6 +1931,7 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                     return unsupported;
                 }
                 directEngine = new CdBurner.Hardware.NativeWriting.NativeAudioBurnEngine(DirectBurnLogDirectory) { TestWriteFirst = TestWriteFirst };
+                directDataEngine = new CdBurner.Hardware.NativeWriting.NativeDataBurnEngine(_burnEngine, DirectBurnLogDirectory);
             }
 
             AudioBurnOptions Options(bool allowDamagedAudio) => new()
@@ -1875,10 +1942,11 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 PreGapFrames = DefaultPreGapFrames,
                 Speed = SelectedWriteSpeed,
                 KeepIndexMarks = direct,
-                AllowDamagedAudio = allowDamagedAudio
+                AllowDamagedAudio = allowDamagedAudio,
+                IncludeRecoverySession = IncludeRecoverySession
             };
 
-            var burnService = directEngine != null ? new AudioCdBurnService(directEngine, _audioDecoder) : _audioBurnService;
+            var burnService = directEngine != null ? new AudioCdBurnService(directEngine, _audioDecoder, directDataEngine) : _audioBurnService;
             var burnResult = await burnService.BurnAsync(recorder, compilation, Options(allowDamagedAudio: false), progress, activeToken);
 
             // A damaged FLAC stops the burn before the drive is touched; the user may accept the damage and go on.
@@ -1909,7 +1977,9 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
 
             if (burnResult.Success && direct)
             {
-                StatusMessage = $"Audio CD burned with direct drive commands and read back correctly ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
+                StatusMessage = burnService.LastRecoveryManifest is { } recManifest
+                    ? $"Audio CD + PAR2 recovery session burned ({burnResult.SectorsWritten:N0} frames, {recManifest.Par2RecoveryBlocks:N0} recovery blocks, {burnResult.TotalTime})."
+                    : $"Audio CD burned with direct drive commands and read back correctly ({burnResult.SectorsWritten:N0} frames, {burnResult.TotalTime}).";
                 BurnProgress = 100.0;
                 if (directEngine?.LastWriteOffsetPlan is { } offsetPlan)
                 {
@@ -2378,7 +2448,8 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 SecureMode = SecureRip,
                 CalculateReplayGain = true, // track and album ReplayGain 2.0, same as rip-audio without --no-replaygain
                 CoverArtBytes = coverBytes,
-                CoverArtMimeType = coverMime
+                CoverArtMimeType = coverMime,
+                RepairFromRecoverySession = RepairFromRecoverySession
             };
 
             var ripResult = await _ripperService.RipAudioCdAsync(recorder, _burnEngine, targetFolder, options, progress, activeToken);
@@ -2481,6 +2552,10 @@ public class AudioBurnViewModel : ObservableObject, IDisposable
                 if (ripResult.BadSectorLbas.Count > 0)
                 {
                     sb.AppendLine($"  Bad Sectors:      {ripResult.BadSectorLbas.Count} (zero-filled)");
+                }
+                if (ripResult.RecoveryRepair is { } repair)
+                {
+                    sb.AppendLine($"  Recovery Session: {repair.Summary}");
                 }
                 if (accurateRipStatus != null)
                 {

@@ -345,6 +345,33 @@ public sealed class VirtualMmcDrive : IScsiTransport
         DiscStatus = !Recorded ? 0 : nextSessionAddress.HasValue ? 1 : 2;
     }
 
+    /// <summary>
+    /// Loads a disc holding an initial Session-at-Once audio session so a later data session can be appended at
+    /// <paramref name="nextSessionAddress"/> (Enhanced CD / CD-Extra).
+    /// </summary>
+    public void LoadOpenAudioSession(
+        IReadOnlyList<(byte TrackNumber, int Index01Lba, byte CueControl)> tracks,
+        int leadOutLba,
+        int? nextSessionAddress)
+    {
+        ArgumentNullException.ThrowIfNull(tracks);
+        if (tracks.Count == 0)
+        {
+            throw new ArgumentException("At least one audio track is required.", nameof(tracks));
+        }
+
+        _dataSessions.Clear();
+        _laterSessionData.Clear();
+        _recordedTracks = tracks.ToList();
+        DataDiscImage = null;
+        _audioSessionTracks = tracks.Count;
+        _audioSessionLeadOutLba = leadOutLba;
+        Recorded = true;
+        RecordedLeadOutLba = leadOutLba;
+        NextSessionAddress = nextSessionAddress;
+        DiscStatus = nextSessionAddress.HasValue ? 1 : 2;
+    }
+
     /// <summary>The recorded user data of one session, as the drive would read it.</summary>
     public byte[] ReadSessionData(DataSession session)
     {
