@@ -126,6 +126,22 @@ public static class IsoUdfImageBuilder
         return LayoutContext.Create(root, options ?? new IsoBuildOptions()).TotalSectors;
     }
 
+    /// <summary>
+    /// Where the image of <paramref name="root"/> puts its recovery zones and descriptor copies (archive discs), from
+    /// the same layout the build uses, without reading or writing any file data.
+    /// </summary>
+    public static ArchiveZoneLayout DescribeArchiveZones(CompilationDirectory root, IsoBuildOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        var ctx = LayoutContext.Create(root, options ?? new IsoBuildOptions());
+        var zones = ctx.RecoveryZones
+            .Select(zone => (IReadOnlyList<ArchiveZoneFile>)zone
+                .Select(f => new ArchiveZoneFile(f.SourceFile.Name, f.StartLba, f.SectorCount))
+                .ToList())
+            .ToList();
+        return new ArchiveZoneLayout(ctx.TotalSectors, ctx.DescriptorCopyLbas.ToList(), zones);
+    }
+
     /// <summary>Name of the root hash list written when <see cref="IsoBuildOptions.WriteSha256Manifest"/> is set.</summary>
     public const string Sha256ManifestFileName = "SHA256SUMS";
 
@@ -231,6 +247,15 @@ public static class IsoUdfImageBuilder
         public int TotalSectors { get; set; }
 
         public int SessionStartLba { get; }
+
+        /// <summary>
+        /// Archive discs only: sectors holding copies of the Primary Volume Descriptor, one at the start of each
+        /// recovery zone (inner, middle, outer). Empty for every other image.
+        /// </summary>
+        public List<int> DescriptorCopyLbas { get; } = new();
+
+        /// <summary>Archive discs only: the recovery files placed in each zone (inner, middle, outer).</summary>
+        public List<List<FileLayoutNode>> RecoveryZones { get; } = new();
 
         public LayoutContext(CompilationDirectory rootDir, IsoBuildOptions options, int sessionStartLba = 0)
         {
@@ -560,11 +585,23 @@ public static class IsoUdfImageBuilder
 
             // Assign file extents. Hash-list extents come after every other file: the image is written in LBA order, so
             // each file has streamed through its hashes by the time a manifest's bytes are needed.
-            var extentOrder = ctx.Manifests.Count == 0
+            var contentFiles = ctx.Manifests.Count == 0
                 ? ctx.AllFiles
-                : ctx.AllFiles.Where(f => !IsManifestNode(ctx, f)).Concat(ctx.Manifests.Select(m => m.Node!)).ToList();
-            foreach (var file in extentOrder)
+                : ctx.AllFiles.Where(f => !IsManifestNode(ctx, f)).ToList();
+            // A null slot is one sector for a copy of the Primary Volume Descriptor (archive discs only).
+            var extentSlots = IsArchiveLayout(ctx, rootLayout, sessionStartLba)
+                ? ArchiveExtentSlots(ctx, rootLayout, contentFiles)
+                : contentFiles.Cast<FileLayoutNode?>().ToList();
+            extentSlots.AddRange(ctx.Manifests.Select(m => (FileLayoutNode?)m.Node!));
+            foreach (var slot in extentSlots)
             {
+                if (slot == null)
+                {
+                    ctx.DescriptorCopyLbas.Add(currentLba++);
+                    continue;
+                }
+
+                var file = slot;
                 bool isImportedFromPriorSession = sessionStartLba > 0
                     && file.SourceFile.ImportedStartLba.HasValue
                     && !file.SourceFile.IsPlannedLayoutLba
@@ -635,6 +672,94 @@ public static class IsoUdfImageBuilder
 
             ctx.TotalSectors = total;
             return ctx;
+        }
+
+        /// <summary>
+        /// An IgnisDisc archive disc: the archive manifest in the root and par2 files in the RECOVERY folder, written
+        /// as a first session. Only these get recovery zones and descriptor copies; every other image is unchanged.
+        /// </summary>
+        private static bool IsArchiveLayout(LayoutContext ctx, DirectoryLayoutNode rootLayout, int sessionStartLba)
+        {
+            if (sessionStartLba != 0 || ctx.AllFiles.Any(f => f.SourceFile.ImportedStartLba.HasValue))
+            {
+                return false;
+            }
+            bool hasManifest = rootLayout.Files.Any(f =>
+                string.Equals(f.SourceFile.Name, Archival.ArchiveManifest.ManifestFileName, StringComparison.OrdinalIgnoreCase));
+            return hasManifest && RecoveryFiles(rootLayout).Count > 0;
+        }
+
+        private static List<FileLayoutNode> RecoveryFiles(DirectoryLayoutNode rootLayout)
+        {
+            var folder = rootLayout.SubDirectories.FirstOrDefault(d =>
+                string.Equals(d.SourceDir.Name, Archival.ArchiveManifest.RecoveryFolderName, StringComparison.OrdinalIgnoreCase));
+            return folder == null
+                ? new List<FileLayoutNode>()
+                : folder.Files.Where(f => f.SourceFile.Name.EndsWith(".par2", StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        /// <summary>
+        /// Order of file extents on an archive disc: the recovery volumes in three zones, at the start of the file
+        /// area (inner), around its middle and at its end (outer), with the data files between them in their usual
+        /// order. Each zone starts with one sector holding a copy of the Primary Volume Descriptor. On a full disc the
+        /// zones are then well over 10 mm apart in radius, so a scratch along the tracks in one zone leaves the
+        /// recovery data and descriptor copies in the other two.
+        /// </summary>
+        private static List<FileLayoutNode?> ArchiveExtentSlots(LayoutContext ctx, DirectoryLayoutNode rootLayout, List<FileLayoutNode> contentFiles)
+        {
+            var recovery = RecoveryFiles(rootLayout);
+            var recoverySet = new HashSet<FileLayoutNode>(recovery, ReferenceEqualityComparer.Instance);
+            var data = contentFiles.Where(f => !recoverySet.Contains(f)).ToList();
+
+            var index = recovery.Where(f => string.Equals(f.SourceFile.Name, "recovery.par2", StringComparison.OrdinalIgnoreCase)).ToList();
+            var volumes = recovery.Where(f => !index.Contains(f))
+                .OrderBy(f => f.SourceFile.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(f => f.SourceFile.Name, StringComparer.Ordinal)
+                .ToList();
+
+            var zones = new List<List<FileLayoutNode>> { new(), new(index), new() };
+            for (int i = 0; i < volumes.Count; i++)
+            {
+                // Three or more volumes: spread in order over the zones. One: the middle. Two: inner and outer.
+                int zone = volumes.Count switch
+                {
+                    1 => 1,
+                    2 => i == 0 ? 0 : 2,
+                    _ => (int)((long)i * 3 / volumes.Count)
+                };
+                zones[zone].Add(volumes[i]);
+            }
+            ctx.RecoveryZones.Clear();
+            ctx.RecoveryZones.AddRange(zones);
+
+            // Put the middle zone where its centre is nearest the centre of the file area (files are never split).
+            static long Size(IEnumerable<FileLayoutNode> files) => files.Sum(f => (long)f.SectorCount);
+            long total = 3 + Size(data) + Size(recovery);
+            long middleSize = 1 + Size(zones[1]);
+            long target = (total - middleSize) / 2;
+            long offset = 1 + Size(zones[0]);
+            int insertAt = 0;
+            long best = Math.Abs(offset - target);
+            for (int i = 0; i < data.Count; i++)
+            {
+                offset += data[i].SectorCount;
+                long distance = Math.Abs(offset - target);
+                if (distance < best)
+                {
+                    best = distance;
+                    insertAt = i + 1;
+                }
+            }
+
+            var slots = new List<FileLayoutNode?> { null };
+            slots.AddRange(zones[0]);
+            slots.AddRange(data.Take(insertAt));
+            slots.Add(null);
+            slots.AddRange(zones[1]);
+            slots.AddRange(data.Skip(insertAt));
+            slots.Add(null);
+            slots.AddRange(zones[2]);
+            return slots;
         }
 
         private static void AssignUniqueNames(LayoutContext ctx)
@@ -1061,7 +1186,12 @@ public static class IsoUdfImageBuilder
         // how the layout engine orders regions (e.g. ISO metadata placed after the UDF VDS on large trees).
         var metadata = new List<(int Lba, byte[] Data)>();
 
-        metadata.Add((ctx.PvdLba, BuildPrimaryVolumeDescriptor(ctx)));
+        byte[] primaryDescriptor = BuildPrimaryVolumeDescriptor(ctx);
+        metadata.Add((ctx.PvdLba, primaryDescriptor));
+        foreach (int copyLba in ctx.DescriptorCopyLbas)
+        {
+            metadata.Add((copyLba, primaryDescriptor));
+        }
 
         if (ctx.Options.BootConfiguration != null)
         {
@@ -1405,6 +1535,11 @@ public static class IsoUdfImageBuilder
         WriteIsoDateTime(pvd.AsSpan(864, 17), nowUtc); // Effective
 
         pvd[881] = 0x01; // File Structure Version
+        if (ctx.DescriptorCopyLbas.Count > 0)
+        {
+            // Archive discs: where the copies of this descriptor are (Application Use field, ECMA-119 8.4.32).
+            PrimaryVolumeDescriptorCopy.WriteLocations(pvd, ctx.DescriptorCopyLbas);
+        }
         return pvd;
     }
 

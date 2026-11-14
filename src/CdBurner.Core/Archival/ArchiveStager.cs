@@ -192,16 +192,24 @@ public static class ArchiveStager
     /// <summary>
     /// Room for recovery data: the ceiling minus the image the disc makes with the recovery files in it, minus
     /// those files. The image size comes from the image builder's own layout (ISO 9660 + Joliet + UDF, as
-    /// <c>burn-data --udf</c> writes it), so the file system's share is exact rather than estimated.
+    /// <c>burn-data --udf</c> writes it), so the file system's share is exact rather than estimated. The recovery
+    /// volume is later cut into one volume per zone (<see cref="Par2VolumeSplitter"/>); each cut can cost up to one
+    /// sector of rounding, which is kept back here.
     /// </summary>
     public static long RecoveryBudgetSectors(int ceilingSectors, string discRoot)
     {
-        // The two files par2 will write, at a size near what they will have: the layout barely depends on it.
+        // The files par2 will write once cut into zones, at a size near what they will have: the layout barely
+        // depends on it (the descriptor copies of the archive layout are counted in the file system's share).
         long room = Math.Max(0, ceilingSectors - SectorsUnder(discRoot)) * (long)OpticalConstants.DataSectorSize;
-        var placeholders = new[] { ("recovery.par2", 4096L), ("recovery.vol00000+32768.par2", Math.Max(0, room - 4096)) };
+        long part = Math.Max(0, room - 4096) / Par2VolumeSplitter.ZoneCount;
+        var placeholders = new List<(string, long)> { ("recovery.par2", 4096L) };
+        for (int i = 0; i < Par2VolumeSplitter.ZoneCount; i++)
+        {
+            placeholders.Add(($"recovery.vol{i * 10_000:D5}+10000.par2", part));
+        }
         long placeholderSectors = placeholders.Sum(p => (p.Item2 + OpticalConstants.DataSectorSize - 1) / OpticalConstants.DataSectorSize);
         long fileSystem = ImageSectors(discRoot, placeholders) - SectorsUnder(discRoot) - placeholderSectors;
-        return ceilingSectors - SectorsUnder(discRoot) - fileSystem;
+        return ceilingSectors - SectorsUnder(discRoot) - fileSystem - (Par2VolumeSplitter.ZoneCount - 1);
     }
 
     /// <summary>Sectors the disc folder's image takes (plus optional extra RECOVERY files), from the builder's layout.</summary>
@@ -221,7 +229,8 @@ public static class ArchiveStager
     }
 
     /// <summary>
-    /// Creates the recovery data and checks the disc's image fits the ceiling. The size formula is exact for
+    /// Creates the recovery data, cuts its volume into one per zone (the image builder spreads them over the inner,
+    /// middle and outer part of the disc) and checks the disc's image fits the ceiling. The size formula is exact for
     /// par2cmdline 1.4.0; should another version write more, the excess blocks are dropped and it is created again.
     /// </summary>
     private static async Task<Par2RecoveryLayout> CreateFittingAsync(
@@ -231,6 +240,7 @@ public static class ArchiveStager
         for (int attempt = 0; ; attempt++)
         {
             await Par2Runner.CreateAsync(par2Path, discRoot, layout, scratchDir, ct).ConfigureAwait(false);
+            Par2VolumeSplitter.Split(recoveryFolder);
             int image = ImageSectors(discRoot);
             if (image <= ceilingSectors)
             {

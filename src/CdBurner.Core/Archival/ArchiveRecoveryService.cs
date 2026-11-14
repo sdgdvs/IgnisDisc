@@ -101,7 +101,11 @@ public static class ArchiveRecoveryService
 
         await using (var image = new FileStream(imagePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, useAsync: false))
         {
-            var files = ReadFileList(image, out string? listProblem);
+            var files = ReadFileList(image, out string? listProblem, out int? descriptorCopyLba);
+            if (descriptorCopyLba is int copyLba)
+            {
+                progress?.Report($"The volume descriptor at sector 16 is unreadable; using its copy at sector {copyLba:N0}.");
+            }
             if (files == null)
             {
                 return Fail("the disc's file list could not be read (" + listProblem + "). PAR2 needs the file list to know where each file is.");
@@ -204,11 +208,14 @@ public static class ArchiveRecoveryService
     /// <summary>
     /// The disc's files with their full names. The UDF tree has them all (ISO 9660 has 8.3 names and Joliet stops at
     /// 64 characters, and a disc burned as ISO + UDF has no Joliet at all), so it is used whenever it lists at least
-    /// as many files as the ISO 9660 / Joliet tree.
+    /// as many files as the ISO 9660 / Joliet tree. When sector 16 is unreadable, the ISO 9660 tree is found through
+    /// a copy of its volume descriptor (archive discs carry one per recovery zone); <paramref name="descriptorCopyLba"/>
+    /// then says which copy was used.
     /// </summary>
-    internal static IReadOnlyList<IsoFileEntry>? ReadFileList(Stream image, out string? problem)
+    internal static IReadOnlyList<IsoFileEntry>? ReadFileList(Stream image, out string? problem, out int? descriptorCopyLba)
     {
         problem = null;
+        descriptorCopyLba = null;
         image.Position = 0;
         var udfRoot = UdfTreeReader.TryRead(image);
         List<IsoFileEntry>? udfFiles = udfRoot == null ? null : Flatten(udfRoot).ToList();
@@ -217,8 +224,9 @@ public static class ArchiveRecoveryService
         try
         {
             image.Position = 0;
-            using var reader = IsoImageReader.FromStream(image, leaveOpen: true);
+            using var reader = IsoImageReader.FromDamagedStream(image, leaveOpen: true);
             isoFiles = reader.AllFiles.ToList();
+            descriptorCopyLba = reader.DescriptorCopyLba;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or InvalidOperationException)
         {

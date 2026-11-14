@@ -150,7 +150,24 @@ public sealed class IsoImageReader : IDisposable
         return new IsoImageReader(stream, leaveOpen, sessionStartLba);
     }
 
-    private IsoImageReader(Stream stream, bool leaveOpen, int sessionStartLba = 0)
+    /// <summary>
+    /// Opens an image that may be damaged: when LBA 16 holds no Primary Volume Descriptor, a copy written by
+    /// IgnisDisc's archive layout (see <see cref="PrimaryVolumeDescriptorCopy"/>) is used instead, and
+    /// <see cref="DescriptorCopyLba"/> says where it was found. First session only.
+    /// </summary>
+    public static IsoImageReader FromDamagedStream(Stream stream, bool leaveOpen = false)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return new IsoImageReader(stream, leaveOpen, 0, allowDescriptorCopy: true);
+    }
+
+    /// <summary>
+    /// The sector the Primary Volume Descriptor was read from when LBA 16 was unreadable (only with
+    /// <see cref="FromDamagedStream"/>); null when LBA 16 was used.
+    /// </summary>
+    public int? DescriptorCopyLba { get; }
+
+    private IsoImageReader(Stream stream, bool leaveOpen, int sessionStartLba = 0, bool allowDescriptorCopy = false)
     {
         _leaveOpen = leaveOpen;
         SessionStartLba = sessionStartLba;
@@ -185,6 +202,13 @@ public sealed class IsoImageReader : IDisposable
             byte[] pvd = new byte[OpticalConstants.DataSectorSize];
             _stream.Position = (long)(sessionStartLba + 16) * OpticalConstants.DataSectorSize;
             _stream.ReadExactly(pvd);
+
+            bool atSixteen = pvd[0] == 0x01 && Encoding.ASCII.GetString(pvd.AsSpan(1, 5)) == "CD001";
+            if (!atSixteen && allowDescriptorCopy && PrimaryVolumeDescriptorCopy.Find(_stream) is { } copy)
+            {
+                pvd = copy.Descriptor;
+                DescriptorCopyLba = copy.Lba;
+            }
 
             if (pvd[0] == 0x01 && Encoding.ASCII.GetString(pvd.AsSpan(1, 5)) == "CD001")
             {

@@ -459,8 +459,9 @@ public sealed class ArchiveDamageTests : IDisposable
         string indexPar2 = Path.Combine(recoveryDir, "recovery.par2");
         Assert.True(File.Exists(indexPar2));
 
+        // Real par2's one volume is cut into one per disc zone; the stand-in writes no PAR2 packets and stays whole.
         string[] volumes = Directory.GetFiles(recoveryDir, "recovery.vol*.par2");
-        Assert.Single(volumes);
+        Assert.Equal(ExpectedVolumeCount(staged.Recovery), volumes.Length);
 
         ulong packetSliceSize = ReadPar2MainSliceSize(indexPar2);
         Assert.Equal((ulong)staged.Recovery.BlockSize, packetSliceSize);
@@ -515,7 +516,7 @@ public sealed class ArchiveDamageTests : IDisposable
             {
                 Assert.Equal(0, staged.Recovery.BlockSize % OpticalConstants.DataSectorSize);
                 string recoveryDir = Path.Combine(staged.DiscRoot, ArchiveManifest.RecoveryFolderName);
-                Assert.Single(Directory.GetFiles(recoveryDir, "recovery.vol*.par2"));
+                Assert.Equal(ExpectedVolumeCount(staged.Recovery), Directory.GetFiles(recoveryDir, "recovery.vol*.par2").Length);
             }
         }
     }
@@ -596,6 +597,10 @@ public sealed class ArchiveDamageTests : IDisposable
         }
         return result;
     }
+
+    /// <summary>Recovery volumes on a staged disc: one per zone with real par2 (at most one per recovery block).</summary>
+    private static int ExpectedVolumeCount(Par2RecoveryLayout layout) =>
+        Par2Runner.FindPar2Executable() == null ? 1 : Math.Clamp(layout.RecoveryBlocks, 1, Par2VolumeSplitter.ZoneCount);
 
     private string GetPar2OrStandIn()
     {

@@ -189,9 +189,80 @@ public sealed class ArchiveRecoveryTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_root, "out.read.iso"))); // the read copy is removed without --keep-image
     }
 
+    [Theory]
+    [InlineData(0)] // inner zone
+    [InlineData(1)] // middle zone
+    [InlineData(2)] // outer zone, to the last sector (the closing UDF anchor goes with it)
+    public async Task Sector16_Sector256_AndAWholeRecoveryZone_Destroyed_EveryFileIsRecovered(int zone)
+    {
+        if (_par2 == null) return;
+        var (_, image) = await StageAndBuildAsync(redundancy: 10);
+        var band = ZoneBand(image, zone);
+        Damage(image, band.Append(16).Append(256).Distinct().ToList());
+
+        var (exit, json) = await RecoverAsync(image, unreadable: null);
+
+        Assert.Equal(0, exit);
+        Assert.True(json.GetProperty("damagedFiles").GetArrayLength() >= 1);
+        AssertSameFiles(Source, Path.Combine(_root, "out"));
+    }
+
+    [Fact]
+    public async Task Sector16_AndTheWholeUdfVolumeStructure_Destroyed_TheDescriptorCopyFindsTheFiles()
+    {
+        // No UDF left at all (both anchors, the main and the reserve descriptor sequence): only the ISO 9660 / Joliet
+        // tree remains, and its descriptor at sector 16 is gone too. Joliet keeps names up to 64 characters.
+        if (_par2 == null) return;
+        var (_, image) = await StageAndBuildAsync(redundancy: 10, longName: false, joliet: true);
+        long sectors = new FileInfo(image).Length / 2048;
+        var bad = new List<int> { 16, 256, (int)sectors - 1 };
+        bad.AddRange(Enumerable.Range(257, 32)); // main and reserve Volume Descriptor Sequence, 16 sectors each
+        Damage(image, bad);
+        using (var stream = File.OpenRead(image))
+        {
+            Assert.Null(UdfTreeReader.TryRead(stream));
+        }
+
+        var (exit, json) = await RecoverAsync(image, unreadable: null);
+
+        Assert.Equal(0, exit);
+        Assert.True(json.GetProperty("success").GetBoolean());
+        AssertSameFiles(Source, Path.Combine(_root, "out"));
+    }
+
+    /// <summary>
+    /// The sectors of one recovery zone as a band across the tracks: from the zone's descriptor copy (less 200
+    /// sectors of the data before it, except for the inner zone, which starts right after the file system) to 200
+    /// sectors past its last recovery file, or to the end of the image for the outer zone.
+    /// </summary>
+    private static List<int> ZoneBand(string image, int zone)
+    {
+        IReadOnlyList<int> copies;
+        using (var stream = File.OpenRead(image))
+        {
+            byte[] pvd = new byte[2048];
+            stream.Position = 16 * 2048;
+            stream.ReadExactly(pvd);
+            copies = PrimaryVolumeDescriptorCopy.ReadLocations(pvd);
+        }
+        Assert.Equal(3, copies.Count);
+
+        var recovery = UdfFiles(image)
+            .Where(f => f.VirtualPath.StartsWith("/" + ArchiveManifest.RecoveryFolderName + "/", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        int zoneEnd = zone < 2 ? copies[zone + 1] : int.MaxValue;
+        var inZone = recovery.Where(f => f.StartLba > copies[zone] && f.StartLba < zoneEnd).ToList();
+        Assert.Contains(inZone, f => f.Name.StartsWith("recovery.vol", StringComparison.OrdinalIgnoreCase));
+
+        int sectors = (int)(new FileInfo(image).Length / 2048);
+        int first = zone == 0 ? copies[0] : copies[zone] - 200;
+        int last = zone == 2 ? sectors - 1 : inZone.Max(f => f.StartLba + (int)((f.SizeBytes + 2047) / 2048)) + 200;
+        return Enumerable.Range(first, last - first + 1).ToList();
+    }
+
     private string Source => Path.Combine(_root, "source");
 
-    private async Task<(ArchiveStagedDisc Staged, string Image)> StageAndBuildAsync(int redundancy)
+    private async Task<(ArchiveStagedDisc Staged, string Image)> StageAndBuildAsync(int redundancy, bool longName = true, bool joliet = false)
     {
         var random = new Random(2026_11_10);
         Directory.CreateDirectory(Path.Combine(Source, "photos", "2026"));
@@ -206,16 +277,17 @@ public sealed class ArchiveRecoveryTests : IDisposable
         byte[] longOne = new byte[300_000];
         random.NextBytes(longOne);
         File.WriteAllBytes(Path.Combine(Source, "photos",
-            "Schaffer, Riley, and the Double Ice Backfire - Hold Person - 06 Surrender ( ͡° ͜ʖ ͡°).mp3"), longOne);
+            longName ? "Schaffer, Riley, and the Double Ice Backfire - Hold Person - 06 Surrender ( ͡° ͜ʖ ͡°).mp3" : "Surrender.mp3"), longOne);
 
         var plan = ArchiveSpanPlanner.Plan(Source, DiscMediaType.CdR, redundancy, "testset", ceilingSectorsOverride: CeilingSectors);
         Assert.Single(plan.Discs);
         var staged = (await ArchiveStager.StageDiscsAsync(plan, Path.Combine(_root, "staging"), _par2)).Single();
 
         string image = Path.Combine(_root, "disc01.iso");
+        // --udf alone: ISO 9660 + UDF with no Joliet, as archive-stage tells people to burn it.
+        string[] args = ["build-iso", "--input", staged.DiscRoot, "--output", image, "--udf", "--label", "ARCHIVE01", "--fixed-time", "1767225600"];
         int built = await CliCommandRunner.RunAsync(
-            // --udf alone: ISO 9660 + UDF with no Joliet, as archive-stage tells people to burn it.
-            ["build-iso", "--input", staged.DiscRoot, "--output", image, "--udf", "--label", "ARCHIVE01", "--fixed-time", "1767225600"],
+            joliet ? [.. args, "--joliet"] : args,
             new StringWriter(), new StringWriter(),
             new DiscDeviceManager(enablePhysicalEnumeration: false), new VirtualBurnEngine());
         Assert.Equal(0, built);

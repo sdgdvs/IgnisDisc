@@ -1546,7 +1546,9 @@ public sealed class CliIntegrationTests : IDisposable
             Assert.Equal(0, disc.GetProperty("recoveryBlockSize").GetInt32() % 2048);
             Assert.True(disc.GetProperty("recoveryBlocks").GetInt32() >= 1);
             string recoveryDir = Path.Combine(disc.GetProperty("path").GetString()!, CdBurner.Core.Archival.ArchiveManifest.RecoveryFolderName);
-            Assert.Single(Directory.GetFiles(recoveryDir, "recovery.vol*.par2"));
+            // par2's one volume is cut into one per disc zone (inner, middle, outer), at most one per recovery block.
+            int expectedVolumes = Math.Clamp(disc.GetProperty("recoveryBlocks").GetInt32(), 1, CdBurner.Core.Archival.Par2VolumeSplitter.ZoneCount);
+            Assert.Equal(expectedVolumes, Directory.GetFiles(recoveryDir, "recovery.vol*.par2").Length);
         }
     }
 

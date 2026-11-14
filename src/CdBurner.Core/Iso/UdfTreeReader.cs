@@ -9,7 +9,8 @@ namespace CdBurner.Core.Iso;
 /// file its full name. ISO 9660 alone has 8.3 names and Joliet stops at 64 characters, so a disc burned as ISO + UDF
 /// only has its real names here.
 /// <para>
-/// Made for damaged images: it tries both anchors, the main and the reserve descriptor sequence, and the metadata
+/// Made for damaged images: it tries both anchors (and with neither readable, looks for the descriptor sequence
+/// itself), the main and the reserve descriptor sequence, and the metadata
 /// file's mirror, and skips an entry it cannot read instead of giving up. Files are reported by their first sector;
 /// only files stored in one contiguous run (as IgnisDisc writes them) are listed.
 /// </para>
@@ -70,8 +71,27 @@ public sealed class UdfTreeReader
                 }
             }
         }
+
+        // Every anchor unreadable: look for the descriptor sequence itself near the start of the volume. A UDF
+        // descriptor tag records the sector it was written to (ECMA-167 3/7.2.8, Tag Location), and the tag checksum
+        // must match, so a Primary Volume Descriptor (tag 1) found at the sector its tag names starts a sequence.
+        long scanEnd = Math.Min(_sectors, VdsScanSectors);
+        for (long lba = 17; lba < scanEnd; lba++)
+        {
+            if (TryTag(ReadSector(lba), (uint)lba, 1, out _))
+            {
+                var root = TryVolume((uint)lba);
+                if (root != null)
+                {
+                    return root;
+                }
+            }
+        }
         return null;
     }
+
+    /// <summary>Sectors searched for a descriptor sequence when no anchor can be read (8 MiB).</summary>
+    private const int VdsScanSectors = 4096;
 
     private IsoDirectoryEntry? TryVolume(uint vds)
     {
