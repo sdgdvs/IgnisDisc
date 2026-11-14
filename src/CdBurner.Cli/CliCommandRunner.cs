@@ -209,6 +209,8 @@ public static class CliCommandRunner
             "erase" or "erase-disc" => await HandleEraseAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "scan" or "scan-disc" => await HandleScanAsync(cmd, stdout, stderr, deviceService, burnEngine).ConfigureAwait(false),
             "drive-report" or "drivereport" => HandleDriveReport(cmd, stdout, deviceService),
+            "eject" => RunTrayCommand(cmd, stdout, stderr, deviceService, load: false),
+            "load" => RunTrayCommand(cmd, stdout, stderr, deviceService, load: true),
             _ => throw new CommandLineException($"Unknown command '{cmd.Subcommand}'. Use --help for usage information.")
         };
     }
@@ -312,6 +314,75 @@ public static class CliCommandRunner
 
         stdout.WriteLine(report);
         return 0;
+    }
+
+    /// <summary>
+    /// eject / load --drive &lt;id&gt; [--json]: opens or closes the tray with START STOP UNIT. The drive's Removable
+    /// Medium feature is read first; a load on a drive that cannot close its own tray sends nothing and says to push
+    /// the tray in by hand (exit code 1). A virtual drive goes through the simulated drive and its tray follows what
+    /// that drive accepted.
+    /// </summary>
+    private static int RunTrayCommand(CommandLineArgs cmd, TextWriter stdout, TextWriter stderr, IDiscDeviceService deviceService, bool load)
+    {
+        string driveId = cmd.GetRequiredOption("drive", "--drive <id>");
+        var recorder = FindRecorder(deviceService, driveId);
+
+        TrayCommandResult result;
+        if (recorder is VirtualDiscRecorder virtualRecorder)
+        {
+            var drive = NativeAudioBurnEngine.CreateVirtualDrive(virtualRecorder);
+            result = load ? TrayCommands.Load(drive, _ => { }, CancellationToken.None) : TrayCommands.Eject(drive);
+            if (result.Success && load)
+            {
+                virtualRecorder.CloseTray();
+            }
+            else if (result.Success)
+            {
+                virtualRecorder.EjectMedia();
+            }
+        }
+        else if (recorder.IsVirtual)
+        {
+            throw new CommandLineException($"Drive '{driveId}' is a virtual drive without a tray.");
+        }
+        else
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                throw new CommandLineException("Opening and closing the tray of a physical drive needs Windows.");
+            }
+            try
+            {
+                using var transport = Win32ScsiTransport.Open(NativeAudioBurnEngine.DevicePathFor(recorder));
+                result = load ? TrayCommands.Load(transport, Thread.Sleep, CancellationToken.None) : TrayCommands.Eject(transport);
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+            {
+                throw new CommandLineException($"Could not open the drive for drive commands: {ex.Message}");
+            }
+        }
+
+        if (cmd.IsJson)
+        {
+            WriteJsonResult(stdout, new
+            {
+                success = result.Success,
+                driveId = recorder.UniqueId,
+                action = load ? "load" : "eject",
+                commandSent = result.CommandSent,
+                needsManualClose = result.NeedsManualClose,
+                discPresent = result.DiscPresent,
+                message = result.Message,
+                loadingMechanism = result.Mechanism?.LoadingMechanism,
+                canLoad = result.Mechanism?.CanLoad,
+                canEject = result.Mechanism?.CanEject
+            });
+        }
+        else
+        {
+            (result.Success ? stdout : stderr).WriteLine(result.Message);
+        }
+        return result.Success ? 0 : 1;
     }
 
     private static int HandleMediaInfo(CommandLineArgs cmd, TextWriter stdout, IDiscDeviceService deviceService)
@@ -3002,6 +3073,10 @@ public static class CliCommandRunner
         stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
         stdout.WriteLine("  media-info --drive <id> [--json]");
         stdout.WriteLine("      Shows inserted disc status, capacity, sessions, speeds.");
+        stdout.WriteLine("  eject --drive <id> [--json]");
+        stdout.WriteLine("      Opens the tray. A drive with a spring tray has to be closed by hand afterwards.");
+        stdout.WriteLine("  load --drive <id> [--json]");
+        stdout.WriteLine("      Closes the tray and waits until the drive is ready. On a drive that cannot close its own tray it says so and exits 1.");
         stdout.WriteLine("  build-iso --input <folder> --output <file.iso> [--label <vol>] [--udf] [--udf-rev <1.02|1.50|2.00|2.01|2.50|2.60>] [--joliet] [--boot-bios <img>] [--boot-uefi <img>] [--fixed-time <unix|iso8601>] [--sha256sums] [--blake3sums] [--json]");
         stdout.WriteLine("      Compiles a folder into an ISO 9660 / Joliet / UDF filesystem image.");
         stdout.WriteLine("  burn-iso --drive <id> --iso <file.iso|.nrg|.cdi|.mdf|.mds|.ccd|.img> [--speed <X|max>] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--native [--test-write | --test-first] [--log-dir <folder>]] [--json]");
@@ -3065,6 +3140,21 @@ public static class CliCommandRunner
             stdout.WriteLine();
             stdout.WriteLine("  drive-report --drive <id> [--json]");
             stdout.WriteLine("      Generates a Markdown compatibility report matching GitHub issue template.");
+            return;
+        }
+        if (string.Equals(subcommand, "eject", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(subcommand, "load", StringComparison.OrdinalIgnoreCase))
+        {
+            stdout.WriteLine(LegalBanner.VersionNotice);
+            stdout.WriteLine();
+            stdout.WriteLine("  eject --drive <id> [--json]");
+            stdout.WriteLine("      Opens the tray (START STOP UNIT). If the drive cannot close its own tray, the message says to push it in by hand.");
+            stdout.WriteLine("  load --drive <id> [--json]");
+            stdout.WriteLine("      Closes the tray and waits until the drive is ready or reports that it holds no disc.");
+            stdout.WriteLine("      The drive's Removable Medium feature is read first. If it reports no Load capability (a spring");
+            stdout.WriteLine("      tray, as on slim USB drives) or a pop-up tray, nothing is sent: the command says to push the tray");
+            stdout.WriteLine("      in by hand and exits 1. --json adds needsManualClose, commandSent, discPresent and the drive's");
+            stdout.WriteLine("      loadingMechanism, canLoad and canEject.");
             return;
         }
         if (string.Equals(subcommand, "rip-audio", StringComparison.OrdinalIgnoreCase) ||

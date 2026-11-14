@@ -113,6 +113,10 @@ ignisdisc-cli <command> [options]
   erase      --drive <id> [--full]
   scan       --drive <id> [--block-size <sectors>] [--csv <file.csv>]
   drive-report --drive <id>                    Build a drive compatibility report (capabilities and media ID)
+  eject      --drive <id>                      Open the tray
+  load       --drive <id>                      Close the tray and wait until the drive is ready; on a drive that
+                                               cannot close its own tray (a spring tray, as on slim USB drives) it
+                                               sends nothing, says to push the tray in by hand and exits 1
 
 Every command accepts --json for machine-readable output. --drive takes a drive letter (e.g. D:) or the ID
 shown by `drives`.

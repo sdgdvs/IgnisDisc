@@ -36,6 +36,24 @@ public class VirtualDiscRecorder : IDiscRecorderBackend, IDriveMediaReportProvid
     public bool IsVirtual => true;
 
     /// <summary>
+    /// True for a motorised tray that closes when asked (Load bit of the Removable Medium feature). False, the default,
+    /// is a spring tray like the GP60NB50's: it opens on request and has to be pushed in by hand.
+    /// </summary>
+    public bool TrayClosesItself { get; init; }
+
+    /// <summary>A disc is in the drive or lies in the open tray.</summary>
+    public bool HasDisc
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return CurrentMedium != null || _trayMedium != null;
+            }
+        }
+    }
+
+    /// <summary>
     /// Indicates whether the virtual drive tray is currently open/ejected.
     /// </summary>
     public bool TrayOpen { get; private set; }

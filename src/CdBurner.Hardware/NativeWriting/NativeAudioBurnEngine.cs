@@ -85,7 +85,12 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
     public static VirtualMmcDrive CreateVirtualDrive(VirtualDiscRecorder recorder)
     {
         var medium = recorder.CurrentMedium;
-        var drive = new VirtualMmcDrive { MediaPresent = medium != null && !recorder.TrayOpen };
+        var drive = new VirtualMmcDrive
+        {
+            MediaPresent = medium != null && !recorder.TrayOpen,
+            CanLoadTray = recorder.TrayClosesItself,
+            DiscInTray = recorder.HasDisc
+        };
         if (medium != null)
         {
             drive.Profile = medium.MediaType switch
@@ -571,7 +576,7 @@ public sealed class NativeAudioBurnEngine : IBurnEngineBackend, IAudioDiscVerifi
     /// access only to a handle opened on the drive itself; a handle opened by drive letter goes through the mounted
     /// file system and the lock fails with ERROR_INVALID_HANDLE.
     /// </summary>
-    internal static string DevicePathFor(IDiscRecorderBackend recorder) =>
+    public static string DevicePathFor(IDiscRecorderBackend recorder) =>
         recorder.UniqueId.StartsWith(@"\\?\", StringComparison.Ordinal) ? recorder.UniqueId : recorder.VolumePath;
 
     private void SaveLog(LoggingScsiTransport log)

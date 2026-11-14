@@ -34,6 +34,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// <summary>The drive can close its tray (Load bit). Off by default, as the GP60NB50 reports: a spring tray.</summary>
     public bool CanLoadTray { get; set; }
 
+    /// <summary>
+    /// A disc lies in the tray, so a load leaves the drive with a medium. False: an empty tray, after which the drive
+    /// answers 2/3A/00 (medium not present), as a real drive does.
+    /// </summary>
+    public bool DiscInTray { get; set; } = true;
+
     /// <summary>START STOP UNIT ejects (LoEj=1, Start=0) and loads (LoEj=1, Start=1) the drive accepted.</summary>
     public int TrayEjects { get; private set; }
 
@@ -706,7 +712,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         {
             return Sense(0x05, 0x24, 0x00);
         }
-        MediaPresent = true;
+        MediaPresent = DiscInTray;
         TrayLoads++;
         Reload();
         NotReadyResponses = Math.Max(NotReadyResponses, 2); // spinning up after the load
