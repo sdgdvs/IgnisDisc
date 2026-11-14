@@ -57,11 +57,11 @@
   },
   {
     "featureMarkdown": "Burn / verify / convert legacy images",
-    "featureHtml": "Burn, verify or convert Nero, Alcohol 120% and CloneCD images",
+    "featureHtml": "Burn, verify or convert Nero, Alcohol 120%, CloneCD and DiscJuggler images",
     "physical": "✅",
     "virtual": "✅",
-    "notesMarkdown": "Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit",
-    "notesHtml": "<code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; streamed, no size limit"
+    "notesMarkdown": "Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit. DiscJuggler `.cdi` (v2, v3, v3.5) is read as well, checked only on hand-built files that follow the published layout, not on an image made by DiscJuggler; the first data track is used",
+    "notesHtml": "<code>.nrg</code>, <code>.mdf</code>/<code>.mds</code>, <code>.ccd</code>/<code>.img</code>, including Mode 2 / XA discs; streamed, no size limit. DiscJuggler <code>.cdi</code> (v2, v3, v3.5) is read as well, checked only on hand-built files that follow the published layout, not on an image made by DiscJuggler; the first data track is used"
   },
   {
     "featureMarkdown": "Disc copy (one or two drives, multi-copy)",

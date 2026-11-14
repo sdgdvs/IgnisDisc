@@ -25,7 +25,7 @@ pipeline can be tested without hardware or blank media.
 | Hash lists on data discs (`SHA256SUMS` / `BLAKE3SUMS`) | ✅ | ✅ | Optional (`--sha256sums`, `--blake3sums`, or checkboxes on the Data Disc screen); written to the disc root and checked file by file after the burn |
 | Rip data disc to `.iso` / `.bin` + `.cue` | ✅ | ✅ | |
 | Burn audio CD (Disc-at-Once / Track-at-Once) | ✅ | ✅ | WAV, FLAC (built-in decoder, incl. 24-bit / hi-res / surround), MP3/M4A via Media Foundation; `.cue` sheets (per-track or single-file albums) and `.m3u`/`.m3u8`/`.pls` playlists; loudness leveling or an optional -18 LUFS normalisation with a -1 dBTP limiter, crossfade, preview, printable jewel-case insert. Opus, Ogg and MP3 can also be decoded through the optional ffmpeg download, trimmed to the exact length for gapless albums; the lossy decoding and the normalisation have only been tested on files and the virtual drive, with one 2021 ffmpeg build, not on a burned disc |
-| Burn / verify / convert legacy images | ✅ | ✅ | Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit |
+| Burn / verify / convert legacy images | ✅ | ✅ | Nero `.nrg`, Alcohol 120% `.mdf`/`.mds`, CloneCD `.ccd`/`.img`, incl. Mode 2 / XA; streamed, no size limit. DiscJuggler `.cdi` (v2, v3, v3.5) is read as well, checked only on hand-built files that follow the published layout, not on an image made by DiscJuggler; the first data track is used |
 | Disc copy (one or two drives, multi-copy) | ⚠️ | ✅ | Swap prompts between copies; audio CDs copied track by track. A mixed-mode CD (data track first, then audio) is copied whole with direct drive commands turned on, otherwise only its audio; done once on a real drive (one drive, a CD-RW copied to a CD-R). The source audio is read with error checks and re-reads, and a copy stops before writing when sectors still read wrong |
 | Rip audio CD to `.wav` / `.flac` / `.mp3` / `.opus` / `.m4a` + `.cue` | ✅ | ✅ | Reads the real TOC and CD-Text; optional MusicBrainz track names. AAC uses the encoder built into Windows; FLAC, MP3 and Opus use the optional ffmpeg download (no encoder is bundled). Ripping has run on a real drive (LG GP60NB50): tracks from CD-Rs and a CD-RW burned by IgnisDisc came back identical to the source audio. The encoders and output formats are otherwise tested on the virtual drive only; the built-in FLAC decoder (used for burning) is also checked against files made by the official flac 1.5.0 encoder |
 | AccurateRip verification + read-offset correction | ✅ | ✅ | Detects your drive's offset from a disc in the AccurateRip database |
@@ -76,7 +76,7 @@ ignisdisc-cli <command> [options]
                                                --fixed-time (or SOURCE_DATE_EPOCH) gives byte-identical images;
                                                --sha256sums adds a root SHA256SUMS that `sha256sum -c` can check;
                                                --blake3sums adds a BLAKE3SUMS that `b3sum -c` can check
-  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img> [--speed <X|max>] [--no-verify | --strict-verify] [--no-close] [--overwrite]
+  burn-iso   --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img|.cdi> [--speed <X|max>] [--no-verify | --strict-verify] [--no-close] [--overwrite]
              [--native [--test-write | --test-first] [--log-dir <folder>]]
   burn-data  --drive <id> --input <folder> [--label <vol>] [--speed <X|max>] [--udf] [--joliet]
              [--boot-bios <img>] [--boot-uefi <img>] [--no-verify | --strict-verify] [--no-close] [--overwrite] [--fixed-time <...>]
@@ -106,7 +106,7 @@ ignisdisc-cli <command> [options]
   recover (--drive <id>|--image <file.iso>) --out <folder>
                                                Copy a damaged archive disc's files out, rebuild them from its
                                                PAR2 recovery data and check them (exit code 2 if any are lost)
-  verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img>
+  verify     --drive <id> --iso <file.iso|.nrg|.mdf|.ccd|.img|.cdi>
   verify     --drive <id> --cue <file.cue> [--title <album>] [--artist <name>] [--no-cd-text] [--write-offset <n|auto>]
                                                Check an audio or mixed-mode CD burned with --native against its .cue,
                                                without writing (track table, CD-Text, codes, every sample)
