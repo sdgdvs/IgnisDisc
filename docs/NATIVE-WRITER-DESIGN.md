@@ -16,8 +16,8 @@
   session) still copies its audio only.
 - data discs: one Mode 1 track Track-at-Once on a blank CD-R/CD-RW, and one data track on a blank single-layer
   DVD-R, DVD-RW (sequential) or DVD+R (`NativeTaoDataWriter`, DVD half in `NativeTaoDataWriter.Dvd.cs`), through
-  `burn-iso` / `burn-data --native` and the Data Disc and Disc Image screens. The DVD path has run only against the
-  virtual drive.
+  `burn-iso` / `burn-data --native` and the Data Disc and Disc Image screens. The DVD path has run on real discs for
+  DVD-R, DVD+R and DVD+RW (see the results table); DVD-RW has run only against the virtual drive.
 - Exclusive access opens the drive by its device interface path (`\\?\…{53f56308-…}`): the cdrom driver refuses
   the lock (ERROR_INVALID_HANDLE) on a handle opened by drive letter, because that handle belongs to the mounted
   file system.
@@ -28,6 +28,14 @@ identical: two tracks with CD-Text on a CD-RW, and four tracks on a CD-R with CD
 pre-emphasis and copy bits, audio in pre-gaps and audio in front of track 1. A mixed-mode CD (a data track, then two
 audio tracks) has been written on a CD-RW and read back identical. One drive model only; no disc has
 been played in a stand-alone CD player yet.
+
+Data discs have also run on the same drive (results table): Track-at-Once on CD-RW (24 MB and 690 MB, every sector read
+back); a DVD-R written in one pass, a DVD-R left open and given a second session by the Windows writer, and a DVD-R test
+write; a used and a new DVD+RW; a DVD+R finalized by the drive; three added sessions on a CD-RW, a CD-R and a DVD+R and
+four on a DVD-R, every file of every session identical; and a 60 s DVD-Video test disc on a DVD+RW, read back and decoded
+in full. Still simulator only: DVD-RW, DVD-RAM, dual-layer DVD+R and DVD-R, Blu-ray, the open audio session with a data
+session after it (CD-Extra), the Audio CD recovery session, the radial spread of archive recovery data, and the `eject`
+and `load` commands.
 
 Phases 5–6 below are still plans.
 

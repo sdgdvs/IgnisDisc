@@ -118,6 +118,8 @@ ignisdisc-cli <command> [options]
                                                cannot close its own tray (a spring tray, as on slim USB drives) it
                                                sends nothing, says to push the tray in by hand and exits 1
 
+`eject` and `load` have been tested on the virtual drive only, not on a real drive.
+
 Every command accepts --json for machine-readable output. --drive takes a drive letter (e.g. D:) or the ID
 shown by `drives`.
 ```
@@ -197,6 +199,7 @@ smaller than the second); simulator only so far. On the DVD-Video screen, "Direc
 dual-layer DVD+R on a cell boundary instead, read from the title sets' IFO files, where players expect the layer
 change (simulator only). The DVD-Video screen's direct path has also written a 60 s test disc to a used DVD+RW on
 real hardware: every sector read back and the title decodes in full; it has not been played in a stand-alone player.
+An audio CD written this way can be left open for a second session, and a data session can be added after it (CD-Extra); this and the optional recovery-data session on an audio CD have run only in the built-in drive simulator, not on a real disc.
 `--test-write` and
 `--test-first` work as for audio (DVD+R has no test write). On real hardware it has run on one drive so far; other
 drives are still to be tried.
