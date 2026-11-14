@@ -113,7 +113,8 @@ measured.
 **Audio CD, Session-at-Once with CD-Text:**
 
 1. `MODE SELECT` page 0x05: write type 2 (SAO), Test Write bit as chosen, BUFE on when supported, multi-session 00
-   (close the disc).
+   (close the disc), or 11b to leave the disc open for another session (the first session of a CD-Extra disc; the
+   writer reads the field back and stops before writing if the drive changed it).
 2. `SEND CUE SHEET` (0x5D). One 8-byte entry per index (CTL/ADR, track, index, data form, SCMS, absolute MSF): a
    lead-in entry (track 0), track 1 INDEX 00 at 00:00:00 and INDEX 01 at 00:02:00, then every track's INDEX 00 / 01,
    then the lead-out (track 0xAA). The CTL nibble carries pre-emphasis and copy-permit; ADR 2 / 3 entries carry MCN
@@ -125,7 +126,11 @@ measured.
    P-W) while a CD-Text lead-in is written; if the drive refuses that, block type 0 is tried.
 4. `WRITE(10)` of 2,352-byte audio sectors from LBA −150 (the 2-second pre-gap of track 1) to the end of the last
    track.
-5. `SYNCHRONIZE CACHE`. The drive writes the lead-out and closes the session itself.
+5. `SYNCHRONIZE CACHE`. The drive writes the lead-out and closes the session itself. With multi-session 11b it also
+   writes the B0h pointer (start of the next possible program area, 11,250 sectors after the lead-out starts: 6,750
+   lead-out plus 4,500 next lead-in) and C0h, and `READ DISC INFORMATION` then reports status 1 (incomplete); the
+   writer checks that status after the read-back. Simulator only so far: `VirtualMmcDrive` answers `READ TOC`
+   format 2 with these pointers. Not yet run on a real disc.
 
 The cue sheet data form values (0x00 audio, 0x01 drive-generated lead-in/lead-out, 0x41 lead-in with host R-W),
 the pack-to-subcode packing and the lead-in addressing were checked against cdrdao's generic MMC driver. Drives that

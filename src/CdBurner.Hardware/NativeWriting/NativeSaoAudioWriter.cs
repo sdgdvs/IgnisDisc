@@ -26,6 +26,11 @@ public sealed record NativeSaoWriteRequest(
     /// <summary>Samples to move all the audio later before it is sent (negative: earlier), to correct the drive's write
     /// offset; see <see cref="CdBurner.Core.Audio.WriteOffsetPlan"/>. 0 sends the audio as it is.</summary>
     public int ShiftSamples { get; init; }
+
+    /// <summary>True: leave the disc open for another session (mode page 05h multi-session 11b). The drive writes the
+    /// lead-out and a B0h pointer to the next session instead of closing the disc: the first session of a CD-Extra
+    /// disc. False (the default) closes the disc.</summary>
+    public bool LeaveSessionOpen { get; init; }
 }
 
 /// <summary>Outcome of a native Session-at-Once write.</summary>
@@ -61,6 +66,10 @@ public sealed record NativeSaoWriteResult
 
     /// <summary>Mode 1 sectors written for a mixed-mode CD's data track (its pre-gap and post-gap included).</summary>
     public int DataSectorsWritten { get; init; }
+
+    /// <summary>After a real write with <see cref="NativeSaoWriteRequest.LeaveSessionOpen"/>: whether READ DISC
+    /// INFORMATION then reported an appendable disc (status 1). Null when not asked for or not checked.</summary>
+    public bool? DiscLeftOpen { get; init; }
 }
 
 /// <summary>
@@ -201,7 +210,7 @@ public sealed class NativeSaoAudioWriter
 
         // 3. Write parameters, then read them back.
         var current = ReadWriteParameters() ?? throw Stop("The drive did not return its write parameters (mode page 0x05).");
-        var wanted = current.ForSessionAtOnce(request.TestWrite, mastering.BufferUnderrunFree, cdText);
+        var wanted = current.ForSessionAtOnce(request.TestWrite, mastering.BufferUnderrunFree, cdText, request.LeaveSessionOpen);
         if (!SelectWriteParameters(wanted))
         {
             if (!cdText || !SelectWriteParameters(wanted = wanted.WithRawDataBlockType()))
@@ -220,7 +229,15 @@ public sealed class NativeSaoAudioWriter
         {
             throw Stop("The drive did not confirm test-write mode, so nothing was written.");
         }
-        _note($"Write parameters confirmed: SAO, test write {confirmed.TestWrite}, BUFE {confirmed.BufferUnderrunFree}, data block type {confirmed.DataBlockType}.");
+        byte multiSession = request.LeaveSessionOpen ? WriteParametersPage.MultiSessionNextAllowed : WriteParametersPage.MultiSessionClosed;
+        if (confirmed.MultiSession != multiSession)
+        {
+            throw Stop(request.LeaveSessionOpen
+                ? $"The drive did not keep the setting that leaves the disc open for another session (multi-session field {confirmed.MultiSession})."
+                : $"The drive did not keep the setting that closes the disc (multi-session field {confirmed.MultiSession}).");
+        }
+        _note($"Write parameters confirmed: SAO, test write {confirmed.TestWrite}, BUFE {confirmed.BufferUnderrunFree}, data block type {confirmed.DataBlockType}, "
+            + (request.LeaveSessionOpen ? "disc left open for another session." : "disc closed afterwards."));
 
         // 4. Cue sheet (with cdrdao's fallback layouts).
         Msf? leadInTime = cdText ? disc.LeadInStart : null;
@@ -296,15 +313,32 @@ public sealed class NativeSaoAudioWriter
                 request.ShiftSamples);
         }
 
+        // 8. A session left open must leave the disc appendable (status 1), or no second session can follow.
+        bool? leftOpen = null;
+        if (!request.TestWrite && request.LeaveSessionOpen)
+        {
+            var after = ReadDiscInformation();
+            leftOpen = after?.Status == 1;
+            _note(leftOpen == true
+                ? "Disc left open for another session (disc status 1)."
+                : $"WARNING: the disc was to be left open, but the drive reports disc status {after?.Status.ToString() ?? "unknown"}.");
+        }
+
         reporter.Report(totalSectors, "Done");
+        string message = request.TestWrite
+            ? "Test write finished; the disc was not written." + extra
+            : verification!.Passed
+                ? "The disc was written and read back correctly. " + verification.Message
+                : "The disc was written, but the check afterwards failed: " + verification.Message;
+        if (leftOpen == false)
+        {
+            message += " The drive closed the disc although it was to stay open, so no further session can be added.";
+        }
         return new NativeSaoWriteResult
         {
-            Success = verification?.Passed ?? true,
-            Message = request.TestWrite
-                ? "Test write finished; the disc was not written." + extra
-                : verification!.Passed
-                    ? "The disc was written and read back correctly. " + verification.Message
-                    : "The disc was written, but the check afterwards failed: " + verification.Message,
+            Success = (verification?.Passed ?? true) && leftOpen != false,
+            Message = message,
+            DiscLeftOpen = leftOpen,
             LeadInSectorsWritten = state.LeadInSectors,
             AudioSectorsWritten = state.AudioSectors,
             Elapsed = clock.Elapsed,

@@ -163,8 +163,13 @@ public sealed class VirtualMmcDrive : IScsiTransport
     /// </summary>
     public bool ShowsSimulatedSessionAfterTestWrite { get; set; } = true;
 
-    /// <summary>A recorded Session-at-Once disc is closed (status 2). Off: it reads as an open session (status 1).</summary>
+    /// <summary>A recorded Session-at-Once disc written with multi-session 00b is closed (status 2). Off: it reads as
+    /// an open session (status 1). With multi-session 11b the disc is always left open, as the field asks.</summary>
     public bool ClosesDiscAfterWrite { get; set; } = true;
+
+    /// <summary>The drive accepts multi-session 11b in mode page 05h but closes a Session-at-Once disc anyway (status 2,
+    /// no B0h pointer), to test that the writer notices.</summary>
+    public bool IgnoresMultiSessionField { get; set; }
 
     /// <summary>Keep the bytes sent with WRITE so tests can inspect them and a recorded disc can be read back.</summary>
     public bool CaptureWrites { get; set; } = true;
@@ -1184,7 +1189,7 @@ public sealed class VirtualMmcDrive : IScsiTransport
         return Good((uint)(count * 2048));
     }
 
-    /// <summary>READ TOC/PMA/ATIP: format 0 (track list) and format 5 (CD-Text) of a recorded disc.</summary>
+    /// <summary>READ TOC/PMA/ATIP: format 0 (track list), format 2 (full TOC, Session-at-Once discs) and format 5 (CD-Text) of a recorded disc.</summary>
     private ScsiExecutionResult ReadToc(ReadOnlySpan<byte> cdb, Span<byte> data)
     {
         if (!Recorded)
@@ -1212,6 +1217,11 @@ public sealed class VirtualMmcDrive : IScsiTransport
             return CopyOut(r, data);
         }
 
+        if (format == 0x02 && RecordedCueSheet != null && _dataSessions.Count == 0)
+        {
+            return CopyOut(BuildFullToc(), data);
+        }
+
         if (format == 0x05)
         {
             byte[] packs = _recordedCdText && !LosesCdText ? DecodeLeadInPacks() : [];
@@ -1222,6 +1232,51 @@ public sealed class VirtualMmcDrive : IScsiTransport
         }
 
         return Sense(0x05, 0x24, 0x00);
+    }
+
+    /// <summary>
+    /// READ TOC format 2 (full TOC) of a Session-at-Once disc: 11-byte descriptors (session, ADR/control, TNO 0, POINT,
+    /// Min, Sec, Frame, Zero, PMIN, PSEC, PFRAME; MMC-3 Table 237), all times as binary absolute MSF. Points A0h/A1h
+    /// give the first and last track (PSEC of A0h is the disc type, 00h CD-DA/CD-ROM), A2h the lead-out, 01h-99h the
+    /// tracks. A disc left open for another session also carries the ADR 5 pointers of the first session's lead-in
+    /// (Orange Book Part II; MMC-3 Table 238): B0h with Min/Sec/Frame = start of the next possible program area (the
+    /// next session's first pre-gap), Zero = number of ADR 5 pointers, PMIN/PSEC/PFRAME = the latest possible start
+    /// of the outermost lead-out (ATIP); C0h with PMIN/PSEC/PFRAME = start of the first lead-in (ATIP). The ATIP
+    /// recording power fields of C0h (Min, Sec, Frame) are not simulated and read as zero.
+    /// </summary>
+    private byte[] BuildFullToc()
+    {
+        var entries = new List<byte[]>();
+        byte firstControl = (byte)(DropsControlBits ? 0 : _recordedTracks[0].CueControl >> 4);
+        byte lastControl = (byte)(DropsControlBits ? 0 : _recordedTracks[^1].CueControl >> 4);
+
+        static byte[] Entry(byte adrControl, byte point, Msf time, byte zero, Msf p) =>
+            [1, adrControl, 0, point, time.Minute, time.Second, time.Frame, zero, p.Minute, p.Second, p.Frame];
+
+        entries.Add(Entry((byte)(0x10 | firstControl), 0xA0, default, 0, new Msf(_recordedTracks[0].TrackNumber, 0x00, 0)));
+        entries.Add(Entry((byte)(0x10 | lastControl), 0xA1, default, 0, new Msf(_recordedTracks[^1].TrackNumber, 0, 0)));
+        entries.Add(Entry((byte)(0x10 | lastControl), 0xA2, default, 0, Msf.FromLba(RecordedLeadOutLba)));
+        foreach (var t in _recordedTracks)
+        {
+            byte control = (byte)(DropsControlBits ? 0 : t.CueControl >> 4);
+            entries.Add(Entry((byte)(0x10 | control), t.TrackNumber, default, 0, Msf.FromLba(t.Index01Lba)));
+        }
+        if (DiscStatus == 1 && NextSessionAddress is int next)
+        {
+            const byte modeFivePointers = 2; // B0h and C0h
+            entries.Add(Entry((byte)(0x50 | firstControl), 0xB0, Msf.FromLba(next - 150), modeFivePointers, LastLeadOutStart));
+            entries.Add(Entry((byte)(0x50 | firstControl), 0xC0, default, 0, LeadInStart));
+        }
+
+        byte[] r = new byte[4 + 11 * entries.Count];
+        BinaryPrimitives.WriteUInt16BigEndian(r, (ushort)(r.Length - 2));
+        r[2] = 1; // first complete session
+        r[3] = 1; // last complete session
+        for (int i = 0; i < entries.Count; i++)
+        {
+            entries[i].CopyTo(r, 4 + 11 * i);
+        }
+        return r;
     }
 
     /// <summary>
@@ -1371,8 +1426,12 @@ public sealed class VirtualMmcDrive : IScsiTransport
             bool recorded = !TestWriteActive || RecordsDuringTestWrite;
             if (recorded)
             {
+                // Multi-session 11b: the drive writes the lead-out and a B0h pointer and leaves the disc appendable
+                // (status 1) with the next session's first track 11,400 sectors after this lead-out starts.
+                bool nextSessionAllowed = (_modePage05[3] >> 6) == WriteParametersPage.MultiSessionNextAllowed && !IgnoresMultiSessionField;
                 Recorded = true;
-                DiscStatus = ClosesDiscAfterWrite ? 2 : 1;
+                DiscStatus = nextSessionAllowed || !ClosesDiscAfterWrite ? 1 : 2;
+                NextSessionAddress = nextSessionAllowed ? NextSessionStart(1, _cue.LeadOutLba) : null;
                 _recordedTracks = _cue.Tracks;
                 _recordedDataEndLba = _cue.DataEndLba;
                 _recordedCdText = _cue.CdText;

@@ -26,6 +26,17 @@ public sealed class WriteParametersPage
     public byte MultiSession => (byte)(_page[3] >> 6);
     public byte DataBlockType => (byte)(_page[4] & 0x0F);
 
+    /// <summary>Multi-session field (byte 3 bits 7-6) 00b: no next session, the disc is closed.</summary>
+    public const byte MultiSessionClosed = 0x00;
+
+    /// <summary>
+    /// Multi-session field 11b: another session may follow. In Session-at-Once the drive then writes the lead-out and
+    /// a B0h pointer in the lead-in (start of the next possible program area) and leaves the disc appendable
+    /// (MMC-3 5.5.4 / MMC-5 7.5.4, Multi-session field: 00b no B0 pointer, next session not allowed; 11b next
+    /// session allowed, B0 pointer = next possible program area).
+    /// </summary>
+    public const byte MultiSessionNextAllowed = 0x03;
+
     private WriteParametersPage(byte[] page) => _page = page;
 
     /// <summary>Reads the page out of a MODE SENSE (10) response, or returns null if it is not there.</summary>
@@ -55,17 +66,19 @@ public sealed class WriteParametersPage
     }
 
     /// <summary>
-    /// A copy of this page set up for a Session-at-Once audio disc that is closed afterwards. Everything else the
-    /// drive reported (link size, packet size, MCN/ISRC fields, …) is kept as it was.
+    /// A copy of this page set up for a Session-at-Once audio disc. Closed afterwards by default;
+    /// <paramref name="leaveOpen"/> sets multi-session 11b so the drive leaves room for another session (the first
+    /// session of a CD-Extra disc). Everything else the drive reported (link size, packet size, MCN/ISRC fields, …)
+    /// is kept as it was.
     /// </summary>
-    public WriteParametersPage ForSessionAtOnce(bool testWrite, bool bufferUnderrunFree, bool cdTextLeadIn)
+    public WriteParametersPage ForSessionAtOnce(bool testWrite, bool bufferUnderrunFree, bool cdTextLeadIn, bool leaveOpen = false)
     {
         byte[] p = (byte[])_page.Clone();
         p[0] &= 0x3F;                                   // clear PS (and the reserved bit) for MODE SELECT
         p[2] = (byte)((p[2] & 0xA0) | WriteTypeSessionAtOnce); // keep LS_V and the reserved bit 7
         if (testWrite) p[2] |= 0x10;
         if (bufferUnderrunFree) p[2] |= 0x40;
-        p[3] &= 0x3F;                                   // multi-session 00: no next session, disc closed
+        p[3] = (byte)((p[3] & 0x3F) | ((leaveOpen ? MultiSessionNextAllowed : MultiSessionClosed) << 6));
         p[4] = (byte)((p[4] & 0xF0) | (cdTextLeadIn ? DataBlockTypeRawWithRawPw : DataBlockTypeRaw));
         p[8] = 0x00;                                    // session format: CD-DA / CD-ROM
         return new WriteParametersPage(p);
