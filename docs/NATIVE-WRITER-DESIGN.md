@@ -110,6 +110,15 @@ lead-out, 6,900 after later ones); on DVD-R the first session at least to LBA 65
 after later sessions; on DVD+R 2,048 sectors after every session, with no minimum. DVD-RW uses the DVD-R rule until it is
 measured.
 
+**Data session after an open audio session (CD-Extra; simulator only, 2026-11-13):** the same sequence adds one Mode 1
+data track Track-at-Once to a CD whose Session-at-Once audio session was left open. There is no earlier file system
+to import: the image is laid out from the next writable address alone. On such a disc the invisible track's number
+counts the audio tracks (track 3 after two audio tracks, in session 2), so the writer names the session from `READ
+TRACK INFORMATION` byte 3 (session number) rather than from the track number. The simulator numbers tracks and
+sessions that way, answers `READ (10)` of the audio with 5/64/00, and places session 2 11,400 sectors after the audio
+lead-out starts. The data track is Mode 1, not the CD-ROM XA Mode 2 Form 1 the Blue Book asks for. Not yet exposed in
+the CLI or app, and not yet run on a real disc (to check there: Windows mounts session 2, a CD player plays session 1).
+
 **Audio CD, Session-at-Once with CD-Text:**
 
 1. `MODE SELECT` page 0x05: write type 2 (SAO), Test Write bit as chosen, BUFE on when supported, multi-session 00

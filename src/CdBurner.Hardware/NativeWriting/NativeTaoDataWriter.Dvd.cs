@@ -194,7 +194,7 @@ public sealed partial class NativeTaoDataWriter
         {
             throw Stop($"The image ({state.ImageSectors:N0} sectors) does not fit on this disc ({freeSectors:N0} sectors free).");
         }
-        _note($"{(append != null ? $"Adding session {append.Value.TrackNumber}" : "Disc blank")}; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
+        _note($"{(append != null ? $"Adding session {append.Value.SessionNumber}" : "Disc blank")}; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
               (trackSectors > state.ImageSectors ? $" + {trackSectors - state.ImageSectors} padding to a whole 32 KiB block" : "") + $"; {freeSectors} free.");
 
         // 3. Write parameters (DVD-R/-RW only: libburn's cookbook says no mode page is sent for DVD+R), read back.
@@ -323,7 +323,7 @@ public sealed partial class NativeTaoDataWriter
             }
 
             reporter.Report(trackSectors, request.CloseDisc ? "Closing the disc" : "Closing the session");
-            string written = append != null ? $"Session {append.Value.TrackNumber} was added at sector {startLba:N0}" : "The data was written";
+            string written = append != null ? $"Session {append.Value.SessionNumber} was added at sector {startLba:N0}" : "The data was written";
             closing = request.CloseDisc ? $"{written} and the disc closed." : $"{written} and the session closed.";
             bool closed = false;
             if (plusR && request.CloseDisc)

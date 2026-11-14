@@ -257,7 +257,7 @@ public sealed partial class NativeTaoDataWriter
         {
             throw Stop($"The image ({state.ImageSectors:N0} sectors) does not fit on this disc ({freeSectors:N0} sectors free).");
         }
-        _note($"{(append != null ? $"Adding session {append.Value.TrackNumber}" : "Disc blank")}; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
+        _note($"{(append != null ? $"Adding session {append.Value.SessionNumber}" : "Disc blank")}; writing starts at LBA {startLba}; {state.ImageSectors} image sectors" +
               (trackSectors > state.ImageSectors ? $" + {trackSectors - state.ImageSectors} padding" : "") + $"; {freeSectors} free.");
 
         // 3. Write parameters, then read them back.
@@ -330,7 +330,7 @@ public sealed partial class NativeTaoDataWriter
         return new NativeDataWriteResult
         {
             Success = true,
-            Message = (append != null ? $"Session {append.Value.TrackNumber} was added at sector {startLba:N0} and the " : "The data track was written and the ")
+            Message = (append != null ? $"Session {append.Value.SessionNumber} was added at sector {startLba:N0} and the " : "The data track was written and the ")
                 + (request.CloseDisc ? "disc closed. " : "session closed. ") + tocNote,
             DataSectorsWritten = state.ImageSectors,
             PaddingSectors = trackSectors - state.ImageSectors,
@@ -523,8 +523,10 @@ public sealed partial class NativeTaoDataWriter
             : $"Table of contents: {entries - 1} tracks, the last a data track of {leadOutLba - trackStart:N0} sectors.";
     }
 
-    /// <summary>Where a new session goes on an open disc: the invisible track's number, start and free space.</summary>
-    internal readonly record struct AppendTarget(int TrackNumber, int StartLba, long FreeSectors);
+    /// <summary>Where a new session goes on an open disc: the invisible track's number, start and free space, and the
+    /// number of the session it opens. On a data-only disc each session holds one track, so the two numbers match; after
+    /// an audio session (CD-Extra) the track number also counts the audio tracks.</summary>
+    internal readonly record struct AppendTarget(int TrackNumber, int StartLba, long FreeSectors, int SessionNumber);
 
     /// <summary>
     /// Checks, before anything is written, that a new session can go where the image expects it: the disc is open
@@ -558,8 +560,9 @@ public sealed partial class NativeTaoDataWriter
             throw Stop($"The drive's next writable address is sector {invisible.NextWritableAddress:N0}, but the image was built for sector {expected:N0}; written there its files would not be found. Burn again so the image is built for this disc.");
         }
         CheckImageStartsAt(request, expected, imageSectors);
-        _note($"Open disc: track {invisible.TrackNumber} (invisible) starts at {invisible.NextWritableAddress}, {invisible.FreeBlocks} sectors free.");
-        return new AppendTarget(invisible.TrackNumber, invisible.NextWritableAddress, invisible.FreeBlocks);
+        int session = invisible.SessionNumber > 0 ? invisible.SessionNumber : invisible.TrackNumber;
+        _note($"Open disc: track {invisible.TrackNumber} (invisible) of session {session} starts at {invisible.NextWritableAddress}, {invisible.FreeBlocks} sectors free.");
+        return new AppendTarget(invisible.TrackNumber, invisible.NextWritableAddress, invisible.FreeBlocks, session);
     }
 
     /// <summary>
@@ -660,7 +663,7 @@ public sealed partial class NativeTaoDataWriter
     }
 
     internal readonly record struct TrackInformation(bool NextWritableAddressValid, int NextWritableAddress, long FreeBlocks, bool Blank,
-        byte TrackMode = 0, long TrackSize = 0, int TrackNumber = 0, int TrackStart = 0);
+        byte TrackMode = 0, long TrackSize = 0, int TrackNumber = 0, int TrackStart = 0, int SessionNumber = 0);
 
     private TrackInformation? ReadTrackInformation(int trackNumber)
     {
@@ -679,7 +682,9 @@ public sealed partial class NativeTaoDataWriter
             TrackMode: (byte)(buffer[5] & 0x0F),
             TrackSize: r.DataTransferLength >= 28 ? BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(24, 4)) : 0,
             TrackNumber: buffer[2] | (r.DataTransferLength >= 33 ? buffer[32] << 8 : 0),
-            TrackStart: BinaryPrimitives.ReadInt32BigEndian(buffer.AsSpan(8, 4)));
+            TrackStart: BinaryPrimitives.ReadInt32BigEndian(buffer.AsSpan(8, 4)),
+            // MMC READ TRACK INFORMATION: session number LSB in byte 3, MSB in byte 33.
+            SessionNumber: buffer[3] | (r.DataTransferLength >= 34 ? buffer[33] << 8 : 0));
     }
 
     private bool SelectWriteParameters(WriteParametersPage page)
