@@ -234,6 +234,10 @@ one assembly with a clear provenance boundary. Nothing in it touches a drive.
    repository. Moving the pin is a deliberate change of its own, recorded in the commit message.
 2. **Golden bytes first.** Before a ported routine is changed (renamed, restructured, optimized), capture its output
    for fixed inputs as golden bytes in a test and commit that test. Later changes must keep the bytes identical.
+   The upstream reference hashes live in `tests/CdBurner.Lithography.Tests/Fixtures/UpstreamGoldens/` (inputs,
+   exact command lines, SHA-256 of each output: CD picture track, DVD picture ISO and ECC block, BD-R clusters and
+   ECC cluster, one calibration target per medium). `scripts/Make-LithographyGoldens.ps1` clones and builds upstream
+   at the pinned commit in a scratch folder outside the repository and reproduces every hash; a port must match them.
 3. **Notices with the code.** The `THIRD-PARTY-NOTICES.md` entry (source URL, pinned SHA, license text, list of
    ported files) lands in the same commit as the first ported file, never before and never after. Each ported file
    also carries its origin and license in a header comment.

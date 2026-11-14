@@ -1,0 +1,410 @@
+{
+  "schema": 1,
+  "about": "SHA-256 of DiscImageStudio outputs at the pinned commit for small fixed inputs. Upstream code is never committed here; scripts/Make-LithographyGoldens.ps1 clones and builds it in a scratch folder and reproduces every hash. {fixtures} is this folder, {out} the run output folder.",
+  "upstream": {
+    "repository": "https://github.com/JiaFeiMiao-K-Cat/DiscImageStudio.git",
+    "commit": "619ec7505ac8955f35fe2f353ebda74b6ea90dda",
+    "license": "GPL-3.0-or-later",
+    "cliBuild": "dotnet build src/DiscImageStudio.Cli/DiscImageStudio.Cli.csproj -c Release -o <cli>",
+    "sdk": "10.0.404"
+  },
+  "inputs": [
+    {
+      "file": "quadrants-64.png",
+      "pattern": 0,
+      "sha256": "eba64a2d843c0b0f2b462a037441179492f31d3594995b59c94a0228c9e53550"
+    },
+    {
+      "file": "rings-64.png",
+      "pattern": 1,
+      "sha256": "42d3d55cc522b8774fa03bd4a5931b8dc4b3e44f61a18cdbc689197452633d7c"
+    }
+  ],
+  "cases": [
+    {
+      "id": "cd-picture-track",
+      "what": "CD-DA picture track, CIRC delay interleave on, WAV + CUE, whole picture in a 1,200-sector geometry",
+      "tool": "disc-image-studio",
+      "args": [
+        "cd-generate",
+        "--input",
+        "{fixtures}/quadrants-64.png",
+        "--output",
+        "{out}/cd-picture.wav",
+        "--sectors",
+        "1200"
+      ],
+      "outputs": [
+        {
+          "file": "cd-picture.wav",
+          "sha256": "25e700225c036a3e07f12af1711a18ad2403ebead2782a876b7eeb94626577f0",
+          "bytes": 2822444
+        },
+        {
+          "file": "cd-picture.cue",
+          "sha256": "df83bada3f62d1db1e11192ce2a8641aa7fb0fe17abde3733434f56be6e252c9",
+          "bytes": 72
+        }
+      ],
+      "commandLine": "disc-image-studio cd-generate --input {fixtures}/quadrants-64.png --output {out}/cd-picture.wav --sectors 1200"
+    },
+    {
+      "id": "cd-picture-track-no-interleave",
+      "what": "Same track without the delay interleaver (isolates the sampler and palette from CIRC)",
+      "tool": "disc-image-studio",
+      "args": [
+        "cd-generate",
+        "--input",
+        "{fixtures}/quadrants-64.png",
+        "--output",
+        "{out}/cd-picture-plain.raw",
+        "--sectors",
+        "1200",
+        "--interleave",
+        "false"
+      ],
+      "outputs": [
+        {
+          "file": "cd-picture-plain.raw",
+          "sha256": "bd0e3d7e09c3c33fb46cd3ce266e60dd2ea23033ee0c220939fc7aa366f438e0",
+          "bytes": 2822400
+        }
+      ],
+      "commandLine": "disc-image-studio cd-generate --input {fixtures}/quadrants-64.png --output {out}/cd-picture-plain.raw --sectors 1200 --interleave false"
+    },
+    {
+      "id": "dvd-picture-iso",
+      "what": "DVD picture ISO, dispersion solver, fast output, 1,600 sectors over 24-58 mm",
+      "tool": "disc-image-studio",
+      "args": [
+        "solve",
+        "--image",
+        "{fixtures}/rings-64.png",
+        "--total-sectors",
+        "1600",
+        "--iso-output",
+        "{out}/dvd-picture.iso",
+        "--fill-sectors",
+        "1600",
+        "--lba",
+        "0",
+        "--psn-offset",
+        "0x30000",
+        "--inner-radius-mm",
+        "24",
+        "--outer-radius-mm",
+        "58",
+        "--channel-bit-nm",
+        "133.3",
+        "--algorithm",
+        "dispersion",
+        "--fast-output",
+        "true",
+        "--fast-parallelism",
+        "0",
+        "--initial",
+        "zero"
+      ],
+      "outputs": [
+        {
+          "file": "dvd-picture.iso",
+          "sha256": "086ae642dc337fcdcabfca7e28e937e87f608ece774fc445be7cb400963ae37e",
+          "bytes": 3276800
+        }
+      ],
+      "commandLine": "disc-image-studio solve --image {fixtures}/rings-64.png --total-sectors 1600 --iso-output {out}/dvd-picture.iso --fill-sectors 1600 --lba 0 --psn-offset 0x30000 --inner-radius-mm 24 --outer-radius-mm 58 --channel-bit-nm 133.3 --algorithm dispersion --fast-output true --fast-parallelism 0 --initial zero"
+    },
+    {
+      "id": "dvd-picture-iso-exact",
+      "what": "Same ISO through the exact (non-fast) path; upstream documents both give the same sectors",
+      "tool": "disc-image-studio",
+      "args": [
+        "solve",
+        "--image",
+        "{fixtures}/rings-64.png",
+        "--total-sectors",
+        "1600",
+        "--iso-output",
+        "{out}/dvd-picture-exact.iso",
+        "--fill-sectors",
+        "1600",
+        "--lba",
+        "0",
+        "--psn-offset",
+        "0x30000",
+        "--inner-radius-mm",
+        "24",
+        "--outer-radius-mm",
+        "58",
+        "--channel-bit-nm",
+        "133.3",
+        "--algorithm",
+        "dispersion",
+        "--fast-output",
+        "false",
+        "--initial",
+        "zero"
+      ],
+      "outputs": [
+        {
+          "file": "dvd-picture-exact.iso",
+          "sha256": "086ae642dc337fcdcabfca7e28e937e87f608ece774fc445be7cb400963ae37e",
+          "bytes": 3276800
+        }
+      ],
+      "commandLine": "disc-image-studio solve --image {fixtures}/rings-64.png --total-sectors 1600 --iso-output {out}/dvd-picture-exact.iso --fill-sectors 1600 --lba 0 --psn-offset 0x30000 --inner-radius-mm 24 --outer-radius-mm 58 --channel-bit-nm 133.3 --algorithm dispersion --fast-output false --initial zero"
+    },
+    {
+      "id": "dvd-picture-iso-read-compatibility",
+      "what": "Same ISO with the periodic-9b-16-v1 read-compatibility recipe",
+      "tool": "disc-image-studio",
+      "args": [
+        "solve",
+        "--image",
+        "{fixtures}/rings-64.png",
+        "--total-sectors",
+        "1600",
+        "--iso-output",
+        "{out}/dvd-picture-compat.iso",
+        "--fill-sectors",
+        "1600",
+        "--lba",
+        "0",
+        "--psn-offset",
+        "0x30000",
+        "--inner-radius-mm",
+        "24",
+        "--outer-radius-mm",
+        "58",
+        "--channel-bit-nm",
+        "133.3",
+        "--algorithm",
+        "dispersion",
+        "--fast-output",
+        "true",
+        "--fast-parallelism",
+        "0",
+        "--read-compatibility",
+        "true",
+        "--initial",
+        "zero"
+      ],
+      "outputs": [
+        {
+          "file": "dvd-picture-compat.iso",
+          "sha256": "827dfaf8b99441a9073eeccd1ce8d26578cfd8ec6593145e43445131b0f59624",
+          "bytes": 3276800
+        }
+      ],
+      "commandLine": "disc-image-studio solve --image {fixtures}/rings-64.png --total-sectors 1600 --iso-output {out}/dvd-picture-compat.iso --fill-sectors 1600 --lba 0 --psn-offset 0x30000 --inner-radius-mm 24 --outer-radius-mm 58 --channel-bit-nm 133.3 --algorithm dispersion --fast-output true --fast-parallelism 0 --read-compatibility true --initial zero"
+    },
+    {
+      "id": "dvd-ecc-block",
+      "what": "First ECC block (16 sectors) of the DVD picture geometry, used as input of the next case",
+      "tool": "disc-image-studio",
+      "args": [
+        "solve",
+        "--image",
+        "{fixtures}/rings-64.png",
+        "--total-sectors",
+        "1600",
+        "--iso-output",
+        "{out}/dvd-block0.iso",
+        "--fill-sectors",
+        "16",
+        "--lba",
+        "0",
+        "--psn-offset",
+        "0x30000",
+        "--inner-radius-mm",
+        "24",
+        "--outer-radius-mm",
+        "58",
+        "--channel-bit-nm",
+        "133.3",
+        "--algorithm",
+        "dispersion",
+        "--fast-output",
+        "true",
+        "--fast-parallelism",
+        "0",
+        "--initial",
+        "zero"
+      ],
+      "outputs": [
+        {
+          "file": "dvd-block0.iso",
+          "sha256": "af2a25df403ce57a0e022e873acd615048b5a342b207ccf9930ea84d9e696232",
+          "bytes": 32768
+        }
+      ],
+      "commandLine": "disc-image-studio solve --image {fixtures}/rings-64.png --total-sectors 1600 --iso-output {out}/dvd-block0.iso --fill-sectors 16 --lba 0 --psn-offset 0x30000 --inner-radius-mm 24 --outer-radius-mm 58 --channel-bit-nm 133.3 --algorithm dispersion --fast-output true --fast-parallelism 0 --initial zero"
+    },
+    {
+      "id": "dvd-ecc-block-channel",
+      "what": "That block through scrambler, EDC, PI/PO Reed-Solomon, EFMPlus and NRZI (packed channel bits, MSB first)",
+      "tool": "disc-image-studio",
+      "args": [
+        "encode",
+        "--input",
+        "{out}/dvd-block0.iso",
+        "--output",
+        "{out}/dvd-block0.nrzi",
+        "--lba",
+        "0",
+        "--psn-offset",
+        "0x30000",
+        "--initial",
+        "zero"
+      ],
+      "outputs": [
+        {
+          "file": "dvd-block0.nrzi",
+          "sha256": "d30eb063166472f12cdff6123d91bc414a4ed8980c919c0b49544f823cacbd0d",
+          "bytes": 77376
+        }
+      ],
+      "commandLine": "disc-image-studio encode --input {out}/dvd-block0.iso --output {out}/dvd-block0.nrzi --lba 0 --psn-offset 0x30000 --initial zero"
+    },
+    {
+      "id": "bd-picture-clusters",
+      "what": "BD-R picture image, 8 clusters (256 sectors) over 24-58 mm, no file system",
+      "tool": "disc-image-studio",
+      "args": [
+        "bd-generate",
+        "--input",
+        "{fixtures}/quadrants-64.png",
+        "--output",
+        "{out}/bd-picture.iso",
+        "--total-sectors",
+        "256",
+        "--r0",
+        "24",
+        "--r1",
+        "58"
+      ],
+      "outputs": [
+        {
+          "file": "bd-picture.iso",
+          "sha256": "9df730daf6dcaa045702547cf7d77aa82399bac60968725fba0cdd1906961bda",
+          "bytes": 524288
+        }
+      ],
+      "commandLine": "disc-image-studio bd-generate --input {fixtures}/quadrants-64.png --output {out}/bd-picture.iso --total-sectors 256 --r0 24 --r1 58"
+    },
+    {
+      "id": "bd-picture-cluster",
+      "what": "One BD-R picture cluster (32 sectors), used as input of the next case",
+      "tool": "disc-image-studio",
+      "args": [
+        "bd-generate",
+        "--input",
+        "{fixtures}/rings-64.png",
+        "--output",
+        "{out}/bd-cluster.iso",
+        "--total-sectors",
+        "32",
+        "--r0",
+        "24",
+        "--r1",
+        "58"
+      ],
+      "outputs": [
+        {
+          "file": "bd-cluster.iso",
+          "sha256": "25c79a3a647c6cf79577f659ebc37dd202e51ea4a248f64e58d3e29273046611",
+          "bytes": 65536
+        }
+      ],
+      "commandLine": "disc-image-studio bd-generate --input {fixtures}/rings-64.png --output {out}/bd-cluster.iso --total-sectors 32 --r0 24 --r1 58"
+    },
+    {
+      "id": "bd-ecc-cluster",
+      "what": "That cluster through EDC, scrambler and LDC/BIS Reed-Solomon (76,880 ECC bytes)",
+      "tool": "disc-image-studio",
+      "args": [
+        "bd-encode",
+        "--input",
+        "{out}/bd-cluster.iso",
+        "--output",
+        "{out}/bd-cluster.ecc",
+        "--psn",
+        "0x100000"
+      ],
+      "outputs": [
+        {
+          "file": "bd-cluster.ecc",
+          "sha256": "1d136d52a2086242f285bf4e6d135365f39057f37d702454f44520d626b8d815",
+          "bytes": 76880
+        }
+      ],
+      "commandLine": "disc-image-studio bd-encode --input {out}/bd-cluster.iso --output {out}/bd-cluster.ecc --psn 0x100000"
+    },
+    {
+      "id": "cd-calibration-target",
+      "what": "CD calibration target (WavyBoundary artwork, schema 16), raw little-endian CD-DA as the upstream calibration burn streams it",
+      "tool": "golden-harness",
+      "args": [
+        "calibration-target",
+        "cd",
+        "WavyBoundary",
+        "24.5",
+        "56.8",
+        "1200",
+        "{out}/cd-calibration.raw"
+      ],
+      "outputs": [
+        {
+          "file": "cd-calibration.raw",
+          "sha256": "818c05ae657de58ce3a78d01ae878cd482df3c92ea22024fd87c7884c6133623",
+          "bytes": 2822400
+        }
+      ],
+      "commandLine": "golden-harness calibration-target cd WavyBoundary 24.5 56.8 1200 {out}/cd-calibration.raw"
+    },
+    {
+      "id": "dvd-calibration-target",
+      "what": "DVD calibration target (WavyBoundary artwork, schema 16), 1,600 sectors",
+      "tool": "golden-harness",
+      "args": [
+        "calibration-target",
+        "dvd",
+        "WavyBoundary",
+        "24",
+        "58",
+        "1600",
+        "{out}/dvd-calibration.iso"
+      ],
+      "outputs": [
+        {
+          "file": "dvd-calibration.iso",
+          "sha256": "81e94f84fe3715d4839400e733adab457d26930f6fa36e86fa76e00e9791fea8",
+          "bytes": 3276800
+        }
+      ],
+      "commandLine": "golden-harness calibration-target dvd WavyBoundary 24 58 1600 {out}/dvd-calibration.iso"
+    },
+    {
+      "id": "bd-calibration-target",
+      "what": "BD-R calibration target (WavyBoundary artwork, schema 16), 8 clusters",
+      "tool": "golden-harness",
+      "args": [
+        "calibration-target",
+        "bd",
+        "WavyBoundary",
+        "24",
+        "58",
+        "256",
+        "{out}/bd-calibration.iso"
+      ],
+      "outputs": [
+        {
+          "file": "bd-calibration.iso",
+          "sha256": "645b91f66678a997a1a53f294d391eaa28803a61ca4bfc07b13840ef1d911824",
+          "bytes": 524288
+        }
+      ],
+      "commandLine": "golden-harness calibration-target bd WavyBoundary 24 58 256 {out}/bd-calibration.iso"
+    }
+  ]
+}
